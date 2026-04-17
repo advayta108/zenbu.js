@@ -4,7 +4,7 @@ const fs = require("node:fs")
 const { spawn } = require("node:child_process")
 const { ipcRenderer } = require("electron")
 
-const REPO_URL = "https://github.com/RobPruzan/zenbu.git"
+const REPO_URL = "https://github.com/zenbu-labs/zenbu.git"
 const pluginDir = path.join(os.homedir(), ".zenbu", "plugins", "zenbu")
 const INTERNAL_DIR = path.join(os.homedir(), ".zenbu", ".internal")
 const DB_CONFIG_JSON = path.join(INTERNAL_DIR, "db.json")
@@ -55,22 +55,15 @@ async function run() {
       updateStatus("Repository already exists, skipping clone...")
     }
 
-    if (!fs.existsSync(path.join(pluginDir, "node_modules"))) {
-      const setupScript = path.join(pluginDir, "setup.sh")
-      if (fs.existsSync(setupScript)) {
-        updateStatus("Running setup...")
-        await runCommand("bash", [setupScript], pluginDir)
-      } else {
-        throw new Error("No setup.sh found at " + setupScript)
-      }
-    } else {
-      updateStatus("Dependencies already installed...")
+    // Always run setup.sh — it's idempotent. Every step no-ops if already
+    // satisfied. This way first-install and zen-doctor-style re-runs share
+    // the exact same code path.
+    const setupScript = path.join(pluginDir, "setup.sh")
+    if (!fs.existsSync(setupScript)) {
+      throw new Error("No setup.sh found at " + setupScript)
     }
-
-    // Persist db path so the CLI can discover it even when the app isn't running
-    const dbPath = path.join(pluginDir, ".zenbu", "db")
-    fs.mkdirSync(INTERNAL_DIR, { recursive: true })
-    fs.writeFileSync(DB_CONFIG_JSON, JSON.stringify({ dbPath }))
+    updateStatus("Running setup...")
+    await runCommand("bash", [setupScript], pluginDir)
 
     progressBar.classList.add("done")
     updateStatus("Done!")
