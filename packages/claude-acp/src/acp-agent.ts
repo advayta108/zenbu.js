@@ -1545,6 +1545,12 @@ export class ClaudeAcpAgent implements Agent {
       systemPrompt,
       settingSources: ["user", "project", "local"],
       ...(maxThinkingTokens !== undefined && { maxThinkingTokens }),
+      // Opus 4.7 defaults thinking `display` to "omitted" — signature only,
+      // empty cleartext — so ACP clients render blank thought bubbles.
+      // Force "summarized" so thinking_delta chunks carry real text. Any
+      // caller-supplied `thinking` in userProvidedOptions still wins via the
+      // spread below.
+      thinking: { type: "adaptive", display: "summarized" },
       ...userProvidedOptions,
       env: {
         ...process.env,
