@@ -15,6 +15,7 @@ await esbuild.build({
   outdir: path.join(root, "dist/main"),
   external: [
     "electron",
+    "electron-updater",
     "vite",
     "@vitejs/plugin-react",
     "@tailwindcss/vite",

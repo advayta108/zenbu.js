@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url"
 import { register as registerLoader } from "node:module"
 import { app, BaseWindow, BrowserWindow, dialog, ipcMain } from "electron"
 import { readConfig, addPlugin, CONFIG_PATH } from "./config"
+import { initUpdater } from "./updater"
 
 const PLUGINS_DIR = path.join(os.homedir(), ".zenbu", "plugins")
 const KERNEL_MANIFEST = "packages/init/zenbu.plugin.json"
@@ -56,6 +57,8 @@ app.whenReady().then(async () => {
       ipcMain.on("relaunch", () => { app.relaunch(); app.exit() })
       return
     }
+
+    initUpdater()
 
     let config = readConfig()
     console.log("[shell] config:", JSON.stringify(config))
