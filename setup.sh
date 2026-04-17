@@ -289,23 +289,29 @@ ensure_zen_shim() {
 # zen CLI shim — interprets packages/zen/src/bin.ts via isolated bun.
 # Refreshed on every setup.sh run.
 set -e
+
+CACHE="$HOME/Library/Caches/Zenbu"
+
+# Resolve bun: env override → paths.json → standard cache → system bun.
+# Each candidate is taken only if it points at an executable file, so a
+# stale paths.json can't poison the lookup.
+BUN=""
+try_bun() { [ -n "$1" ] && [ -x "$1" ] && BUN="$1"; }
+
+try_bun "${ZENBU_BUN:-}"
 PATHS="$HOME/.zenbu/.internal/paths.json"
-if [ -f "$PATHS" ]; then
-  BUN=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['bunPath'])" "$PATHS" 2>/dev/null || echo "")
-  CACHE=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['cacheRoot'])" "$PATHS" 2>/dev/null || echo "")
+if [ -z "$BUN" ] && [ -f "$PATHS" ]; then
+  try_bun "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['bunPath'])" "$PATHS" 2>/dev/null || true)"
 fi
-[ -z "$BUN" ] && BUN="${ZENBU_BUN:-$HOME/Library/Caches/Zenbu/bin/bun}"
-[ -z "$CACHE" ] && CACHE="$HOME/Library/Caches/Zenbu"
-if [ ! -x "$BUN" ]; then
-  # Fallback: user's own bun on PATH. Harmless — our TS uses no bun-specific APIs.
-  if command -v bun >/dev/null 2>&1; then
-    BUN="$(command -v bun)"
-  else
-    echo "zen: bun not found. Install via: bash \"$HOME/.zenbu/plugins/zenbu/setup.sh\"" >&2
-    echo "     (or launch Zenbu.app once for the setup window to do it)" >&2
-    exit 127
-  fi
+[ -z "$BUN" ] && try_bun "$CACHE/bin/bun"
+[ -z "$BUN" ] && try_bun "$(command -v bun 2>/dev/null || true)"
+
+if [ -z "$BUN" ]; then
+  echo "zen: bun not found. Install via: bash \"$HOME/.zenbu/plugins/zenbu/setup.sh\"" >&2
+  echo "     (or launch Zenbu.app once for the setup window to do it)" >&2
+  exit 127
 fi
+
 # Only export the Zenbu-isolated toolchain env if our bin tree is populated —
 # otherwise leave the user's normal env intact.
 if [ -x "$CACHE/bin/pnpm" ]; then
