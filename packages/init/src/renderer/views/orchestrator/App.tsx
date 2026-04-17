@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode, useMemo, useCallback, useState, useEffect, useRef } from "react";
-import { SearchIcon, SettingsIcon, RotateCwIcon } from "lucide-react";
+import { SearchIcon, SettingsIcon, RotateCwIcon, DownloadIcon, GitMergeIcon } from "lucide-react";
 import { nanoid } from "nanoid";
 import { makeCollection } from "@zenbu/kyju/schema";
 import {
@@ -24,6 +24,12 @@ import {
   CommandItem,
   CommandList,
 } from "../../components/ui/command";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
 import { LeafPane } from "./components/LeafPane";
 import { SettingsDialog } from "./components/SettingsDialog";
 import {
@@ -216,6 +222,115 @@ function AgentPickerCombobox({
   )
 }
 
+type UpdateStatus =
+  | { kind: "not-a-repo" }
+  | { kind: "no-remote" }
+  | { kind: "detached-head" }
+  | { kind: "git-missing" }
+  | { kind: "fetch-error"; message: string }
+  | {
+      kind: "ok";
+      branch: string;
+      ahead: number;
+      behind: number;
+      dirty: boolean;
+      mergeable: boolean | null;
+      conflictingFiles: string[];
+      checkedAt: number;
+    };
+
+function ReloadMenu() {
+  const rpc = useRpc();
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [pending, setPending] = useState<"check" | "pull" | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const cached: UpdateStatus | null = await (rpc as any).gitUpdates.getCachedStatus();
+        if (cached) setStatus(cached);
+      } catch {}
+    })();
+  }, [rpc]);
+
+  const hasConflicts = status?.kind === "ok" && status.mergeable === false;
+  const hasUpdates =
+    status?.kind === "ok" && status.behind > 0 && status.mergeable !== false;
+
+  const handlePullItem = async () => {
+    if (hasConflicts || pending) return;
+    if (hasUpdates) {
+      setPending("pull");
+      try {
+        const result = await (rpc as any).gitUpdates.pullUpdates();
+        if (result?.ok) {
+          const next: UpdateStatus = await (rpc as any).gitUpdates.checkUpdates(true);
+          setStatus(next);
+        }
+      } finally {
+        setPending(null);
+      }
+    } else {
+      setPending("check");
+      try {
+        const next: UpdateStatus = await (rpc as any).gitUpdates.checkUpdates(true);
+        setStatus(next);
+      } finally {
+        setPending(null);
+      }
+    }
+  };
+
+  const pullLabel =
+    pending === "pull"
+      ? "Pulling…"
+      : pending === "check"
+        ? "Checking…"
+        : hasConflicts
+          ? "Conflicts — resolve in Settings"
+          : hasUpdates && status?.kind === "ok"
+            ? `Pull ${status.behind} update${status.behind === 1 ? "" : "s"}`
+            : "Check for updates";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex h-6 w-7 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-black/10 hover:text-neutral-700"
+          title="Reload"
+        >
+          <RotateCwIcon size={12} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[200px] text-xs">
+        <DropdownMenuItem
+          className="text-xs"
+          onClick={() => window.location.reload()}
+        >
+          <RotateCwIcon className="size-3" />
+          Reload window
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="text-xs"
+          disabled={hasConflicts || pending !== null}
+          onSelect={(e) => {
+            e.preventDefault();
+            handlePullItem();
+          }}
+        >
+          {hasConflicts ? (
+            <GitMergeIcon className="size-3 text-red-500" />
+          ) : (
+            <DownloadIcon className="size-3" />
+          )}
+          {pullLabel}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function TitleBar({
   agents,
   sessions,
@@ -240,13 +355,7 @@ function TitleBar({
         className="flex h-full shrink-0 items-center gap-1 pl-[74px]"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        <button
-          onClick={() => window.location.reload()}
-          className="flex h-6 w-7 items-center justify-center rounded text-neutral-500 transition-colors hover:bg-black/10 hover:text-neutral-700"
-          title="Reload"
-        >
-          <RotateCwIcon size={12} />
-        </button>
+        <ReloadMenu />
         <AgentPickerCombobox
           agents={agents}
           sessions={sessions}

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -40,6 +41,32 @@ function computePaths(): ZenbuPaths {
     resourcesPath: process.resourcesPath ?? "",
     appPath: app.getAppPath(),
     writtenAt: Date.now(),
+  }
+}
+
+// GUI-launched Electron inherits launchd's minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
+// so any tool the user installed via a custom dotfile (e.g. ~/.hades/bin, rbenv shims,
+// brew on non-default prefix) is invisible. Run the user's login shell and grab its
+// PATH — same trick as the `fix-path` npm package. Timed out short so a broken rc
+// doesn't block app launch.
+function probeLoginShellPath(): string[] {
+  try {
+    const shell = process.env.SHELL || "/bin/zsh"
+    const out = execFileSync(shell, ["-ilc", "echo -n __ZENBU_PATH__$PATH"], {
+      encoding: "utf8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    const marker = "__ZENBU_PATH__"
+    const idx = out.lastIndexOf(marker)
+    if (idx < 0) return []
+    return out
+      .slice(idx + marker.length)
+      .trim()
+      .split(path.delimiter)
+      .filter(Boolean)
+  } catch {
+    return []
   }
 }
 
@@ -106,12 +133,24 @@ function setEnvVars(paths: ZenbuPaths, toolchainReady: boolean): void {
   // PATH: always prepend known user-tool locations (brew/bun/pnpm/nvm/volta/
   // asdf/mise/cargo) so GUI-launched Electron can find tools the user has
   // installed. When toolchainReady, also prepend our binDir so our own
-  // bun/pnpm win by default (still overridable via ZENBU_BUN etc.).
+  // bun/pnpm win by default (still overridable via ZENBU_BUN etc.). Also
+  // merge in the user's login-shell PATH to pick up custom install dirs
+  // (~/.hades/bin, rbenv shims, non-default brew prefix, etc.).
   const userDirs = probeUserToolPaths()
+  const shellDirs = probeLoginShellPath()
   const pathParts = toolchainReady
-    ? [paths.binDir, ...userDirs, process.env.PATH ?? ""]
-    : [...userDirs, process.env.PATH ?? ""]
-  process.env.PATH = pathParts.filter(Boolean).join(path.delimiter)
+    ? [paths.binDir, ...userDirs, ...shellDirs, process.env.PATH ?? ""]
+    : [...userDirs, ...shellDirs, process.env.PATH ?? ""]
+  // Deduplicate while preserving order (earlier entries win).
+  const seen = new Set<string>()
+  process.env.PATH = pathParts
+    .flatMap((p) => p.split(path.delimiter))
+    .filter((p) => {
+      if (!p || seen.has(p)) return false
+      seen.add(p)
+      return true
+    })
+    .join(path.delimiter)
 }
 
 function writePathsJson(paths: ZenbuPaths): void {
