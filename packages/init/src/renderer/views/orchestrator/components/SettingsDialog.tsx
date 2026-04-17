@@ -557,7 +557,7 @@ function PluginsSection() {
 
   const fetchPlugins = useCallback(async () => {
     const list: PluginEntry[] = await (
-      rpc as any
+      rpc
     ).installer.listPluginsWithStatus();
     setPlugins(list);
     setDraft(new Map());
@@ -586,7 +586,7 @@ function PluginsSection() {
 
   const handleSave = async () => {
     for (const [manifestPath, enabled] of draft) {
-      await (rpc as any).installer.togglePlugin(manifestPath, enabled);
+      await (rpc).installer.togglePlugin(manifestPath, enabled);
     }
     await fetchPlugins();
   };
@@ -805,7 +805,7 @@ function UpdatesSection() {
       setLoadingUpstream(true);
       setUpstreamError(null);
       try {
-        const next: UpdateStatus = await (rpc as any).gitUpdates.checkUpdates(force);
+        const next: UpdateStatus = await (rpc).gitUpdates.checkUpdates(force);
         setStatus(next);
       } catch (err) {
         setUpstreamError(err instanceof Error ? err.message : String(err));
@@ -820,7 +820,7 @@ function UpdatesSection() {
     setLoadingOverview(true);
     setOverviewError(null);
     try {
-      const next: GitOverview = await (rpc as any).gitUpdates.getOverview();
+      const next: GitOverview = await (rpc).gitUpdates.getOverview();
       setOverview(next);
     } catch (err) {
       setOverviewError(err instanceof Error ? err.message : String(err));
@@ -837,7 +837,7 @@ function UpdatesSection() {
   useEffect(() => {
     (async () => {
       try {
-        const cached: UpdateStatus | null = await (rpc as any).gitUpdates.getCachedStatus();
+        const cached: UpdateStatus | null = await (rpc).gitUpdates.getCachedStatus();
         if (cached) setStatus(cached);
         else checkUpstream(false);
       } catch (err) {
@@ -1783,7 +1783,7 @@ function RegistrySection() {
     setLoading(true);
     setError(null);
     try {
-      const result: RegistryResult = await (rpc as any).registry.getRegistry();
+      const result: RegistryResult = await (rpc).registry.getRegistry();
       if (result.ok) {
         setListing(result.listing);
       } else {
@@ -1806,7 +1806,7 @@ function RegistrySection() {
       setInstalling(entry.name);
       setInstallOutcome(null);
       try {
-        const result: InstallResult = await (rpc as any).registry.installFromRegistry({
+        const result: InstallResult = await (rpc).registry.installFromRegistry({
           name: entry.name,
           description: entry.description,
           repo: entry.repo,
@@ -2012,7 +2012,7 @@ function ReviewPromptDialog({
   }, [open]);
 
   const onCopy = useCallback(() => {
-    (rpc as any).window.copyToClipboard(prompt);
+    (rpc).window.copyToClipboard(prompt);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }, [prompt, rpc]);

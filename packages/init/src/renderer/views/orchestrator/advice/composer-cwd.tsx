@@ -255,10 +255,10 @@ function ComposerCwdInner({
   const currentMode = agent?.mode ?? "";
 
   const handlePickCwd = useCallback(async () => {
-    const dir = await (rpc as any).window.pickDirectory();
+    const dir = await rpc.window.pickDirectory();
     if (!dir) return;
     try {
-      await (rpc as any).agent.changeCwd(agentId, dir);
+      await rpc.agent.changeCwd(agentId, dir);
     } catch (err) {
       console.error("[cwd-selector] changeCwd failed", err);
     }
@@ -266,7 +266,7 @@ function ComposerCwdInner({
 
   const handleModeChange = useCallback(
     async (value: string) => {
-      await (rpc as any).agent.setConfigOption(agentId, "mode", value);
+      await rpc.agent.setConfigOption(agentId, "mode", value);
     },
     [rpc, agentId],
   );
@@ -306,7 +306,7 @@ function ComposerCwdInner({
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   className="text-xs"
-                  onClick={() => (rpc as any).window.openInFinder(agentCwd!)}
+                  onClick={() => rpc.window.openInFinder(agentCwd!)}
                 >
                   <FolderOpenIcon className="size-3" />
                   Open in Finder
