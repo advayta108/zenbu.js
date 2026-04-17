@@ -152,6 +152,8 @@ ensure_bun() {
   local current=""
   if [ -f "$marker" ]; then current="$(cat "$marker" 2>/dev/null || true)"; fi
   if [ -x "${BIN_DIR}/bun" ] && [ "$current" = "$version" ]; then
+    # Always re-ensure the node->bun symlink exists (may have been removed).
+    ln -sf bun "${BIN_DIR}/node"
     log_ok "bun $version already installed"
     return
   fi
@@ -174,7 +176,12 @@ ensure_bun() {
   install -m 0755 "$extracted" "${BIN_DIR}/bun"
   printf "%s" "$version" > "$marker"
   rm -rf "$tmpdir"
-  log_ok "bun $version installed"
+  # Symlink node -> bun so pnpm lifecycle scripts with `#!/usr/bin/env node`
+  # shebangs (e.g. the tsc shim that fails dynohot's prepare hook) resolve
+  # to our bun via PATH. Bun runs in node-compat mode when invoked as `node`.
+  # See: https://bun.sh/docs/cli/run ("--bun" flag description).
+  ln -sf bun "${BIN_DIR}/node"
+  log_ok "bun $version installed (node->bun symlinked)"
 }
 
 ensure_pnpm() {
