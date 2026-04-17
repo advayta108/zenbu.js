@@ -580,6 +580,10 @@ export class WindowService extends Service {
     await shell.openPath(dirPath);
   }
 
+  async openExternal(url: string) {
+    await shell.openExternal(url);
+  }
+
   async confirm(opts: {
     title: string;
     message: string;

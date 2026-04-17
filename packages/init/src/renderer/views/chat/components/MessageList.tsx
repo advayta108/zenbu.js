@@ -5,6 +5,11 @@ import type { ChatComponents } from "../lib/chat-components"
 import { useAutoScroll, type ScrollSnapshot } from "../lib/use-auto-scroll"
 import { readChatScrollMetrics } from "../lib/scroll-metrics"
 import { TurnSummary } from "./TurnSummary"
+import {
+  reportChatInvariant,
+  summarizeMessage,
+  type ExpectedVisibleMessage,
+} from "../lib/chat-invariants"
 
 export type ScrollMetrics = {
   scrollTop: number
@@ -27,6 +32,7 @@ export type MessageListProps = {
   messages: MaterializedMessage[]
   loading: boolean
   components: ChatComponents
+  debugExpectedVisibleMessageRef?: React.MutableRefObject<ExpectedVisibleMessage | null>
   initialMeasurementCache?: Record<string, any>
   scrollToIndexOnMount?: number
   onPermissionSelect?: (toolCallId: string, optionId: string) => void
@@ -59,6 +65,7 @@ function getMessageKey(msg: MaterializedMessage, index: number): string {
 const MIN_LOAD_OLDER_THRESHOLD = 400
 const LOAD_OLDER_THRESHOLD_MULTIPLIER = 1.5
 const LOAD_NEWER_THRESHOLD = 200
+const INVARIANT_BOTTOM_DRIFT_THRESHOLD = 24
 
 function getLoadOlderThreshold(el: HTMLElement) {
   return Math.max(
@@ -73,6 +80,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
       messages,
       loading,
       components: C,
+      debugExpectedVisibleMessageRef,
       onPermissionSelect,
       onQuestionSubmit,
       onScrollMetrics,
@@ -95,6 +103,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
     const loadOlderInFlightRef = useRef(false)
     const [showScrollToBottom, setShowScrollToBottom] = useState(false)
     const clickedScrollToBottomRef = useRef(false)
+    const lastInvariantCommitKeyRef = useRef<string | null>(null)
 
     const emitScrollMetrics = useCallback(() => {
       const el = autoScroll.getScrollElement()
@@ -156,6 +165,156 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
     }, [autoScroll, emitScrollMetrics, hasMoreAbove, hasMoreBelow, messages.length, onLoadNewer, onLoadOlder, onReachedBottom])
 
     useLayoutEffect(() => {
+      const el = autoScroll.getScrollElement()
+      if (!el) return
+
+      const distanceFromBottom = el.scrollHeight - el.clientHeight - el.scrollTop
+      if (distanceFromBottom > LOAD_NEWER_THRESHOLD) return
+
+      if (hasMoreBelow) {
+        if (autoScroll.userScrolled) {
+          onLoadNewer?.()
+        } else {
+          onReachedBottom?.()
+        }
+        return
+      }
+
+      if (autoScroll.userScrolled && distanceFromBottom <= 4) {
+        onReachedBottom?.()
+      }
+    }, [autoScroll, hasMoreBelow, messages.length, onLoadNewer, onReachedBottom])
+
+    useLayoutEffect(() => {
+      if (pendingSnapshotRef.current) return
+      if (autoScroll.userScrolled) return
+      autoScroll.forceScrollToBottom()
+    }, [autoScroll, messages])
+
+    useLayoutEffect(() => {
+      const expectedRef = debugExpectedVisibleMessageRef
+      if (expectedRef?.current && Date.now() - expectedRef.current.createdAt > 5000) {
+        expectedRef.current = null
+      }
+
+      const commitKey = [
+        messages.length,
+        messages[messages.length - 1]?.key ?? "none",
+        hasMoreBelow ? "hidden-below" : "tail-visible",
+        autoScroll.userScrolled ? "detached" : "locked",
+      ].join(":")
+
+      if (lastInvariantCommitKeyRef.current === commitKey) return
+      lastInvariantCommitKeyRef.current = commitKey
+
+      let raf1 = 0
+      let raf2 = 0
+
+      const inspect = () => {
+        const el = autoScroll.getScrollElement()
+        if (!el) return
+
+        const metrics = readChatScrollMetrics(el)
+        const distanceFromBottom = metrics?.distanceFromBottom ?? null
+        const expected = expectedRef?.current ?? null
+        const expectedRendered = expected
+          ? messages.some(
+              (message) =>
+                message.role === "user" &&
+                message.timeSent === expected.timestamp,
+            )
+          : false
+        const lastMessage = messages[messages.length - 1]
+        const details = {
+          messageCount: messages.length,
+          loading,
+          hasMoreAbove: !!hasMoreAbove,
+          hasMoreBelow: !!hasMoreBelow,
+          scrollMetrics: metrics,
+          userScrolled: autoScroll.userScrolled,
+          autoScroll: autoScroll.getDebugState?.() ?? null,
+          lastMessage: summarizeMessage(lastMessage),
+          expectedVisibleMessage: expected,
+        }
+
+        if (
+          !autoScroll.userScrolled &&
+          hasMoreBelow &&
+          distanceFromBottom !== null &&
+          distanceFromBottom <= LOAD_NEWER_THRESHOLD
+        ) {
+          reportChatInvariant(
+            "LOCKED_WITH_HIDDEN_TAIL",
+            details,
+            `locked-hidden-tail:${lastMessage?.key ?? "none"}:${messages.length}`,
+          )
+        }
+
+        if (
+          !autoScroll.userScrolled &&
+          distanceFromBottom !== null &&
+          distanceFromBottom > INVARIANT_BOTTOM_DRIFT_THRESHOLD
+        ) {
+          reportChatInvariant(
+            "LOCKED_COMMIT_NOT_AT_BOTTOM",
+            details,
+            `locked-drift:${lastMessage?.key ?? "none"}:${messages.length}`,
+          )
+        }
+
+        if (!expected || !expectedRef) return
+
+        if (!expectedRendered) {
+          reportChatInvariant(
+            "LOCAL_SUBMIT_NOT_PRESENT_IN_RENDERED_MESSAGES",
+            details,
+            `submit-missing:${expected.timestamp}`,
+          )
+          return
+        }
+
+        if (autoScroll.userScrolled) {
+          reportChatInvariant(
+            "LOCAL_SUBMIT_RENDERED_BUT_AUTOSCROLL_DETACHED",
+            details,
+            `submit-detached:${expected.timestamp}`,
+          )
+          return
+        }
+
+        if (
+          distanceFromBottom !== null &&
+          distanceFromBottom > INVARIANT_BOTTOM_DRIFT_THRESHOLD
+        ) {
+          reportChatInvariant(
+            "LOCAL_SUBMIT_RENDERED_BUT_HIDDEN_BELOW_VIEWPORT",
+            details,
+            `submit-hidden:${expected.timestamp}`,
+          )
+          return
+        }
+
+        expectedRef.current = null
+      }
+
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(inspect)
+      })
+
+      return () => {
+        if (raf1) cancelAnimationFrame(raf1)
+        if (raf2) cancelAnimationFrame(raf2)
+      }
+    }, [
+      autoScroll,
+      debugExpectedVisibleMessageRef,
+      hasMoreAbove,
+      hasMoreBelow,
+      loading,
+      messages,
+    ])
+
+    useLayoutEffect(() => {
       if (initialScrollDoneRef.current) return
       if (messages.length === 0) return
       const el = autoScroll.getScrollElement()
@@ -206,7 +365,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
           ref={autoScroll.scrollRef}
           onScroll={handleScroll}
           onClick={autoScroll.handleInteraction}
-          className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-1 [scrollbar-width:none] hover:[scrollbar-width:thin] hover:[scrollbar-color:var(--color-neutral-300)_transparent]"
+          className={`min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-1 [scrollbar-width:none] ${
+            autoScroll.userScrolled
+              ? "hover:[scrollbar-width:thin] hover:[scrollbar-color:var(--color-neutral-300)_transparent]"
+              : ""
+          }`}
           style={{ overflowX: "hidden" }}
         >
           <div
@@ -316,5 +479,7 @@ function MessageRow({
       )
     case "interrupted":
       return <C.Interrupted />
+    case "auth_event":
+      return <C.AuthEvent status={msg.status} authMethods={msg.authMethods} />
   }
 }

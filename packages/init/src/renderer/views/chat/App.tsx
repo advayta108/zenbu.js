@@ -10,6 +10,7 @@ import type { WsConnectionState } from "../../lib/ws-connection";
 import { ChatDisplay } from "./ChatDisplay";
 import { ComposerPanel } from "./ComposerPanel";
 import { MinimapContent } from "./components/MinimapContent";
+import type { ExpectedVisibleMessage } from "./lib/chat-invariants";
 
 class ChatErrorBoundary extends Component<
   { children: ReactNode },
@@ -84,6 +85,7 @@ function ExplosionTrap() {
 
 function ChatContent() {
   const scrollToBottomRef = useRef<(() => void) | null>(null);
+  const expectedVisibleMessageRef = useRef<ExpectedVisibleMessage | null>(null);
 
   if (isMinimap) {
     return <MinimapContent agentId={agentId} />
@@ -92,8 +94,16 @@ function ChatContent() {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-[#F4F4F4] relative">
       <ExplosionTrap />
-      <ChatDisplay agentId={agentId} scrollToBottomRef={scrollToBottomRef} />
-      <ComposerPanel agentId={agentId} scrollToBottom={() => scrollToBottomRef.current?.()} />
+      <ChatDisplay
+        agentId={agentId}
+        scrollToBottomRef={scrollToBottomRef}
+        debugExpectedVisibleMessageRef={expectedVisibleMessageRef}
+      />
+      <ComposerPanel
+        agentId={agentId}
+        scrollToBottom={() => scrollToBottomRef.current?.()}
+        debugExpectedVisibleMessageRef={expectedVisibleMessageRef}
+      />
     </div>
   );
 }

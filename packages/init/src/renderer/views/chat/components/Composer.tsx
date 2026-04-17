@@ -43,6 +43,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useRpc, useKyjuClient } from "../../../lib/providers";
 import { useDb } from "../../../lib/kyju-react";
+import type { ExpectedVisibleMessage } from "../lib/chat-invariants";
 
 type AgentConfigRow = {
   id: string;
@@ -350,9 +351,11 @@ function AgentConfigCombobox({
 export function Composer({
   agentId,
   scrollToBottom,
+  debugExpectedVisibleMessageRef,
 }: {
   agentId: string;
   scrollToBottom?: () => void;
+  debugExpectedVisibleMessageRef?: React.MutableRefObject<ExpectedVisibleMessage | null>;
 }) {
   const filePickerOpenRef = useRef(false);
   const slashMenuOpenRef = useRef(false);
@@ -424,6 +427,15 @@ export function Composer({
         }
         flushSync(() => {
           const now = Date.now();
+          if (debugExpectedVisibleMessageRef) {
+            debugExpectedVisibleMessageRef.current = {
+              agentId,
+              timestamp: now,
+              createdAt: Date.now(),
+              textPreview: text.slice(0, 120),
+              imageCount: images.length,
+            };
+          }
           client.plugin.kernel.agents[agentIndex].eventLog.concat([
             { timestamp: now, data: eventData },
           ]);
@@ -447,7 +459,7 @@ export function Composer({
         client.plugin.kernel.chatBlobs.set([]).catch(() => {});
       }
     },
-    [rpc, agentId, client, streaming, scrollToBottom],
+    [rpc, agentId, client, streaming, scrollToBottom, debugExpectedVisibleMessageRef],
   );
 
   const handleConfigChange = useCallback(

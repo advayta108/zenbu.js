@@ -9,6 +9,7 @@ import {
 } from "./codex-transport.ts";
 import type { ModelListResponse } from "../generated/v2/ModelListResponse.ts";
 import type { ThreadStartResponse } from "../generated/v2/ThreadStartResponse.ts";
+import type { TurnStartResponse } from "../generated/v2/TurnStartResponse.ts";
 import type { TurnCompletedNotification } from "../generated/v2/TurnCompletedNotification.ts";
 import type { AgentMessageDeltaNotification } from "../generated/v2/AgentMessageDeltaNotification.ts";
 import type { ReasoningTextDeltaNotification } from "../generated/v2/ReasoningTextDeltaNotification.ts";
@@ -113,6 +114,7 @@ function stripShellWrapper(command: string): string {
 export function createBridge(opts?: { noLoadSession?: boolean }) {
   let codex: CodexTransport | null = null;
   let threadId: string | null = null;
+  let currentTurnId: string | null = null;
   let currentModel: string | null = null;
   let currentEffort: string | null = null;
   let currentMode: string = "bypassPermissions";
@@ -168,6 +170,13 @@ export function createBridge(opts?: { noLoadSession?: boolean }) {
           title: "Codex (via ACP bridge)",
           version: "0.0.1",
         },
+        authMethods: [
+          {
+            id: "codex_login",
+            name: "Codex Login",
+            description: "Authenticate using the Codex CLI. Run 'codex auth login' first if not logged in.",
+          },
+        ],
       };
     }
 
@@ -334,6 +343,7 @@ export function createBridge(opts?: { noLoadSession?: boolean }) {
         const unsub = codex!.onNotification((method, params) => {
           if (method === "turn/completed") {
             unsub();
+            currentTurnId = null;
             const notification = params as TurnCompletedNotification;
             resolve({
               stopReason: translateTurnStatus(notification.turn.status),
@@ -342,20 +352,26 @@ export function createBridge(opts?: { noLoadSession?: boolean }) {
         });
       });
 
-      await codex.sendRequest("turn/start", {
-        threadId,
-        input,
-        ...(currentModel ? { model: currentModel } : {}),
-        ...(currentEffort ? { effort: currentEffort } : {}),
-        approvalPolicy: modeToApprovalPolicy[currentMode as ModeId] ?? "never",
-      });
+      const startResponse = await codex.sendRequest<TurnStartResponse>(
+        "turn/start",
+        {
+          threadId,
+          input,
+          ...(currentModel ? { model: currentModel } : {}),
+          ...(currentEffort ? { effort: currentEffort } : {}),
+          approvalPolicy: modeToApprovalPolicy[currentMode as ModeId] ?? "never",
+        },
+      );
+      currentTurnId = startResponse.turn.id;
 
       return turnDone;
     }
 
     async cancel(): Promise<void> {
-      if (codex && threadId) {
-        await codex.sendRequest("turn/interrupt", { threadId }).catch(() => {});
+      if (codex && threadId && currentTurnId) {
+        await codex
+          .sendRequest("turn/interrupt", { threadId, turnId: currentTurnId })
+          .catch(() => {});
       }
     }
 

@@ -30,14 +30,64 @@ function parseJsonc(str) {
   return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"))
 }
 
+function globRegex(filePattern) {
+  return new RegExp("^" + filePattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$")
+}
+
 function expandGlob(pattern) {
   const dir = path.dirname(pattern)
-  const filePattern = path.basename(pattern)
-  const regex = new RegExp("^" + filePattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$")
+  const regex = globRegex(path.basename(pattern))
   if (!fs.existsSync(dir)) return []
   return fs.readdirSync(dir)
     .filter(f => regex.test(f))
     .map(f => path.resolve(dir, f))
+}
+
+// Barrel URL -> { hot, globs: [{dir, regex, snapshot: Set<string>}] }
+const barrels = new Map()
+// Directory -> fs.FSWatcher (one watcher per directory, fanned out to barrels)
+const dirWatchers = new Map()
+
+function snapshotDir(dir, regex) {
+  if (!fs.existsSync(dir)) return new Set()
+  try {
+    return new Set(fs.readdirSync(dir).filter(f => regex.test(f)))
+  } catch {
+    return new Set()
+  }
+}
+
+function ensureDirWatcher(dir) {
+  if (dirWatchers.has(dir)) return
+  if (!fs.existsSync(dir)) return
+  try {
+    const watcher = fs.watch(dir, { persistent: false }, (_event, filename) => {
+      if (!filename) return
+      for (const entry of barrels.values()) {
+        for (const glob of entry.globs) {
+          if (glob.dir !== dir) continue
+          if (!glob.regex.test(filename)) continue
+          const nextSnapshot = snapshotDir(dir, glob.regex)
+          const changed =
+            nextSnapshot.size !== glob.snapshot.size ||
+            [...nextSnapshot].some(f => !glob.snapshot.has(f))
+          if (!changed) continue
+          glob.snapshot = nextSnapshot
+          try {
+            entry.hot?.invalidate?.()
+            console.log(`[zenbu-loader] invalidated barrel (${filename} added/removed in ${dir})`)
+          } catch (err) {
+            console.error("[zenbu-loader] invalidate failed:", err)
+          }
+          break
+        }
+      }
+    })
+    watcher.unref()
+    dirWatchers.set(dir, watcher)
+  } catch (err) {
+    console.error(`[zenbu-loader] fs.watch failed for ${dir}:`, err)
+  }
 }
 
 function buildSource(imports) {
@@ -70,11 +120,15 @@ function buildBarrel(manifestPath) {
   const entries = manifest.services ?? []
   const imports = []
   const watchPaths = new Set([manifestPath])
+  const globs = []
 
   for (const entry of entries) {
     const resolved = path.resolve(baseDir, entry)
     if (resolved.includes("*")) {
-      watchPaths.add(path.dirname(resolved))
+      const dir = path.dirname(resolved)
+      const regex = globRegex(path.basename(resolved))
+      watchPaths.add(dir)
+      globs.push({ dir, regex, snapshot: snapshotDir(dir, regex) })
       for (const file of expandGlob(resolved)) {
         imports.push(pathToFileURL(file).href)
       }
@@ -88,6 +142,7 @@ function buildBarrel(manifestPath) {
   return {
     source: buildSource(imports) + "import.meta.hot?.accept()\n",
     watchPaths,
+    globs,
   }
 }
 
@@ -115,13 +170,19 @@ export function load(url, context, nextLoad) {
   if (url.startsWith("zenbu:barrel?")) {
     const params = new URL(url).searchParams
     const manifestPath = decodeURIComponent(params.get("manifest"))
-    const { source, watchPaths } = buildBarrel(manifestPath)
+    const { source, watchPaths, globs } = buildBarrel(manifestPath)
     if (context.hot && typeof context.hot.watch === "function") {
       for (const watchPath of watchPaths) {
         context.hot.watch(pathToFileURL(watchPath))
       }
     }
-    console.log(`[zenbu-loader] generated barrel for ${path.basename(manifestPath)} (${source.split("\n").filter(Boolean).length} imports, ${watchPaths.size} watches)`)
+    if (context.hot) {
+      barrels.set(url, { hot: context.hot, globs })
+      for (const glob of globs) {
+        ensureDirWatcher(glob.dir)
+      }
+    }
+    console.log(`[zenbu-loader] generated barrel for ${path.basename(manifestPath)} (${source.split("\n").filter(Boolean).length} imports, ${watchPaths.size} watches, ${globs.length} globs)`)
     return { format: "module", source, shortCircuit: true }
   }
   return nextLoad(url, context)

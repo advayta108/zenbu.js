@@ -1,5 +1,7 @@
 import { app } from "electron"
-import { autoUpdater } from "electron-updater"
+import electronUpdater from "electron-updater"
+
+const { autoUpdater } = electronUpdater
 
 const CHECK_INTERVAL_MS = 30 * 60_000
 let initialized = false
@@ -21,7 +23,13 @@ export function initUpdater(): void {
   autoUpdater.on("update-downloaded", (info) =>
     console.log("[updater] downloaded:", info.version, "— will install on next quit"),
   )
-  autoUpdater.on("error", (err) => console.error("[updater] error:", err))
+  autoUpdater.on("error", (err) => {
+    if (err?.message?.includes("No published versions on GitHub")) {
+      console.log("[updater] no published releases yet")
+      return
+    }
+    console.error("[updater] error:", err)
+  })
 
   // checkForUpdates() both rejects AND emits "error" — swallow the rejection here
   // so the error listener is the single log site (and to avoid an unhandled rejection).

@@ -4,6 +4,7 @@ import type {
   ToolMessageData,
   PlanEntry,
   PermissionOption,
+  AuthMethodInfo,
 } from "./materialize"
 
 export type UserMessageProps = {
@@ -58,6 +59,11 @@ export type LoadingProps = {
 
 export type InterruptedProps = Record<string, never>
 
+export type AuthEventProps = {
+  status: string
+  authMethods: AuthMethodInfo[]
+}
+
 export interface ChatComponents {
   UserMessage: ComponentType<UserMessageProps>
   AssistantMessage: ComponentType<AssistantMessageProps>
@@ -68,5 +74,6 @@ export interface ChatComponents {
   AskQuestion: ComponentType<AskQuestionProps>
   Loading: ComponentType<LoadingProps>
   Interrupted: ComponentType<InterruptedProps>
+  AuthEvent: ComponentType<AuthEventProps>
   containerClassName: string
 }

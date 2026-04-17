@@ -222,6 +222,55 @@ export class InstallerService extends Service {
     return results
   }
 
+  addPluginToConfig(manifestPath: string): void {
+    const configPath = resolveConfigPath()
+    if (!fs.existsSync(configPath)) {
+      const initial = `{\n  "plugins": [\n    "${manifestPath}",\n  ],\n}\n`
+      fs.writeFileSync(configPath, initial)
+      return
+    }
+    const raw = fs.readFileSync(configPath, "utf8")
+    const lines = raw.split("\n")
+
+    const pluginLineRe = /^(\s*)(\/\/\s*)?"([^"]+\.json)"/
+    let lastPluginIdx = -1
+    let arrayCloseIdx = -1
+    let pluginsKeyIdx = -1
+    let indent = "    "
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!
+      if (pluginsKeyIdx === -1 && /"plugins"\s*:\s*\[/.test(line)) {
+        pluginsKeyIdx = i
+        continue
+      }
+      if (pluginsKeyIdx !== -1) {
+        const match = line.match(pluginLineRe)
+        if (match) {
+          lastPluginIdx = i
+          indent = match[1]!
+          if (match[3] === manifestPath) return
+        }
+        if (/^\s*\]/.test(line)) {
+          arrayCloseIdx = i
+          break
+        }
+      }
+    }
+
+    if (arrayCloseIdx === -1) return
+
+    const newLine = `${indent}"${manifestPath}",`
+    const insertAt = lastPluginIdx >= 0 ? lastPluginIdx + 1 : arrayCloseIdx
+
+    if (lastPluginIdx >= 0 && !lines[lastPluginIdx]!.trimEnd().endsWith(",")) {
+      lines[lastPluginIdx] = lines[lastPluginIdx]!.replace(/(\s*)$/, ",$1")
+    }
+
+    lines.splice(insertAt, 0, newLine)
+    fs.writeFileSync(configPath, lines.join("\n"))
+  }
+
   togglePlugin(manifestPath: string, enabled: boolean): void {
     const configPath = resolveConfigPath()
     if (!fs.existsSync(configPath)) return

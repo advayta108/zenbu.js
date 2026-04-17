@@ -18,6 +18,17 @@ export type PermissionOption = {
   kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
 };
 
+export type AuthMethodInfo = {
+  id: string;
+  name: string;
+  description?: string;
+  type?: "agent" | "env_var" | "terminal";
+  link?: string;
+  vars?: { name: string; label?: string; secret?: boolean; optional?: boolean }[];
+  args?: string[];
+  env?: Record<string, string>;
+};
+
 type MessageIdentity = {
   key?: string;
 };
@@ -56,7 +67,12 @@ export type MaterializedMessage =
       toolCallId: string;
       question: string;
     })
-  | (MessageIdentity & { role: "interrupted" });
+  | (MessageIdentity & { role: "interrupted" })
+  | (MessageIdentity & {
+      role: "auth_event";
+      status: string;
+      authMethods: AuthMethodInfo[];
+    });
 
 type AgentEvent = {
   timestamp: number;
@@ -232,6 +248,18 @@ export function materializeMessages(
 
     const update = event.data.update;
 
+    const syntheticKind = (update as any).kind;
+    if (syntheticKind === "auth_event") {
+      const u = update as any;
+      messages.push({
+        key: createStableEventKey("auth", event),
+        role: "auth_event",
+        status: u.status ?? "unknown",
+        authMethods: u.authMethods ?? [],
+      });
+      continue;
+    }
+
     switch (update.sessionUpdate) {
       case "user_message_chunk": {
         const text = extractText(update.content);
@@ -304,7 +332,21 @@ export function materializeMessages(
             if ((existing.toolName || metaToolName).toLowerCase() === "write") existing.kind = "create";
           }
           if (newItems.length > 0) {
-            existing.contentItems = [...existing.contentItems, ...newItems];
+            const existingDiffKeys = new Set(
+              existing.contentItems
+                .filter((c): c is ToolCallContentItem & { type: "diff" } => c.type === "diff")
+                .map((c) => `${c.path}\u0000${c.oldText ?? ""}\u0000${c.newText}`),
+            );
+            const deduped = newItems.filter((item) => {
+              if (item.type !== "diff") return true;
+              const key = `${item.path}\u0000${item.oldText ?? ""}\u0000${item.newText}`;
+              if (existingDiffKeys.has(key)) return false;
+              existingDiffKeys.add(key);
+              return true;
+            });
+            if (deduped.length > 0) {
+              existing.contentItems = [...existing.contentItems, ...deduped];
+            }
           }
           if (rawOut !== undefined) existing.rawOutput = rawOut;
           if (rawIn !== undefined) existing.rawInput = rawIn;

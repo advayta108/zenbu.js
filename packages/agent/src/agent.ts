@@ -1,4 +1,4 @@
-import { Effect, Ref, Deferred } from "effect";
+import { Effect, Ref, Deferred, Cause } from "effect";
 import { nanoid } from "nanoid";
 import { unlinkSync, existsSync } from "node:fs";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -175,12 +175,15 @@ export class Agent {
         clientCapabilities: {
           fs: { readTextFile: true, writeTextFile: true },
           terminal: true,
+          auth: { terminal: true },
         },
       });
       agent.supportsLoadSession = !!initResult.agentCapabilities?.loadSession;
       agent._logSyntheticEvent("initialize", {
         agentCapabilities: initResult.agentCapabilities,
       });
+
+      const advertisedAuthMethods = initResult.authMethods ?? [];
 
       const existingSessionId = opts?.freshSession
         ? null

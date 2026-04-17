@@ -36,6 +36,11 @@ export function useAutoScroll({
   const suppressRef = useRef(false)
   const preserveSnapshotScrollRef = useRef(false)
   const lastObservedTopRef = useRef<number | null>(null)
+  const lastScrollIntentRef = useRef<{
+    at: number
+    force: boolean
+    reason: string
+  } | null>(null)
   onUserScrolledRef.current = onUserScrolled
 
   const isActive = () => workingRef.current || settlingRef.current
@@ -92,6 +97,7 @@ export function useAutoScroll({
 
   const scrollToBottom = (force: boolean, reason = "unknown") => {
     if (!force && !isActive()) return
+    lastScrollIntentRef.current = { at: Date.now(), force, reason }
     if (force) setUserScrolled(false, `force:${reason}`)
 
     const el = scrollElRef.current
@@ -397,6 +403,23 @@ export function useAutoScroll({
     scrollToBottom() { helpersRef.current.scrollToBottom(false, "api") },
     forceScrollToBottom() { helpersRef.current.scrollToBottom(true, "api-force") },
     getScrollElement() { return scrollElRef.current },
+    getDebugState() {
+      return {
+        userScrolled: userScrolledRef.current,
+        working: workingRef.current,
+        settling: settlingRef.current,
+        suppress: suppressRef.current,
+        preserveSnapshotScroll: preserveSnapshotScrollRef.current,
+        lastObservedTop: lastObservedTopRef.current,
+        lastScrollIntent: lastScrollIntentRef.current,
+        autoMark: autoMarkRef.current
+          ? {
+              top: autoMarkRef.current.top,
+              ageMs: Date.now() - autoMarkRef.current.time,
+            }
+          : null,
+      }
+    },
   }), [
     scrollRefCallback,
     contentRefCallback,

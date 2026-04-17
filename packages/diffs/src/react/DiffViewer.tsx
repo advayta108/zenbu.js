@@ -227,9 +227,11 @@ function DiffBody({ lines }: { lines: DiffLine[] }) {
         tabSize: 2,
       }}
     >
-      {lines.map((line, i) => (
-        <DiffRow key={i} line={line} />
-      ))}
+      <div style={{ minWidth: 'max-content' }}>
+        {lines.map((line, i) => (
+          <DiffRow key={i} line={line} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -273,7 +275,6 @@ function DiffRow({ line }: { line: DiffLine }) {
         style={{
           flex: 1,
           whiteSpace: 'pre',
-          overflow: 'hidden',
           paddingLeft: '6px',
         }}
       >

@@ -8,6 +8,7 @@ import { PermissionRequest } from "./PermissionRequest"
 import { AskQuestion } from "./AskQuestion"
 import { Loading } from "./Loading"
 import { Interrupted } from "./Interrupted"
+import { AuthEvent } from "./AuthEvent"
 
 export const standardComponents: ChatComponents = {
   UserMessage,
@@ -19,5 +20,6 @@ export const standardComponents: ChatComponents = {
   AskQuestion,
   Loading,
   Interrupted,
+  AuthEvent,
   containerClassName: "text-sm gap-3",
 }

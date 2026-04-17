@@ -10,13 +10,19 @@ import { FindInChat } from "./components/FindInChat";
 import { materializeMessages } from "./lib/materialize";
 import { standardComponents } from "./components/modes/standard";
 import { useWindowedItems } from "./lib/use-chat-events";
+import type { ExpectedVisibleMessage } from "./lib/chat-invariants";
 
 export type ChatDisplayProps = {
   agentId: string;
   scrollToBottomRef?: React.MutableRefObject<(() => void) | null>;
+  debugExpectedVisibleMessageRef?: React.MutableRefObject<ExpectedVisibleMessage | null>;
 };
 
-export function ChatDisplay({ agentId, scrollToBottomRef }: ChatDisplayProps) {
+export function ChatDisplay({
+  agentId,
+  scrollToBottomRef,
+  debugExpectedVisibleMessageRef,
+}: ChatDisplayProps) {
   const agents = useDb((root) => root.plugin.kernel.agents);
   const agent = agents?.find((a) => a.id === agentId);
   const streaming = agent?.status === "streaming";
@@ -76,6 +82,7 @@ export function ChatDisplay({ agentId, scrollToBottomRef }: ChatDisplayProps) {
         onScrollMetrics={setScrollMetrics}
         hasMoreAbove={hasMoreBefore}
         hasMoreBelow={hasMoreAfter}
+        debugExpectedVisibleMessageRef={debugExpectedVisibleMessageRef}
         onLoadOlder={loadOlder}
         onLoadNewer={loadNewer}
         onDetachedFromBottom={freezeTail}

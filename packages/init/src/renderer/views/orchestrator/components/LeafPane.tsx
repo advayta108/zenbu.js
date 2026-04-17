@@ -287,9 +287,11 @@ function PaneTab({
       ) : (
         <span className="truncate text-center">{label}</span>
       )}
-      {hasDraft && !isActive && (
+      {/* Persisted draft state is not yet reliable, so the pencil indicator is disabled.
+          TODO: extract this indicator into a plugin once draft persistence is trustworthy. */}
+      {/* {hasDraft && !isActive && (
         <PencilLineIcon className="ml-1 size-3 shrink-0 text-neutral-400" />
-      )}
+      )} */}
     </button>
   );
 }
