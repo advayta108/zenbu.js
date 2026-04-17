@@ -296,15 +296,22 @@ CACHE="$HOME/Library/Caches/Zenbu"
 # Each candidate is taken only if it points at an executable file, so a
 # stale paths.json can't poison the lookup.
 BUN=""
-try_bun() { [ -n "$1" ] && [ -x "$1" ] && BUN="$1"; }
+# Must always return 0 under `set -e` — a bare `&&` chain returns non-zero
+# when the first condition fails (empty $1), which would silently kill the
+# shim. `if` block explicitly returns 0.
+try_bun() {
+  if [ -n "$1" ] && [ -x "$1" ] && [ -z "$BUN" ]; then
+    BUN="$1"
+  fi
+}
 
 try_bun "${ZENBU_BUN:-}"
 PATHS="$HOME/.zenbu/.internal/paths.json"
 if [ -z "$BUN" ] && [ -f "$PATHS" ]; then
   try_bun "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['bunPath'])" "$PATHS" 2>/dev/null || true)"
 fi
-[ -z "$BUN" ] && try_bun "$CACHE/bin/bun"
-[ -z "$BUN" ] && try_bun "$(command -v bun 2>/dev/null || true)"
+try_bun "$CACHE/bin/bun"
+try_bun "$(command -v bun 2>/dev/null || true)"
 
 if [ -z "$BUN" ]; then
   echo "zen: bun not found. Install via: bash \"$HOME/.zenbu/plugins/zenbu/setup.sh\"" >&2
