@@ -442,7 +442,6 @@ export function Composer({
           client.plugin.kernel.agents[agentIndex].status.set("streaming");
           client.plugin.kernel.agents[agentIndex].lastUserMessageAt?.set(now);
         });
-        scrollToBottom?.();
       }
 
       try {
@@ -459,7 +458,7 @@ export function Composer({
         client.plugin.kernel.chatBlobs.set([]).catch(() => {});
       }
     },
-    [rpc, agentId, client, streaming, scrollToBottom, debugExpectedVisibleMessageRef],
+    [rpc, agentId, client, streaming, debugExpectedVisibleMessageRef],
   );
 
   const handleConfigChange = useCallback(
@@ -544,20 +543,6 @@ export function Composer({
               currentConfigId={currentAgent?.configId}
               onSelect={handleSwitchAgentConfig}
             />
-          )}
-
-          {agentId === "mock-acp" && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => {
-                rpc.agent.openAgentDevtools(agentId);
-              }}
-            >
-              Devtools
-            </Button>
           )}
 
           {template?.availableModels &&

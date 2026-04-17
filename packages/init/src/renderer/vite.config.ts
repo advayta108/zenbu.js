@@ -31,7 +31,6 @@ export default defineConfig({
         heatmap: resolve(__dirname, "views/heatmap/index.html"),
         shell: resolve(__dirname, "views/shell/index.html"),
         "composer-debug": resolve(__dirname, "views/composer-debug/index.html"),
-        devtools: resolve(__dirname, "devtools/index.html"),
       },
     },
   },

@@ -6,7 +6,6 @@ import { Agent } from "@zenbu/agent/src/agent";
 import type { EventLog } from "@zenbu/agent/src/event-log";
 import type { AgentStore } from "@zenbu/agent/src/store";
 import type { TerminalInfo } from "@zenbu/agent/src/terminal";
-import { openDevtools } from "@zenbu/mock-acp/src/devtools";
 import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { HttpService } from "./http";
@@ -754,26 +753,6 @@ export class AgentService extends Service {
     } catch {
       return () => {};
     }
-  }
-
-  openAgentDevtools(agentId: string): { ok: boolean; error?: string } {
-    const portFile = path.join(process.cwd(), ".zenbu", "mock-acp", "port");
-    if (!fs.existsSync(portFile)) {
-      return { ok: false, error: "No mock-acp agent running" };
-    }
-    const controlPort = parseInt(fs.readFileSync(portFile, "utf-8").trim(), 10);
-    if (isNaN(controlPort)) {
-      return { ok: false, error: "Invalid port file" };
-    }
-    const baseUrl = `http://localhost:${this.ctx.http.port}`;
-    const rendererUrl = `${baseUrl}/devtools/index.html`;
-    openDevtools({
-      controlPort,
-      rendererUrl,
-      wsPort: this.ctx.http.port,
-      viewId: agentId,
-    });
-    return { ok: true };
   }
 
   evaluate() {
