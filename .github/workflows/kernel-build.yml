@@ -3,10 +3,12 @@ name: Kernel Build Verify
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, harden-install]
     paths:
       - "apps/kernel/**"
       - "packages/**"
+      - "setup.sh"
+      - "setup/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/kernel-build.yml"
@@ -14,6 +16,8 @@ on:
     paths:
       - "apps/kernel/**"
       - "packages/**"
+      - "setup.sh"
+      - "setup/**"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - ".github/workflows/kernel-build.yml"
@@ -31,10 +35,6 @@ jobs:
         include:
           - os: macos-14
             target: mac
-          - os: windows-latest
-            target: win
-          - os: ubuntu-latest
-            target: linux
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -44,7 +44,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - name: Setup Node
         uses: actions/setup-node@v4

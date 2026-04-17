@@ -34,10 +34,6 @@ jobs:
         include:
           - os: macos-14
             target: mac
-          - os: windows-latest
-            target: win
-          - os: ubuntu-latest
-            target: linux
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -47,7 +43,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -79,4 +75,11 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           EP_DRAFT: ${{ inputs.draft }}
           EP_PRE_RELEASE: ${{ inputs.prerelease }}
-        run: pnpm exec electron-builder --${{ matrix.target }} --publish always
+        run: |
+          EXTRA=()
+          if [ -z "${CSC_LINK:-}" ]; then
+            echo "No CSC_LINK secret — building unsigned (mac.identity=null)"
+            EXTRA+=(--config.mac.identity=null)
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          pnpm exec electron-builder --${{ matrix.target }} --publish always "${EXTRA[@]}"
