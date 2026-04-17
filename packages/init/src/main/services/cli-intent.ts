@@ -91,7 +91,7 @@ export class CliIntentService extends Service {
             ...(kernel.windowStates ?? []),
             {
               id: firstWindowId,
-              sessions: [{ id: sessionId, agentId: existingAgentId }],
+              sessions: [{ id: sessionId, agentId: existingAgentId ,lastViewedAt: null}],
               panes: [],
               rootPaneId: null,
               focusedPaneId: null,
@@ -125,6 +125,7 @@ export class CliIntentService extends Service {
               status: "idle" as const,
               metadata: { workspaceId: kernel.activeWorkspaceId },
               eventLog: makeCollection({ collectionId: nanoid(), debugName: "eventLog" }),
+              title: {kind :"not-available"}
             },
           ];
 
@@ -133,7 +134,7 @@ export class CliIntentService extends Service {
             ...(kernel.windowStates ?? []),
             {
               id: firstWindowId,
-              sessions: [{ id: sessionId, agentId }],
+              sessions: [{ id: sessionId, agentId,lastViewedAt: null }],
               panes: [],
               rootPaneId: null,
               focusedPaneId: null,

@@ -23,7 +23,9 @@ function parseStartCommand(startCommand: string): {
   return { command: parts[0], args: parts.slice(1) };
 }
 
-function extractOptionEntries(options: any[]): { value: string; name: string; description?: string }[] {
+function extractOptionEntries(
+  options: any[],
+): { value: string; name: string; description?: string }[] {
   return options
     .filter((o: any) => "value" in o)
     .map((o: any) => ({
@@ -36,12 +38,22 @@ function extractOptionEntries(options: any[]): { value: string; name: string; de
 }
 
 function extractFromAcpConfig(acpOptions: any[]) {
-  const modelOpt = acpOptions.find((o: any) => o.category === "model" && o.type === "select");
-  const thinkingOpt = acpOptions.find((o: any) => o.category === "thought_level" && o.type === "select");
-  const modeOpt = acpOptions.find((o: any) => o.category === "mode" && o.type === "select");
+  const modelOpt = acpOptions.find(
+    (o: any) => o.category === "model" && o.type === "select",
+  );
+  const thinkingOpt = acpOptions.find(
+    (o: any) => o.category === "thought_level" && o.type === "select",
+  );
+  const modeOpt = acpOptions.find(
+    (o: any) => o.category === "mode" && o.type === "select",
+  );
   return {
-    availableModels: modelOpt ? extractOptionEntries(modelOpt.options ?? []) : [],
-    availableThinkingLevels: thinkingOpt ? extractOptionEntries(thinkingOpt.options ?? []) : [],
+    availableModels: modelOpt
+      ? extractOptionEntries(modelOpt.options ?? [])
+      : [],
+    availableThinkingLevels: thinkingOpt
+      ? extractOptionEntries(thinkingOpt.options ?? [])
+      : [],
     availableModes: modeOpt ? extractOptionEntries(modeOpt.options ?? []) : [],
     defaultModel: modelOpt?.currentValue ?? "",
     defaultThinkingLevel: thinkingOpt?.currentValue ?? "",
@@ -55,12 +67,19 @@ function validateAgentSelections(
 ) {
   if (agent.model && extracted.availableModels.length > 0) {
     if (!extracted.availableModels.some((m: any) => m.value === agent.model)) {
-      agent.model = extracted.defaultModel || extracted.availableModels[0]?.value;
+      agent.model =
+        extracted.defaultModel || extracted.availableModels[0]?.value;
     }
   }
   if (agent.thinkingLevel && extracted.availableThinkingLevels.length > 0) {
-    if (!extracted.availableThinkingLevels.some((t: any) => t.value === agent.thinkingLevel)) {
-      agent.thinkingLevel = extracted.defaultThinkingLevel || extracted.availableThinkingLevels[0]?.value;
+    if (
+      !extracted.availableThinkingLevels.some(
+        (t: any) => t.value === agent.thinkingLevel,
+      )
+    ) {
+      agent.thinkingLevel =
+        extracted.defaultThinkingLevel ||
+        extracted.availableThinkingLevels[0]?.value;
     }
   }
   if (agent.mode && extracted.availableModes.length > 0) {
@@ -81,7 +100,9 @@ Do not include anything else in your response outside the XML tags.
 User message:
 `;
 
-function parseSummarizationResponse(text: string): { ok: true; title: string } | { ok: false; error: string } {
+function parseSummarizationResponse(
+  text: string,
+): { ok: true; title: string } | { ok: false; error: string } {
   const titleMatch = text.match(/<title>([\s\S]*?)<\/title>/);
   if (titleMatch) return { ok: true, title: titleMatch[1].trim() };
   const errorMatch = text.match(/<error>([\s\S]*?)<\/error>/);
@@ -119,12 +140,15 @@ export class AgentService extends Service {
       );
     }
     const { command, args } = parseStartCommand(agentConfig.startCommand);
-    const agentCwd = typeof agentConfig.metadata?.cwd === "string" ? agentConfig.metadata.cwd : undefined;
+    const agentCwd =
+      typeof agentConfig.metadata?.cwd === "string"
+        ? agentConfig.metadata.cwd
+        : undefined;
     const cwd = agentCwd || this.getWorkspaceCwd();
 
     const eventLog: EventLog = {
       append: (events) => {
-        // 
+        //
         const agentNode = client.plugin.kernel.agents.find(
           (a) => a.id === agentId,
         );
@@ -132,7 +156,7 @@ export class AgentService extends Service {
         return agentNode.eventLog
           .concat(
             events.map((update) => ({
-              // 
+              //
               timestamp: Date.now(),
               data: { kind: "session_update" as const, update },
             })),
@@ -198,22 +222,27 @@ export class AgentService extends Service {
         onConfigOptions: (options) => {
           const extracted = extractFromAcpConfig(options as any[]);
           // Read pre-existing agent config before updating DB
-          const preExisting = (client.readRoot().plugin.kernel.agents ?? []).find(
-            (a) => a.id === agentId,
-          );
+          const preExisting = (
+            client.readRoot().plugin.kernel.agents ?? []
+          ).find((a) => a.id === agentId);
           const preModel = preExisting?.model;
           const preThinking = preExisting?.thinkingLevel;
           const preMode = preExisting?.mode;
 
           Effect.runPromise(
             client.update((root) => {
-              const instance = root.plugin.kernel.agents.find((a) => a.id === agentId);
+              const instance = root.plugin.kernel.agents.find(
+                (a) => a.id === agentId,
+              );
               const configId = instance?.configId;
               if (configId) {
-                const template = root.plugin.kernel.agentConfigs.find((c) => c.id === configId);
+                const template = root.plugin.kernel.agentConfigs.find(
+                  (c) => c.id === configId,
+                );
                 if (template) {
                   template.availableModels = extracted.availableModels;
-                  template.availableThinkingLevels = extracted.availableThinkingLevels;
+                  template.availableThinkingLevels =
+                    extracted.availableThinkingLevels;
                   template.availableModes = extracted.availableModes;
                 }
               }
@@ -241,17 +270,37 @@ export class AgentService extends Service {
           // Push pre-set config values to ACP only if still valid in new available options
           const process = this.processes.get(agentId);
           if (process) {
-            if (preModel && preModel !== extracted.defaultModel &&
-                (!extracted.availableModels.length || extracted.availableModels.some((m) => m.value === preModel))) {
-              Effect.runPromise(process.setSessionConfigOption("model", preModel)).catch(() => {});
+            if (
+              preModel &&
+              preModel !== extracted.defaultModel &&
+              (!extracted.availableModels.length ||
+                extracted.availableModels.some((m) => m.value === preModel))
+            ) {
+              Effect.runPromise(
+                process.setSessionConfigOption("model", preModel),
+              ).catch(() => {});
             }
-            if (preThinking && preThinking !== extracted.defaultThinkingLevel &&
-                (!extracted.availableThinkingLevels.length || extracted.availableThinkingLevels.some((t) => t.value === preThinking))) {
-              Effect.runPromise(process.setSessionConfigOption("reasoning_effort", preThinking)).catch(() => {});
+            if (
+              preThinking &&
+              preThinking !== extracted.defaultThinkingLevel &&
+              (!extracted.availableThinkingLevels.length ||
+                extracted.availableThinkingLevels.some(
+                  (t) => t.value === preThinking,
+                ))
+            ) {
+              Effect.runPromise(
+                process.setSessionConfigOption("reasoning_effort", preThinking),
+              ).catch(() => {});
             }
-            if (preMode && preMode !== extracted.defaultMode &&
-                (!extracted.availableModes.length || extracted.availableModes.some((m) => m.value === preMode))) {
-              Effect.runPromise(process.setSessionConfigOption("mode", preMode)).catch(() => {});
+            if (
+              preMode &&
+              preMode !== extracted.defaultMode &&
+              (!extracted.availableModes.length ||
+                extracted.availableModes.some((m) => m.value === preMode))
+            ) {
+              Effect.runPromise(
+                process.setSessionConfigOption("mode", preMode),
+              ).catch(() => {});
             }
           }
         },
@@ -259,29 +308,37 @@ export class AgentService extends Service {
           const extracted = extractFromAcpConfig(options as any[]);
           Effect.runPromise(
             client.update((root) => {
-              const instance = root.plugin.kernel.agents.find((a) => a.id === agentId);
+              const instance = root.plugin.kernel.agents.find(
+                (a) => a.id === agentId,
+              );
               if (!instance) return;
 
               // Overwrite template available options so UI reflects new config
               const configId = instance.configId;
               if (configId) {
-                const template = root.plugin.kernel.agentConfigs.find((c) => c.id === configId);
+                const template = root.plugin.kernel.agentConfigs.find(
+                  (c) => c.id === configId,
+                );
                 if (template) {
                   template.availableModels = extracted.availableModels;
-                  template.availableThinkingLevels = extracted.availableThinkingLevels;
+                  template.availableThinkingLevels =
+                    extracted.availableThinkingLevels;
                   template.availableModes = extracted.availableModes;
                 }
               }
 
               // Update this agent's current values from ACP
-              if (extracted.defaultModel) instance.model = extracted.defaultModel;
-              if (extracted.defaultThinkingLevel) instance.thinkingLevel = extracted.defaultThinkingLevel;
+              if (extracted.defaultModel)
+                instance.model = extracted.defaultModel;
+              if (extracted.defaultThinkingLevel)
+                instance.thinkingLevel = extracted.defaultThinkingLevel;
               if (extracted.defaultMode) instance.mode = extracted.defaultMode;
 
               // Validate all other agents with same configId against new options
               if (configId) {
                 for (const agent of root.plugin.kernel.agents) {
-                  if (agent.id === agentId || agent.configId !== configId) continue;
+                  if (agent.id === agentId || agent.configId !== configId)
+                    continue;
                   validateAgentSelections(agent, extracted);
                 }
               }
@@ -336,7 +393,13 @@ export class AgentService extends Service {
     ).catch(() => {});
   }
 
-  private async setAgentTitle(agentId: string, title: { kind: "not-available" } | { kind: "generating" } | { kind: "set"; value: string }) {
+  private async setAgentTitle(
+    agentId: string,
+    title:
+      | { kind: "not-available" }
+      | { kind: "generating" }
+      | { kind: "set"; value: string },
+  ) {
     const client = this.ctx.db.client;
     await Effect.runPromise(
       client.update((root) => {
@@ -368,7 +431,10 @@ export class AgentService extends Service {
         append: (events) => {
           for (const update of events) {
             const u = update as any;
-            if (u.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") {
+            if (
+              u.sessionUpdate === "agent_message_chunk" &&
+              u.content?.type === "text"
+            ) {
               collectedText += u.content.text;
             }
           }
@@ -409,7 +475,9 @@ export class AgentService extends Service {
       }
 
       await Effect.runPromise(
-        summaryAgent.send([{ type: "text", text: SUMMARIZATION_PROMPT + userMessage }]),
+        summaryAgent.send([
+          { type: "text", text: SUMMARIZATION_PROMPT + userMessage },
+        ]),
       );
 
       await Effect.runPromise(summaryAgent.close()).catch(() => {});
@@ -418,7 +486,9 @@ export class AgentService extends Service {
       if (parsed.ok) {
         await this.setAgentTitle(agentId, { kind: "set", value: parsed.title });
       } else {
-        console.warn(`[agent] title generation failed for ${agentId}: ${parsed.error}`);
+        console.warn(
+          `[agent] title generation failed for ${agentId}: ${parsed.error}`,
+        );
         await this.setAgentTitle(agentId, { kind: "not-available" });
       }
     } catch (err) {
@@ -436,7 +506,9 @@ export class AgentService extends Service {
     }
   }
 
-  private async getContextBlocks(): Promise<Array<{ type: "text"; text: string }>> {
+  private async getContextBlocks(): Promise<
+    Array<{ type: "text"; text: string }>
+  > {
     const kernel = this.ctx.db.client.readRoot().plugin.kernel;
     const ws = (kernel.workspaces ?? []).find(
       (w) => w.id === kernel.activeWorkspaceId,
@@ -448,7 +520,10 @@ export class AgentService extends Service {
     for (const filePath of files) {
       try {
         const content = await fsp.readFile(filePath, "utf-8");
-        blocks.push({ type: "text", text: `Context file: ${filePath}\n\n${content}` });
+        blocks.push({
+          type: "text",
+          text: `Context file: ${filePath}\n\n${content}`,
+        });
       } catch {
         // skip files that can't be read
       }
@@ -519,9 +594,11 @@ export class AgentService extends Service {
         { timestamp: now, data: { kind: "user_prompt", text } },
       ]),
     );
-    await Effect.runPromise(
-      client.plugin.kernel.agents[agentIndex].lastUserMessageAt.set(now),
-    );
+    // set has a bug
+    const effect = client.plugin.kernel.agents[
+      agentIndex
+    ].lastUserMessageAt?.set(now as never);
+    effect && (await Effect.runPromise(effect));
   }
 
   async reload(agentId: string) {
@@ -539,9 +616,7 @@ export class AgentService extends Service {
     await Effect.runPromise(agent.interrupt()).catch(() => {});
 
     const client = this.ctx.db.client;
-    const agentNode = client.plugin.kernel.agents.find(
-      (a) => a.id === agentId,
-    );
+    const agentNode = client.plugin.kernel.agents.find((a) => a.id === agentId);
     if (agentNode) {
       await Effect.runPromise(
         agentNode.eventLog.concat([
@@ -651,7 +726,11 @@ export class AgentService extends Service {
   getTerminalOutput(
     agentId: string,
     terminalId: string,
-  ): { output: string; truncated: boolean; exitStatus: { exitCode: number | null; signal: string | null } | null } | null {
+  ): {
+    output: string;
+    truncated: boolean;
+    exitStatus: { exitCode: number | null; signal: string | null } | null;
+  } | null {
     const agent = this.processes.get(agentId);
     if (!agent) return null;
     const info = agent.getTerminalManager().get(terminalId);

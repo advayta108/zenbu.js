@@ -52,7 +52,7 @@
     "asar": false,
     "publish": {
       "provider": "github",
-      "owner": "RobPruzan",
+      "owner": "zenbu-labs",
       "repo": "zenbu"
     }
   },

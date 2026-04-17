@@ -115,6 +115,7 @@ export class CliSocketService extends Service {
                 status: "idle" as const,
                 metadata: { workspaceId: k.activeWorkspaceId },
                 eventLog: makeCollection({ collectionId: nanoid(), debugName: "eventLog" }),
+                title: {kind: "not-available"}
               },
             ];
 
@@ -122,13 +123,14 @@ export class CliSocketService extends Service {
               ...(k.windowStates ?? []),
               {
                 id: windowId,
-                sessions: [{ id: sessionId, agentId: agentId! }],
+                sessions: [{ id: sessionId, agentId: agentId!,lastViewedAt: null }],
                 panes: [],
                 rootPaneId: null,
                 focusedPaneId: null,
                 sidebarOpen: false,
                 tabSidebarOpen: true,
                 sidebarPanel: "overview",
+
               },
             ];
           }),
@@ -141,7 +143,7 @@ export class CliSocketService extends Service {
               ...(root.plugin.kernel.windowStates ?? []),
               {
                 id: windowId,
-                sessions: [{ id: sessionId, agentId: agentId! }],
+                sessions: [{ id: sessionId, agentId: agentId!,lastViewedAt :null }],
                 panes: [],
                 rootPaneId: null,
                 focusedPaneId: null,
@@ -181,7 +183,8 @@ export class CliSocketService extends Service {
       if (agentId) {
         setTimeout(() => {
           try {
-            const rpcService = runtime.getInstance("rpc") as any;
+            
+            const rpcService =runtime.get({key: "rpc"})
             if (rpcService) {
               const router = runtime.buildRouter();
               router.agent?.init?.(agentId).catch(() => {});
