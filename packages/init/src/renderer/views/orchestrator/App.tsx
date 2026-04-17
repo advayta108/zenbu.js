@@ -277,7 +277,10 @@ function ReloadMenu() {
       try {
         const next: UpdateStatus = await (rpc as any).gitUpdates.checkUpdates(true);
         setStatus(next);
-        if (next.kind === "ok" && next.behind === 0) setUpToDate(true);
+        if (next.kind === "ok" && next.behind === 0) {
+          setUpToDate(true);
+          setTimeout(() => setUpToDate(false), 2000);
+        }
       } finally {
         setPending(null);
       }
