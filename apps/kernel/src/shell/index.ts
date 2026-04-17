@@ -87,7 +87,13 @@ app.whenReady().then(async () => {
       return
     }
 
-    if (needsBootstrapper() || bootstrap.needsToolchainDownload) {
+    // The setup window is gated on needsBootstrapper() ONLY (missing plugin
+    // dir or node_modules) — NOT on toolchain readiness. Existing users whose
+    // ~/Library/Caches/Zenbu/bin is empty still boot normally; they can run
+    // `zen doctor` to download the isolated toolchain when they want the
+    // zen CLI. Forcing the setup window on launch caused pnpm to rebuild
+    // its store from scratch under the isolated XDG vars, 100% CPU hang.
+    if (needsBootstrapper()) {
       console.log("[shell] needs setup, showing bootstrapper")
       const win = new BrowserWindow(setupWindowOpts)
       win.loadFile(path.join(app.getAppPath(), "src/setup/index.html"))

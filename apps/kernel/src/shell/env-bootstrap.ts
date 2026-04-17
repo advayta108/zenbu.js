@@ -82,26 +82,33 @@ function mkdirpSafe(p: string): void {
   } catch {}
 }
 
-function setEnvVars(paths: ZenbuPaths): void {
-  // Isolate our bun/pnpm from user's installs via official env vars
-  // (see https://pnpm.io/settings, https://bun.sh/docs/installation)
-  if (!process.env.BUN_INSTALL || process.env.ZENBU_FORCE_OWN_TOOLCHAIN === "1") {
-    process.env.BUN_INSTALL = paths.bunInstall
+function setEnvVars(paths: ZenbuPaths, toolchainReady: boolean): void {
+  // Only apply isolation env vars when our toolchain has actually been
+  // downloaded. Pointing BUN_INSTALL / PNPM_HOME / XDG_* at empty dirs
+  // forces pnpm/bun to rebuild their store from scratch on every spawn —
+  // catastrophic slowdown for existing users who have a populated store
+  // elsewhere. (see https://pnpm.io/settings, https://bun.sh/docs/installation)
+  if (toolchainReady) {
+    if (!process.env.BUN_INSTALL || process.env.ZENBU_FORCE_OWN_TOOLCHAIN === "1") {
+      process.env.BUN_INSTALL = paths.bunInstall
+    }
+    if (!process.env.PNPM_HOME || process.env.ZENBU_FORCE_OWN_TOOLCHAIN === "1") {
+      process.env.PNPM_HOME = paths.pnpmHome
+    }
+    if (!process.env.XDG_CACHE_HOME) process.env.XDG_CACHE_HOME = paths.xdgCacheHome
+    if (!process.env.XDG_DATA_HOME) process.env.XDG_DATA_HOME = paths.xdgDataHome
+    if (!process.env.XDG_STATE_HOME) process.env.XDG_STATE_HOME = paths.xdgStateHome
   }
-  if (!process.env.PNPM_HOME || process.env.ZENBU_FORCE_OWN_TOOLCHAIN === "1") {
-    process.env.PNPM_HOME = paths.pnpmHome
-  }
-  if (!process.env.XDG_CACHE_HOME) process.env.XDG_CACHE_HOME = paths.xdgCacheHome
-  if (!process.env.XDG_DATA_HOME) process.env.XDG_DATA_HOME = paths.xdgDataHome
-  if (!process.env.XDG_STATE_HOME) process.env.XDG_STATE_HOME = paths.xdgStateHome
 
-  // PATH: our binDir first (so spawn("bun", ...) resolves to ours by default),
-  // then user-tool locations (for agent CLIs, git overrides, etc.), then existing PATH.
+  // PATH: always prepend known user-tool locations (brew/bun/pnpm/nvm/volta/
+  // asdf/mise/cargo) so GUI-launched Electron can find tools the user has
+  // installed. When toolchainReady, also prepend our binDir so our own
+  // bun/pnpm win by default (still overridable via ZENBU_BUN etc.).
   const userDirs = probeUserToolPaths()
-  const parts = [paths.binDir, ...userDirs, process.env.PATH ?? ""]
-    .filter(Boolean)
-    .join(path.delimiter)
-  process.env.PATH = parts
+  const pathParts = toolchainReady
+    ? [paths.binDir, ...userDirs, process.env.PATH ?? ""]
+    : [...userDirs, process.env.PATH ?? ""]
+  process.env.PATH = pathParts.filter(Boolean).join(path.delimiter)
 }
 
 function writePathsJson(paths: ZenbuPaths): void {
@@ -132,19 +139,16 @@ export type BootstrapResult = {
 export function bootstrapEnv(): BootstrapResult {
   const paths = computePaths()
 
-  // Ensure all cache subtrees exist so spawned subprocesses can write.
+  // Only create the bin dir eagerly — the rest is populated lazily by setup.sh
+  // when the user runs zen doctor / first-install. We don't want empty
+  // BUN_INSTALL / PNPM_HOME dirs around on every launch.
   mkdirpSafe(paths.binDir)
-  mkdirpSafe(paths.bunInstall)
-  mkdirpSafe(paths.pnpmHome)
-  mkdirpSafe(paths.xdgCacheHome)
-  mkdirpSafe(paths.xdgDataHome)
-  mkdirpSafe(paths.xdgStateHome)
 
-  setEnvVars(paths)
+  const toolchainReady =
+    fs.existsSync(paths.bunPath) && fs.existsSync(paths.pnpmPath)
+
+  setEnvVars(paths, toolchainReady)
   writePathsJson(paths)
 
-  const needsToolchainDownload =
-    !fs.existsSync(paths.bunPath) || !fs.existsSync(paths.pnpmPath)
-
-  return { paths, needsToolchainDownload }
+  return { paths, needsToolchainDownload: !toolchainReady }
 }
