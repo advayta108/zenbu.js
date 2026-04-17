@@ -446,7 +446,12 @@ export class AgentService extends Service {
   private async generateTitle(agentId: string, userMessage: string) {
     const client = this.ctx.db.client;
     const kernel = client.readRoot().plugin.kernel;
-    const configId = kernel.summarizationAgentConfigId;
+    const agentNode = (kernel.agents ?? []).find((a) => a.id === agentId);
+
+    // If the user hasn't picked a dedicated summarization config, reuse the
+    // agent's own config + model — gives every user a working title out of
+    // the box without extra setup.
+    const configId = kernel.summarizationAgentConfigId ?? agentNode?.configId;
     if (!configId) return;
 
     const template = (kernel.agentConfigs ?? []).find((c) => c.id === configId);
@@ -460,7 +465,6 @@ export class AgentService extends Service {
         template.startCommand,
         extraEnv,
       );
-      const agentNode = (kernel.agents ?? []).find((a) => a.id === agentId);
       const agentCwd =
         typeof agentNode?.metadata?.cwd === "string"
           ? agentNode.metadata.cwd
@@ -509,7 +513,7 @@ export class AgentService extends Service {
         }),
       );
 
-      const model = kernel.summarizationModel;
+      const model = kernel.summarizationModel ?? agentNode?.model;
       if (model) {
         await Effect.runPromise(
           summaryAgent.setSessionConfigOption("model", model),

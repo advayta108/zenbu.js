@@ -243,6 +243,7 @@ function ReloadMenu() {
   const rpc = useRpc();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [pending, setPending] = useState<"check" | "pull" | null>(null);
+  const [upToDate, setUpToDate] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -259,6 +260,7 @@ function ReloadMenu() {
 
   const handlePullItem = async () => {
     if (hasConflicts || pending) return;
+    setUpToDate(false);
     if (hasUpdates) {
       setPending("pull");
       try {
@@ -275,6 +277,7 @@ function ReloadMenu() {
       try {
         const next: UpdateStatus = await (rpc as any).gitUpdates.checkUpdates(true);
         setStatus(next);
+        if (next.kind === "ok" && next.behind === 0) setUpToDate(true);
       } finally {
         setPending(null);
       }
@@ -288,9 +291,9 @@ function ReloadMenu() {
         ? "Checking…"
         : hasConflicts
           ? "Conflicts — resolve in Settings"
-          : hasUpdates && status?.kind === "ok"
-            ? `Pull ${status.behind} update${status.behind === 1 ? "" : "s"}`
-            : "Check for updates";
+          : upToDate
+            ? "Up to date"
+            : "Pull updates";
 
   return (
     <DropdownMenu>
