@@ -56,8 +56,9 @@ app.whenReady().then(async () => {
     console.log("[shell] preflight:", preflight)
 
     const setupWindowOpts = {
-      width: 640,
-      height: 460,
+      width: 440,
+      height: 320,
+      resizable: false,
       titleBarStyle: "hidden" as const,
       trafficLightPosition: { x: 12, y: 12 },
       webPreferences: { nodeIntegration: true, contextIsolation: false },

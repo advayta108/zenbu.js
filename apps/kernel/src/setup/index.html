@@ -8,23 +8,29 @@
 </head>
 <body>
   <div class="chrome"></div>
-  <div class="container">
-    <div class="heading">Setting up Zenbu</div>
 
-    <div class="steps" id="steps">
-      <!-- steps rendered dynamically -->
-    </div>
+  <div class="container quiet" id="quiet">
+    <img class="loading-gif" src="./loading.gif" alt="" draggable="false" />
+    <div class="quiet-label" id="quietLabel">Completing install…</div>
+  </div>
 
-    <div class="log" id="log"></div>
+  <div class="container verbose" id="verbose" style="display:none">
+    <div class="heading">Setup hit a snag</div>
+    <div class="error-text" id="errorText"></div>
+
+    <button class="disclosure" id="disclosure" type="button" aria-expanded="false">
+      <span class="chevron">›</span>
+      <span class="label" id="disclosureLabel">Show log</span>
+    </button>
+
+    <pre class="log" id="log" style="display:none"></pre>
 
     <div class="footer">
-      <div>
-        <div class="error-box" id="error"></div>
-        <div class="success-msg" id="success"></div>
-      </div>
-      <button id="retryBtn" style="display:none">Retry</button>
+      <button class="secondary" id="copyBtn" type="button">Copy details</button>
+      <button id="retryBtn" type="button">Retry</button>
     </div>
   </div>
+
   <script src="./setup.js"></script>
 </body>
 </html>
