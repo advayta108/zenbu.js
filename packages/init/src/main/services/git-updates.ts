@@ -30,7 +30,6 @@ import {
   type Worktree,
 } from "@zenbu/git"
 import fs from "node:fs"
-import crypto from "node:crypto"
 import { spawn } from "node:child_process"
 import { Service, runtime } from "../runtime"
 import { RpcService } from "./rpc"
@@ -212,15 +211,6 @@ function resolvePluginManifest(pluginName: string): string | null {
 function resolvePluginRepoDir(manifestPath: string, pluginName: string): string {
   if (pluginName === "kernel") return CORE_REPO_ROOT
   return path.dirname(manifestPath)
-}
-
-function sha256File(filePath: string): string | null {
-  try {
-    const data = fs.readFileSync(filePath)
-    return crypto.createHash("sha256").update(data).digest("hex")
-  } catch {
-    return null
-  }
 }
 
 export class GitUpdatesService extends Service {
@@ -490,11 +480,13 @@ export class GitUpdatesService extends Service {
    * Streams setup subprocess output live via `rpc.emit.setup.progress` so the
    * UI can render the log in real time.
    *
-   * Returns `requiresRelaunch: true` when `pnpm-lock.yaml` changed at ANY
-   * point during the pull+setup cycle (so both "commit bumped a dep" and
-   * "setup.ts mutated deps" cases trigger a relaunch prompt). Captures the
-   * lockfile hash BEFORE `git pull` so a pull that advances the lockfile is
-   * included in the diff even when setup.ts itself doesn't modify it.
+   * Returns `requiresRelaunch: true` whenever `setup.ts` actually ran. The
+   * author bumped `setup.version` on purpose — that's a declaration that the
+   * running process has stale state. Earlier attempts at smarter heuristics
+   * (lockfile hash diffs) gave false negatives when `pnpm install`
+   * materialised a lockfile-already-tracked dep into node_modules without
+   * changing the lockfile itself. Default to "yes, restart" and let
+   * no-bump-no-setup be the opt-out path.
    */
   async pullAndInstall(
     opts: PullAndInstallOpts = {},
@@ -511,11 +503,6 @@ export class GitUpdatesService extends Service {
       }
     }
     const repoDir = resolvePluginRepoDir(manifestPath, pluginName)
-    const lockPath = path.join(repoDir, "pnpm-lock.yaml")
-    // Snapshot the lockfile BEFORE pulling so a dep-bump commit is part of
-    // the relaunch-required diff even if setup.ts itself doesn't modify the
-    // lockfile (it just consumes it via pnpm install).
-    const lockPrePull = sha256File(lockPath)
 
     // --- Pull ---
 
@@ -617,14 +604,11 @@ export class GitUpdatesService extends Service {
       }
     }
 
-    const lockAfter = sha256File(lockPath)
-    const requiresRelaunch = lockPrePull !== lockAfter
-
     return {
       ok: true,
       updated,
       setupRan: true,
-      requiresRelaunch,
+      requiresRelaunch: true,
       plugin: pluginName,
     }
   }
