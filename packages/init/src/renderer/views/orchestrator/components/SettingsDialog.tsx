@@ -1659,11 +1659,16 @@ function AdvancedTab({ ctx }: { ctx: DataCtx }) {
 
 type RegistryEntry = {
   name: string;
+  title?: string;
   description: string;
   repo: string;
   installed: boolean;
   installPath: string;
 };
+
+function displayTitle(entry: { title?: string; name: string }): string {
+  return entry.title?.trim() || entry.name;
+}
 
 type RegistryListing = {
   source: "remote" | "local";
@@ -1868,6 +1873,7 @@ function RegistrySection() {
       if (!q) return true;
       return (
         e.name.toLowerCase().includes(q) ||
+        (e.title?.toLowerCase().includes(q) ?? false) ||
         e.description.toLowerCase().includes(q) ||
         e.repo.toLowerCase().includes(q)
       );
@@ -2160,7 +2166,7 @@ function RegistryCard({
       className="text-left rounded-lg border border-border bg-muted/20 hover:bg-muted/40 hover:border-foreground/20 transition-colors p-3 flex flex-col gap-2 min-h-[150px]"
     >
       <div className="flex items-center gap-2 min-w-0">
-        <p className="text-sm font-semibold truncate">{entry.name}</p>
+        <p className="text-sm font-semibold truncate">{displayTitle(entry)}</p>
         {entry.installed && <InstalledBadge />}
       </div>
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -2325,7 +2331,7 @@ function RegistrySidebarItem({
       )}
     >
       <div className="flex items-center gap-1.5 min-w-0">
-        <span className="text-sm font-medium truncate">{entry.name}</span>
+        <span className="text-sm font-medium truncate">{displayTitle(entry)}</span>
         {entry.installed && <InstalledBadge small />}
       </div>
       <div className="text-[11px] text-muted-foreground truncate">
@@ -2408,7 +2414,7 @@ function RegistryDetail({
         <div className="max-w-3xl space-y-4">
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-semibold">{entry.name}</h2>
+              <h2 className="text-2xl font-semibold">{displayTitle(entry)}</h2>
               {entry.installed && <InstalledBadge />}
             </div>
             <div className="text-sm text-muted-foreground space-y-0.5">
@@ -2605,7 +2611,7 @@ function ReviewPromptDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Review {entry.name} before installing</DialogTitle>
+          <DialogTitle>Review {displayTitle(entry)} before installing</DialogTitle>
           <DialogDescription>
             Paste this into your coding agent to audit the plugin's source for
             malicious code and prompt injection before you install.

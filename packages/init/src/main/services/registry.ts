@@ -18,6 +18,7 @@ const LOCAL_REGISTRY_PATH = path.join(CORE_REPO_ROOT, "registry.jsonl")
 
 export type RegistryEntry = {
   name: string
+  title?: string
   description: string
   repo: string
 }

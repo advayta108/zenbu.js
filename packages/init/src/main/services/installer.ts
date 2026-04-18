@@ -12,6 +12,7 @@ type InstalledPlugin = {
 
 type RegistryEntry = {
   name: string
+  title?: string
   description: string
   repo: string
 }
