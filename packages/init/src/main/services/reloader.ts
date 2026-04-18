@@ -322,8 +322,25 @@ export class ReloaderService extends Service {
   evaluate() {
     this.effect("vite-cleanup", () => {
       return async () => {
-        for (const entry of this.servers.values()) await entry.viteServer.close()
+        // Close each server independently — a single throw must NOT
+        // skip the rest, otherwise orphan chokidar+fsevents watchers
+        // survive shutdown and trip `napi_call_function` in
+        // `fse_dispatch_event` once the V8 isolate tears down. Use
+        // `allSettled` so every server gets a close attempt and we can
+        // log every failure individually.
+        const entries = [...this.servers.values()]
         this.servers.clear()
+        const results = await Promise.allSettled(
+          entries.map((entry) => entry.viteServer.close()),
+        )
+        results.forEach((res, i) => {
+          if (res.status === "rejected") {
+            console.error(
+              `[reloader] viteServer.close failed for ${entries[i].id}:`,
+              res.reason,
+            )
+          }
+        })
       }
     })
 

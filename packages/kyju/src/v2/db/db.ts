@@ -7,6 +7,7 @@ import {
   type DbConfig,
   type Session,
   broadcastDbUpdate,
+  cleanupStaleTmpFiles,
   createBlob,
   createCollection,
   paths,
@@ -196,6 +197,18 @@ const createDbEffect = <TShape extends SchemaShape>(
     } else if (userConfig.schema) {
       yield* initializeDbIfNeeded(fs, config, userConfig.schema);
     }
+
+    // `writeJsonFile` writes to `*.tmp-<nanoid>` then renames over the
+    // destination. If the process is hard-killed between the tmp write
+    // and the rename, the tmp file is left behind. Sweep them on init —
+    // they're guaranteed orphaned at this point because no writer is
+    // active yet.
+    yield* cleanupStaleTmpFiles(fs, config.dbPath).pipe(
+      Effect.catchAll((err) => {
+        console.error("[kyju:db] tmp sweep failed (non-fatal):", err);
+        return Effect.void;
+      }),
+    );
 
     const sessionsRef = yield* Ref.make(new Map<string, Session>());
     const rootMutex = yield* Effect.makeSemaphore(1);

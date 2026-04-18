@@ -383,6 +383,7 @@ function ReloadMenu() {
       : "Pull updates";
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -431,12 +432,20 @@ function ReloadMenu() {
           )}
         </DropdownMenuItem>
       </DropdownMenuContent>
-      <PluginUpdateModal
-        pending={pendingUpdate}
-        onResolved={() => setPendingUpdate(null)}
-        descriptionPending="A new version of Zenbu is ready. This will install the update and restart the app."
-      />
     </DropdownMenu>
+    {/*
+      The update modal is rendered as a SIBLING of `<DropdownMenu>`, not a
+      child. Radix's `DropdownMenu` manages its own portal + focus trap;
+      nesting a `Dialog` (which has its own portal + focus trap) inside
+      causes z-index stacking and focus-management fights when the menu
+      tries to close while the dialog is open.
+    */}
+    <PluginUpdateModal
+      pending={pendingUpdate}
+      onResolved={() => setPendingUpdate(null)}
+      descriptionPending="A new version of Zenbu is ready. This will install the update and restart the app."
+    />
+    </>
   );
 }
 

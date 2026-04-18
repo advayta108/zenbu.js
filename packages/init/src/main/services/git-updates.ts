@@ -748,6 +748,17 @@ export class GitUpdatesService extends Service {
    * plugin's git worktree to `headBefore` so the running process sees its
    * pre-pull files again, then releases the dynohot pause so the revert is
    * propagated as a hot-reload in the next cycle.
+   *
+   * IMPORTANT: only release the pause on SUCCESSFUL rollback. If the
+   * `git reset --hard` fails (locked index, network, dirty file from a
+   * side-process), the worktree is still at the pulled commit — the
+   * running process now has the new code on disk but `node_modules`
+   * doesn't have the new deps. Unpausing here would let dynohot's
+   * dispatch fire and the service would try to evaluate the new module,
+   * hitting `ERR_MODULE_NOT_FOUND` exactly like the bug we're guarding
+   * against. Instead, leave the pause held so the running process keeps
+   * its in-memory pre-pull state and surface the error to the caller —
+   * the user can retry rollback or relaunch to recover.
    */
   async rollbackPluginUpdate(opts: {
     plugin: string
@@ -756,15 +767,15 @@ export class GitUpdatesService extends Service {
     if (!pending) return { ok: true }
     try {
       await this._maybeRollback(pending.repoDir, pending.headBefore)
-      if (opts.plugin === "kernel") this._invalidateCache()
-      return { ok: true }
     } catch (err) {
       return { ok: false, error: formatError(err) }
-    } finally {
-      // Release pause AFTER the git reset so dynohot's dispatch sees the
-      // reverted mtime and re-evaluates to the pre-pull code.
-      this._releasePending(opts.plugin)
     }
+    // Only reached on successful reset. Now safe to release the pause:
+    // dynohot's dispatch will see the reverted mtime and re-evaluate to
+    // the pre-pull code, which still matches the in-memory state.
+    if (opts.plugin === "kernel") this._invalidateCache()
+    this._releasePending(opts.plugin)
+    return { ok: true }
   }
 
   private _runSetupScript(args: {

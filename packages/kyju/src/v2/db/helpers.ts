@@ -317,14 +317,67 @@ export const readJsonFile = ({ fs, path: filePath }: { fs: FileSystem.FileSystem
  *
  * `rename(2)` on POSIX is atomic within the same filesystem, so readers
  * always see either the old contents or the fully-written new contents,
- * never a partial.
+ * never a partial. Tmp filenames carry a nanoid suffix so concurrent
+ * writes can't clobber each other.
  */
+export const TMP_SUFFIX_PREFIX = ".tmp-";
+
 export const writeJsonFile = ({ fs, path: filePath, data }: { fs: FileSystem.FileSystem; path: string; data: unknown }) =>
   Effect.gen(function* () {
     const json = JSON.stringify(data);
-    const tmpPath = `${filePath}.tmp-${nanoid(8)}`;
+    const tmpPath = `${filePath}${TMP_SUFFIX_PREFIX}${nanoid(8)}`;
     yield* fs.writeFileString(tmpPath, json);
     yield* fs.rename(tmpPath, filePath);
+  });
+
+/**
+ * Sweep orphaned `*.tmp-<nanoid>` files under `dbPath`. These can be
+ * left behind if the process was hard-killed between `writeFileString`
+ * and `rename` in `writeJsonFile`. Safe to call once on init — by then
+ * no writer is active yet so any tmp file is provably stale. Best-effort:
+ * a single file we fail to delete doesn't abort the rest.
+ */
+export const cleanupStaleTmpFiles = (
+  fs: FileSystem.FileSystem,
+  dbPath: string,
+) =>
+  Effect.gen(function* () {
+    if (!(yield* fs.exists(dbPath))) return;
+    yield* sweepDir(fs, dbPath);
+  });
+
+const sweepDir = (
+  fs: FileSystem.FileSystem,
+  dir: string,
+): Effect.Effect<void, never, never> =>
+  Effect.gen(function* () {
+    const entries = (yield* fs.readDirectory(dir).pipe(
+      Effect.catchAll(() => Effect.succeed([] as string[])),
+    )) as string[];
+    for (const name of entries) {
+      const full = nodePath.join(dir, name);
+      const stat = yield* fs.stat(full).pipe(
+        Effect.catchAll(() => Effect.succeed(null)),
+      );
+      if (!stat) continue;
+      if (stat.type === "Directory") {
+        yield* sweepDir(fs, full);
+        continue;
+      }
+      // We only delete files whose basename includes our well-known
+      // sentinel — never touch user data.
+      if (name.includes(TMP_SUFFIX_PREFIX)) {
+        yield* fs.remove(full).pipe(
+          Effect.catchAll((err) => {
+            console.error(
+              `[kyju:db] failed to remove stale tmp ${full}:`,
+              err,
+            );
+            return Effect.void;
+          }),
+        );
+      }
+    }
   });
 
 export const readJsonlFile = ({ fs, path: filePath }: { fs: FileSystem.FileSystem; path: string }) =>

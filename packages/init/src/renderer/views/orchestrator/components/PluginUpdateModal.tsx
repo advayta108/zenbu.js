@@ -77,11 +77,19 @@ export function PluginUpdateModal({
     return () => unsub();
   }, [events, pluginName]);
 
-  // Reset transient state whenever a new pending update arrives.
+  // Reset *in-flight* state whenever a new pending update arrives.
+  // NOTE: deliberately do NOT reset `installError` here. When a commit
+  // fails we call `setInstallError(r)` followed by `onResolved()`, which
+  // flips parent-side `pending` to null. If we cleared `installError` on
+  // that pending change too, both updates would land in the same React
+  // batch and the toast would never paint — the user would see the modal
+  // disappear with no error. The error stays visible until either:
+  //   • the user clicks the toast's dismiss button, or
+  //   • the next install attempt clears it via `setInstallError(null)`
+  //     in `installAndRelaunch`.
   useEffect(() => {
     setInstalling(false);
     setInstallProgress([]);
-    setInstallError(null);
   }, [pending?.plugin, pending?.version]);
 
   const installAndRelaunch = useCallback(async () => {
@@ -140,7 +148,7 @@ export function PluginUpdateModal({
               {installing
                 ? "Running setup. Zenbu will relaunch automatically when installation completes."
                 : descriptionPending ??
-                  `${pending?.plugin ?? "This plugin"} has a new setup version that needs to install dependencies before use. Zenbu will relaunch once installation completes. Nothing has been installed yet — click Later to discard the update.`}
+                  `${pending?.plugin ?? "This plugin"} has a new setup version that needs to install dependencies before use. Zenbu will relaunch once installation completes.`}
             </DialogDescription>
           </DialogHeader>
 
@@ -174,16 +182,28 @@ export function PluginUpdateModal({
       </Dialog>
 
       {installError && !installError.ok && (
-        <div className="fixed bottom-4 right-4 z-50 max-w-sm rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive shadow-md">
-          <p className="font-medium">
-            Install failed ({installError.stage})
-          </p>
-          <p className="whitespace-pre-wrap break-words">
-            {installError.error}
-          </p>
-          <p className="mt-1 text-muted-foreground">
-            Update was rolled back. Pull again to retry.
-          </p>
+        <div className="fixed bottom-4 right-4 z-50 max-w-sm rounded-md border border-destructive/40 bg-destructive/95 px-3 py-2 text-xs text-destructive-foreground shadow-md">
+          <div className="flex items-start gap-2">
+            <div className="flex-1">
+              <p className="font-medium">
+                Install failed ({installError.stage})
+              </p>
+              <p className="whitespace-pre-wrap break-words">
+                {installError.error}
+              </p>
+              <p className="mt-1 opacity-80">
+                Update was rolled back. Pull again to retry.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setInstallError(null)}
+              className="-mr-1 -mt-1 rounded px-1 leading-none opacity-70 hover:opacity-100"
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
     </>
