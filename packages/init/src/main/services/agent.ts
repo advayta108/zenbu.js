@@ -13,7 +13,13 @@ import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { HttpService } from "./http";
 
-const DEFAULT_SKILL_ROOT = path.join(os.homedir(), ".zenbu", "skills");
+const DEFAULT_SKILL_ROOT = path.join(
+  os.homedir(),
+  ".zenbu",
+  "plugins",
+  "zenbu",
+  "skills",
+);
 
 type ImageRef = { blobId: string; mimeType: string };
 
