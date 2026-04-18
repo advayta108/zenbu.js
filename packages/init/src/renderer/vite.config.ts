@@ -29,7 +29,6 @@ export default defineConfig({
         quiz: resolve(__dirname, "views/quiz/index.html"),
         flashcard: resolve(__dirname, "views/flashcard/index.html"),
         heatmap: resolve(__dirname, "views/heatmap/index.html"),
-        shell: resolve(__dirname, "views/shell/index.html"),
         "composer-debug": resolve(__dirname, "views/composer-debug/index.html"),
       },
     },
