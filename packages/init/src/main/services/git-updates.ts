@@ -42,7 +42,6 @@ import {
 } from "../../../shared/plugin-setup-state"
 
 const CORE_REPO_ROOT = path.join(os.homedir(), ".zenbu", "plugins", "zenbu")
-const CONFIG_JSON = path.join(os.homedir(), ".zenbu", "config.json")
 const BUN_BIN = path.join(
   os.homedir(),
   "Library",
@@ -51,6 +50,53 @@ const BUN_BIN = path.join(
   "bin",
   "bun",
 )
+
+/**
+ * Prefer `~/.zenbu/config.jsonc` if present (supports comments + trailing
+ * commas), fall back to `config.json`. Mirrors `installer.ts`'s lookup.
+ */
+function resolveConfigPath(): string {
+  const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc")
+  if (fs.existsSync(jsonc)) return jsonc
+  return path.join(os.homedir(), ".zenbu", "config.json")
+}
+
+/**
+ * Strip comments + trailing commas from a JSONC source, then JSON.parse.
+ * Same implementation as `installer.ts`'s local copy.
+ */
+function parseJsonc(str: string): unknown {
+  let result = ""
+  let i = 0
+  while (i < str.length) {
+    if (str[i] === '"') {
+      let j = i + 1
+      while (j < str.length) {
+        if (str[j] === "\\") {
+          j += 2
+        } else if (str[j] === '"') {
+          j++
+          break
+        } else {
+          j++
+        }
+      }
+      result += str.slice(i, j)
+      i = j
+    } else if (str[i] === "/" && str[i + 1] === "/") {
+      i += 2
+      while (i < str.length && str[i] !== "\n") i++
+    } else if (str[i] === "/" && str[i + 1] === "*") {
+      i += 2
+      while (i < str.length && !(str[i] === "*" && str[i + 1] === "/")) i++
+      i += 2
+    } else {
+      result += str[i]
+      i++
+    }
+  }
+  return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"))
+}
 
 export type UpdateStatus =
   | { kind: "not-a-repo" }
@@ -130,9 +176,9 @@ export type PullAndInstallResult =
     }
 
 /**
- * Resolve a plugin name to its manifest path by scanning the user's
- * `~/.zenbu/config.json`. The kernel is special-cased to its canonical path
- * since the kernel manifest is always at the same place.
+ * Resolve a plugin name to its manifest path by scanning the user's zenbu
+ * config (JSONC-aware). The kernel is special-cased to its canonical path
+ * since the kernel manifest lives at a fixed location regardless of config.
  */
 function resolvePluginManifest(pluginName: string): string | null {
   if (pluginName === "kernel") {
@@ -144,9 +190,13 @@ function resolvePluginManifest(pluginName: string): string | null {
     )
   }
   try {
-    const cfg = JSON.parse(fs.readFileSync(CONFIG_JSON, "utf8"))
+    const configPath = resolveConfigPath()
+    if (!fs.existsSync(configPath)) return null
+    const raw = fs.readFileSync(configPath, "utf8")
+    const cfg = parseJsonc(raw) as { plugins?: unknown }
     if (!Array.isArray(cfg.plugins)) return null
     for (const manifestPath of cfg.plugins) {
+      if (typeof manifestPath !== "string") continue
       const name = readManifestName(manifestPath)
       if (name === pluginName) return manifestPath
     }
