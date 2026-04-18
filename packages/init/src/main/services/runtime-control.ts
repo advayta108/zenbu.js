@@ -26,9 +26,16 @@ export class RuntimeControlService extends Service {
    */
   async quitAndRelaunch(): Promise<{ ok: true }> {
     // Fire and forget — once we kick off relaunch the transport dies.
+    // Use `app.quit()` (not `app.exit`) so Electron runs its standard
+    // shutdown hooks and native watchers (fsevents, etc.) tear down
+    // before the V8 isolate dies — otherwise dispatch callbacks race
+    // the teardown and trip napi assertions in fsevents → SIGABRT.
+    //
+    // See git-updates.ts for why `{ args: [app.getAppPath()] }` is
+    // needed in dev mode.
     queueMicrotask(() => {
-      app.relaunch()
-      app.exit(0)
+      app.relaunch({ args: [app.getAppPath()] })
+      app.quit()
     })
     return { ok: true }
   }

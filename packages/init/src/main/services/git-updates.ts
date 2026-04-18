@@ -32,6 +32,7 @@ import {
 import fs from "node:fs"
 import { spawn } from "node:child_process"
 import { app } from "electron"
+import { pauseWatcherPath } from "dynohot/pause"
 import { Service, runtime } from "../runtime"
 import { RpcService } from "./rpc"
 import {
@@ -497,6 +498,18 @@ export class GitUpdatesService extends Service {
    * changing the lockfile itself. Default to "yes, restart" and let
    * no-bump-no-setup be the opt-out path.
    */
+
+  private pendingPauses = new Map<
+    string,
+    {
+      release: () => void
+      headBefore: string | null
+      repoDir: string
+      scriptAbs: string
+      version: number
+    }
+  >()
+
   async pullAndInstall(
     opts: PullAndInstallOpts = {},
   ): Promise<PullAndInstallResult> {
@@ -513,6 +526,16 @@ export class GitUpdatesService extends Service {
     }
     const repoDir = resolvePluginRepoDir(manifestPath, pluginName)
 
+    // If there's already a pending update for this plugin, abandon it
+    // before starting a new one. Prevents leaking pause refs if the user
+    // triggers Pull twice in a row without resolving the modal.
+    this._releasePending(pluginName)
+
+    // Pause dynohot's file watcher for this repo so the git pull + any
+    // follow-up setup.ts mutations don't race with hot-reload. The pause
+    // is held until commit/rollback; app.relaunch makes it moot.
+    const pauseRelease = pauseWatcherPath(repoDir)
+
     // --- Pull ---
 
     let updated = false
@@ -522,6 +545,7 @@ export class GitUpdatesService extends Service {
       if (isGitRepo) {
         const branch = await getBranch(repoDir)
         if (!branch) {
+          pauseRelease()
           return {
             ok: false,
             error: "Not on a branch",
@@ -535,6 +559,7 @@ export class GitUpdatesService extends Service {
         updated = headBefore !== headAfter
       }
     } catch (err) {
+      pauseRelease()
       return {
         ok: false,
         error: `pull failed: ${formatError(err)}`,
@@ -547,20 +572,12 @@ export class GitUpdatesService extends Service {
     // --- Gate: declared setup.version vs stored ---
 
     const setup = readManifestSetup(manifestPath)
-    if (!setup) {
-      // No setup declared; plugin doesn't need any host configuration.
-      return {
-        ok: true,
-        updated,
-        setupRan: false,
-        pending: false,
-        headBefore,
-        version: null,
-        plugin: pluginName,
-      }
-    }
     const stored = getStoredSetupVersion(pluginName)
-    if (setup.version <= stored) {
+
+    if (!setup || setup.version <= stored) {
+      // No setup needed — release the pause so dynohot can re-evaluate
+      // with the new file content.
+      pauseRelease()
       return {
         ok: true,
         updated,
@@ -572,19 +589,9 @@ export class GitUpdatesService extends Service {
       }
     }
 
-    // --- Run setup.ts ---
-
-    if (!fs.existsSync(BUN_BIN)) {
-      await this._maybeRollback(repoDir, headBefore)
-      return {
-        ok: false,
-        error: `bun binary missing at ${BUN_BIN} — relaunch the app or reinstall`,
-        stage: "setup",
-        plugin: pluginName,
-      }
-    }
     if (!fs.existsSync(setup.scriptAbs)) {
       await this._maybeRollback(repoDir, headBefore)
+      pauseRelease()
       return {
         ok: false,
         error: `setup script missing at ${setup.scriptAbs}`,
@@ -593,34 +600,34 @@ export class GitUpdatesService extends Service {
       }
     }
 
-    try {
-      await this._runSetupScript({
-        pluginName,
-        scriptAbs: setup.scriptAbs,
-        cwd: repoDir,
-      })
-    } catch (err) {
-      await this._maybeRollback(repoDir, headBefore)
-      return {
-        ok: false,
-        error: formatError(err),
-        stage: "setup",
-        plugin: pluginName,
-      }
-    }
+    // Stage the pending update. setup.ts hasn't run yet — nothing has been
+    // installed. The UI will prompt the user before we proceed.
+    this.pendingPauses.set(pluginName, {
+      release: pauseRelease,
+      headBefore,
+      repoDir,
+      scriptAbs: setup.scriptAbs,
+      version: setup.version,
+    })
 
-    // Staged. Deliberately DO NOT write setup-state yet — the UI must call
-    // either `commitPluginUpdate` (writes state + relaunch) or
-    // `rollbackPluginUpdate` (git reset --hard headBefore).
     return {
       ok: true,
       updated,
-      setupRan: true,
+      setupRan: false,
       pending: true,
       headBefore,
       version: setup.version,
       plugin: pluginName,
     }
+  }
+
+  private _releasePending(pluginName: string): void {
+    const pending = this.pendingPauses.get(pluginName)
+    if (!pending) return
+    try {
+      pending.release()
+    } catch {}
+    this.pendingPauses.delete(pluginName)
   }
 
   /**
@@ -642,27 +649,93 @@ export class GitUpdatesService extends Service {
   }
 
   /**
-   * Called by the UI after the user clicks "Relaunch now" in the relaunch
-   * modal. Writes the setup-version state and restarts the app so the new
-   * code + deps are picked up cleanly.
+   * Called by the UI after the user clicks "Install & Relaunch" in the
+   * update modal. Runs the plugin's setup.ts (streaming progress via
+   * `rpc.emit.setup.progress`), records the new setup-version on success,
+   * then relaunches so the new code + deps are loaded cleanly.
+   *
+   * If setup fails, rolls back the git pull and releases the watcher
+   * pause, so the running process is left in its pre-pull state.
    */
   async commitPluginUpdate(opts: {
     plugin: string
     version: number
-  }): Promise<{ ok: true }> {
+  }): Promise<
+    | { ok: true }
+    | { ok: false; error: string; stage: "setup" | "state" | "pending" }
+  > {
+    const pending = this.pendingPauses.get(opts.plugin)
+    if (!pending) {
+      return {
+        ok: false,
+        error: "No pending update for plugin — pull again first.",
+        stage: "pending",
+        plugin: opts.plugin,
+      } as never
+    }
+    if (pending.version !== opts.version) {
+      // A stale UI might call with an out-of-date version; fail loudly.
+      return {
+        ok: false,
+        error: `Version mismatch: UI asked for ${opts.version}, staged ${pending.version}`,
+        stage: "pending",
+        plugin: opts.plugin,
+      } as never
+    }
+
+    if (!fs.existsSync(BUN_BIN)) {
+      await this._maybeRollback(pending.repoDir, pending.headBefore)
+      this._releasePending(opts.plugin)
+      return {
+        ok: false,
+        error: `bun binary missing at ${BUN_BIN} — relaunch the app or reinstall`,
+        stage: "setup",
+      }
+    }
+
+    try {
+      await this._runSetupScript({
+        pluginName: opts.plugin,
+        scriptAbs: pending.scriptAbs,
+        cwd: pending.repoDir,
+      })
+    } catch (err) {
+      await this._maybeRollback(pending.repoDir, pending.headBefore)
+      this._releasePending(opts.plugin)
+      return { ok: false, error: formatError(err), stage: "setup" }
+    }
+
     try {
       recordSetupVersion(opts.plugin, opts.version)
     } catch (err) {
+      // State-write failure is bad but we've already installed deps on
+      // disk. Keep going with the relaunch — worst case, the gate re-fires
+      // next time (which is idempotent via pnpm).
       console.error("[gitUpdates] recordSetupVersion failed:", err)
-      // Proceed with relaunch anyway — worst case, the gate re-fires on the
-      // next update.
     }
+
+    // Keep the pause held — if we released it, dynohot's watcher would
+    // fire callbacks for the mid-pull mtime bumps concurrent with
+    // shutdown. Process teardown will free it anyway.
+    this.pendingPauses.delete(opts.plugin)
+
     queueMicrotask(() => {
-      // Fire and forget — awaiting would hang because we're tearing down the
-      // transport carrying the RPC response.
       try {
-        app.relaunch()
-        app.exit(0)
+        // `app.relaunch()` schedules a fresh spawn after the current
+        // process exits. `app.quit()` (NOT `app.exit`) drives the
+        // standard Electron shutdown so 'before-quit'/'will-quit'/
+        // 'window-all-closed' hooks run, renderers close, and native
+        // watchers (fsevents, etc.) are torn down before the V8 isolate
+        // dies.
+        //
+        // Pass `app.getAppPath()` as the first arg so Electron is told
+        // exactly which app directory to boot. In dev mode the default
+        // (`process.argv.slice(1)`) can be a relative script path
+        // (`dist/main/index.js` from `electron dist/main/index.js`),
+        // and the relaunched process may resolve it against a different
+        // cwd, producing "Unable to find Electron app at …" dialogs.
+        app.relaunch({ args: [app.getAppPath()] })
+        app.quit()
       } catch (err) {
         console.error("[gitUpdates] relaunch failed:", err)
       }
@@ -671,25 +744,26 @@ export class GitUpdatesService extends Service {
   }
 
   /**
-   * Called by the UI when the user dismisses the relaunch modal. Reverts
-   * the plugin's git worktree to `headBefore` so the running process sees
-   * its pre-pull files again. node_modules may retain extra deps that were
-   * just installed — harmless, since the now-reverted code doesn't import
-   * them.
+   * Called by the UI when the user dismisses the update modal. Reverts the
+   * plugin's git worktree to `headBefore` so the running process sees its
+   * pre-pull files again, then releases the dynohot pause so the revert is
+   * propagated as a hot-reload in the next cycle.
    */
   async rollbackPluginUpdate(opts: {
     plugin: string
-    headBefore: string | null
   }): Promise<{ ok: true } | { ok: false; error: string }> {
-    const manifestPath = resolvePluginManifest(opts.plugin)
-    if (!manifestPath) return { ok: true }
-    const repoDir = resolvePluginRepoDir(manifestPath, opts.plugin)
+    const pending = this.pendingPauses.get(opts.plugin)
+    if (!pending) return { ok: true }
     try {
-      await this._maybeRollback(repoDir, opts.headBefore)
+      await this._maybeRollback(pending.repoDir, pending.headBefore)
       if (opts.plugin === "kernel") this._invalidateCache()
       return { ok: true }
     } catch (err) {
       return { ok: false, error: formatError(err) }
+    } finally {
+      // Release pause AFTER the git reset so dynohot's dispatch sees the
+      // reverted mtime and re-evaluates to the pre-pull code.
+      this._releasePending(opts.plugin)
     }
   }
 

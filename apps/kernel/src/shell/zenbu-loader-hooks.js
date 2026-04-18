@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { registerWatcherClosable } from "dynohot/pause"
 
 function parseJsonc(str) {
   let result = ""
@@ -84,6 +85,9 @@ function ensureDirWatcher(dir) {
       }
     })
     watcher.unref()
+    // Track for process-wide shutdown so FSEvents doesn't fire into a
+    // dying V8 isolate on app.quit(). See dynohot/pause.
+    registerWatcherClosable(watcher)
     dirWatchers.set(dir, watcher)
   } catch (err) {
     console.error(`[zenbu-loader] fs.watch failed for ${dir}:`, err)

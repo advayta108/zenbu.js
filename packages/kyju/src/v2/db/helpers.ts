@@ -306,8 +306,26 @@ export const readJsonFile = ({ fs, path: filePath }: { fs: FileSystem.FileSystem
     return JSON.parse(content) as KyjuJSON;
   });
 
+/**
+ * Atomic JSON write: write to a sibling tempfile then `rename` over the
+ * destination. Prevents a process-kill mid-write (Electron shutdown,
+ * SIGABRT, ctrl-C) from leaving the file truncated to zero bytes — a
+ * non-atomic `writeFileString` opens with O_TRUNC|O_CREAT and the file
+ * is empty until the write completes, so any death in that window
+ * corrupts callers that JSON.parse it next boot ("Unexpected end of
+ * JSON input").
+ *
+ * `rename(2)` on POSIX is atomic within the same filesystem, so readers
+ * always see either the old contents or the fully-written new contents,
+ * never a partial.
+ */
 export const writeJsonFile = ({ fs, path: filePath, data }: { fs: FileSystem.FileSystem; path: string; data: unknown }) =>
-  fs.writeFileString(filePath, JSON.stringify(data));
+  Effect.gen(function* () {
+    const json = JSON.stringify(data);
+    const tmpPath = `${filePath}.tmp-${nanoid(8)}`;
+    yield* fs.writeFileString(tmpPath, json);
+    yield* fs.rename(tmpPath, filePath);
+  });
 
 export const readJsonlFile = ({ fs, path: filePath }: { fs: FileSystem.FileSystem; path: string }) =>
   Effect.gen(function* () {

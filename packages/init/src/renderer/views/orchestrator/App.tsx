@@ -49,6 +49,10 @@ import {
 import { LeafPane } from "./components/LeafPane";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ReviewMode, type ReviewFileEntry } from "./components/ReviewMode";
+import {
+  PluginUpdateModal,
+  type PendingUpdate,
+} from "./components/PluginUpdateModal";
 import { ShortcutForwarderProvider } from "./providers/shortcut-forwarder";
 import { useFocusOnRequest } from "../../lib/focus-request";
 import {
@@ -300,9 +304,15 @@ function ReloadMenu() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [pullPending, setPullPending] = useState<"check" | "pull" | null>(null);
   const [reloadPending, setReloadPending] = useState(false);
-  const [transient, setTransient] = useState<
-    "updated" | "up-to-date" | "needs-relaunch" | null
-  >(null);
+  const [transient, setTransient] = useState<"updated" | "up-to-date" | null>(
+    null,
+  );
+  // When set, the shared `PluginUpdateModal` opens with this update — same
+  // dialog the Settings → Updates / Plugins tabs use, so kernel and
+  // per-plugin pulls share the install/cancel/progress UX exactly.
+  const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | null>(
+    null,
+  );
 
   const handleFullReload = async () => {
     if (reloadPending) return;
@@ -313,28 +323,6 @@ function ReloadMenu() {
       console.error("[orchestrator] full reload failed:", e);
     } finally {
       setReloadPending(false);
-    }
-  };
-
-  const pendingStagedRef = useRef<{
-    plugin: string;
-    version: number | null;
-    headBefore: string | null;
-  } | null>(null);
-
-  const handleRelaunch = async () => {
-    const staged = pendingStagedRef.current;
-    try {
-      if (staged && staged.version != null) {
-        await (rpc as any).gitUpdates.commitPluginUpdate({
-          plugin: staged.plugin,
-          version: staged.version,
-        });
-      } else {
-        await (rpc as any).runtime.quitAndRelaunch();
-      }
-    } catch {
-      // process exits from under us
     }
   };
 
@@ -368,19 +356,10 @@ function ReloadMenu() {
       const next: UpdateStatus = await rpc.gitUpdates.checkUpdates(true);
       setStatus(next);
       if (result?.ok) {
-        if (result.pending) {
-          // setup.ts ran but state isn't committed yet. Remember staged info
-          // so handleRelaunch knows which plugin to commit. Show sticky
-          // needs-relaunch indicator.
-          pendingStagedRef.current = {
-            plugin: result.plugin,
-            version: result.version,
-            headBefore: result.headBefore,
-          };
-          setTransient("needs-relaunch");
+        if (result.pending && result.version != null) {
+          setPendingUpdate({ plugin: result.plugin, version: result.version });
         } else {
-          pendingStagedRef.current = null;
-          flashTransient(result.updated || result.setupRan ? "updated" : "up-to-date");
+          flashTransient(result.updated ? "updated" : "up-to-date");
         }
       } else if (result?.error) {
         console.error("[orchestrator] pullAndInstall failed:", result.error);
@@ -401,8 +380,6 @@ function ReloadMenu() {
       ? "Updated!"
       : transient === "up-to-date"
       ? "Up to date"
-      : transient === "needs-relaunch"
-      ? "Relaunch required"
       : "Pull updates";
 
   return (
@@ -453,19 +430,12 @@ function ReloadMenu() {
             <span className="size-1.5 rounded-full bg-blue-500" />
           )}
         </DropdownMenuItem>
-        {transient === "needs-relaunch" && (
-          <DropdownMenuItem
-            className="text-xs text-blue-600 dark:text-blue-400"
-            onSelect={(e) => {
-              e.preventDefault();
-              handleRelaunch();
-            }}
-          >
-            <RotateCwIcon className="size-3" />
-            <span className="flex-1">Relaunch to apply</span>
-          </DropdownMenuItem>
-        )}
       </DropdownMenuContent>
+      <PluginUpdateModal
+        pending={pendingUpdate}
+        onResolved={() => setPendingUpdate(null)}
+        descriptionPending="A new version of Zenbu is ready. This will install the update and restart the app."
+      />
     </DropdownMenu>
   );
 }

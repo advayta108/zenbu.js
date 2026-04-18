@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { register as registerLoader } from "node:module";
-import { app, BaseWindow, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BaseWindow, BrowserWindow, ipcMain } from "electron";
+import { closeAllWatchers } from "dynohot/pause";
 import { readConfig, addPlugin, CONFIG_PATH } from "./config";
 import { initUpdater } from "./updater";
 import { bootstrapEnv } from "./env-bootstrap";
@@ -11,6 +12,73 @@ import { detectPreflight, triggerXcodeCliInstall } from "./preflight";
 
 const PLUGINS_DIR = path.join(os.homedir(), ".zenbu", "plugins");
 const KERNEL_MANIFEST = "packages/init/zenbu.plugin.json";
+
+// ----- File logging -----
+//
+// In dev mode a relaunched Electron process is detached from the terminal
+// that started `pnpm dev`, so stdout/stderr is invisible. Mirror every
+// `console.log` / `console.error` / `console.warn` call to a rolling
+// log file so we can `tail -F` it while testing the relaunch flow.
+//
+// Also captures `uncaughtException` / `unhandledRejection` so a crashed
+// renderer / main-process exception is recoverable from the log.
+(() => {
+  try {
+    const internalDir = path.join(os.homedir(), ".zenbu", ".internal");
+    fs.mkdirSync(internalDir, { recursive: true });
+    const logPath = path.join(internalDir, "kernel.log");
+    const stream = fs.createWriteStream(logPath, { flags: "a" });
+    const banner =
+      `\n\n===== kernel boot pid=${process.pid} ${new Date().toISOString()} =====\n` +
+      `argv: ${JSON.stringify(process.argv)}\n` +
+      `cwd:  ${process.cwd()}\n\n`;
+    stream.write(banner);
+
+    const tee = (orig: (...a: any[]) => void, level: string) =>
+      (...args: any[]) => {
+        try {
+          const line = args
+            .map((a) =>
+              typeof a === "string"
+                ? a
+                : a instanceof Error
+                ? `${a.stack ?? a.message}`
+                : (() => {
+                    try {
+                      return JSON.stringify(a);
+                    } catch {
+                      return String(a);
+                    }
+                  })(),
+            )
+            .join(" ");
+          stream.write(`[${level}] ${line}\n`);
+        } catch {}
+        orig(...args);
+      };
+    console.log = tee(console.log.bind(console), "log");
+    console.error = tee(console.error.bind(console), "err");
+    console.warn = tee(console.warn.bind(console), "warn");
+
+    process.on("uncaughtException", (err) => {
+      try {
+        stream.write(`[uncaught] ${err.stack ?? err.message}\n`);
+      } catch {}
+    });
+    process.on("unhandledRejection", (reason) => {
+      try {
+        const msg =
+          reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+        stream.write(`[unhandled-rejection] ${msg}\n`);
+      } catch {}
+    });
+
+    console.log(`[shell] logging to ${logPath}`);
+  } catch (err) {
+    // Don't let a logging failure block startup.
+    console.error("[shell] file logging setup failed:", err);
+  }
+})();
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
@@ -222,64 +290,66 @@ app.whenReady().then(async () => {
       console.log("[shell] warning: no runtime found after loading services");
     }
 
-    ipcMain.on("relaunch", async () => {
-      app.relaunch();
-      if (runtime) await runtime.shutdown();
-      (process as any).reallyExit(0);
+    ipcMain.on("relaunch", () => {
+      // Schedule a relaunch after the natural quit finishes, then trigger
+      // `app.quit()` which lands in our `before-quit` handler and runs the
+      // two-phase shutdown → Electron naturally terminates → relaunch
+      // fires. Don't short-circuit the shutdown here.
+      //
+      // `args: [app.getAppPath()]` is required in dev mode to avoid
+      // "Unable to find Electron app at …" dialogs — see git-updates.ts.
+      app.relaunch({ args: [app.getAppPath()] });
+      app.quit();
     });
 
-    let shuttingDown = false;
-    const shutdown = () => {
-      if (shuttingDown) return;
-      shuttingDown = true;
+    let shutdownState: "idle" | "running" | "ready" = "idle";
+
+    app.on("before-quit", (e) => {
+      // Two-phase quit:
+      //   1. First event: state=idle. We `preventDefault()` to stop
+      //      Electron tearing down NOW, kick off the async shutdown, and
+      //      when it completes re-call `app.quit()`.
+      //   2. Re-entry: state=ready. We DON'T preventDefault so Electron
+      //      proceeds with its normal quit cycle. By now every service is
+      //      stopped and every fs watcher is closed, so FSEvents won't
+      //      fire into the dying isolate (→ napi/SIGABRT).
+      // If we skipped step 1 (i.e. let Electron quit while our async
+      // shutdown was mid-flight), the V8 isolate would die while
+      // ReloaderService's Vite dev servers still had chokidar + fsevents
+      // watchers armed, and the next fsevents dispatch would crash the
+      // process.
+      if (shutdownState === "ready") return;
+      e.preventDefault();
+      if (shutdownState === "running") return;
+      shutdownState = "running";
+
       console.log("[shell] shutting down...");
+      for (const win of BaseWindow.getAllWindows()) {
+        (win as any).__zenbu_on_close = null;
+        (win as any).__zenbu_on_closed = null;
+      }
+
+      const finalize = () => {
+        try {
+          closeAllWatchers();
+        } catch (err) {
+          console.error("[shell] closeAllWatchers failed:", err);
+        }
+        shutdownState = "ready";
+        app.quit();
+      };
+
       const r = (globalThis as any).__zenbu_service_runtime__;
       if (r) {
         r.shutdown()
-          .then(() => {
-            (process as any).reallyExit(0);
-          })
+          .then(finalize)
           .catch((err: any) => {
-            console.error("[shell] shutdown failed:", err);
-            (process as any).reallyExit(1);
+            console.error("[shell] runtime.shutdown failed:", err);
+            finalize();
           });
       } else {
-        (process as any).reallyExit(0);
+        finalize();
       }
-    };
-
-    app.on("before-quit", (e) => {
-      if (shuttingDown) return;
-      e.preventDefault();
-
-      const windows = BaseWindow.getAllWindows();
-      if (windows.length === 0) {
-        shutdown();
-        return;
-      }
-
-      const focusedWin = windows.find((w) => w.isFocused()) ?? windows[0];
-      // why is this defined here lmao fixme this is important
-      // to fix, all of this nosense and globals should not be here
-      // its awful slop
-      dialog
-        .showMessageBox(focusedWin, {
-          type: "question",
-          message: "Quit Zenbu?",
-          detail: "This will close all windows and end any active sessions.",
-          buttons: ["Cancel", "Quit"],
-          defaultId: 1,
-          cancelId: 0,
-        })
-        .then((result) => {
-          if (result.response === 1) {
-            for (const win of BaseWindow.getAllWindows()) {
-              (win as any).__zenbu_on_close = null;
-              (win as any).__zenbu_on_closed = null;
-            }
-            shutdown();
-          }
-        });
     });
 
     console.log(`\n  Plugins: ${config.plugins.length} loaded`);

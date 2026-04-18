@@ -41,8 +41,9 @@ import {
 } from "../../../components/ui/select";
 import { cn } from "../../../lib/utils";
 import { useDb } from "../../../lib/kyju-react";
-import { useKyjuClient, useRpc, useEvents } from "../../../lib/providers";
+import { useKyjuClient, useRpc } from "../../../lib/providers";
 import { KeybindingsSection } from "./KeybindingsSection";
+import { PluginUpdateModal, type PendingUpdate } from "./PluginUpdateModal";
 
 function useIconUrl(client: any, blobId: string | undefined) {
   const [url, setUrl] = useState<string | null>(null);
@@ -913,9 +914,10 @@ type PullAndInstallResult =
       ok: true;
       updated: boolean;
       setupRan: boolean;
-      /** true while the runtime holds a staged update (setup ran, state not
-       *  yet recorded). The UI must call `commitPluginUpdate` (relaunch) or
-       *  `rollbackPluginUpdate` (git reset) to resolve. */
+      /** true when the pull discovered a setup.version bump but setup.ts
+       *  HAS NOT yet run. The UI must prompt the user and then call either
+       *  `commitPluginUpdate` (installs deps + relaunch) or
+       *  `rollbackPluginUpdate` (git reset — nothing was installed). */
       pending: boolean;
       headBefore: string | null;
       version: number | null;
@@ -929,11 +931,11 @@ type PullAndInstallResult =
     };
 
 /**
- * Trigger `rpc.gitUpdates.pullAndInstall({ plugin })` for a given plugin name,
- * streaming setup.ts stdout lines into a rolling log, and surfacing a
- * Relaunch button when the setup run changed pnpm-lock.yaml (meaning
- * node_modules was bumped and the running process can't pick up the new
- * versions cleanly).
+ * Trigger `rpc.gitUpdates.pullAndInstall({ plugin })` for a given plugin
+ * and, if the new manifest bumps `setup.version`, hand off to the shared
+ * `PluginUpdateModal` for the install/cancel/progress UX. The modal is
+ * the single source of truth for that flow — kernel and per-plugin
+ * pulls render the same dialog and call the same backend RPCs.
  */
 function PullAndInstallButton({
   pluginName,
@@ -949,32 +951,12 @@ function PullAndInstallButton({
   onComplete?: (result: PullAndInstallResult) => void;
 }) {
   const rpc = useRpc();
-  const events = useEvents();
   const [pending, setPending] = useState(false);
-  const [progress, setProgress] = useState<string[]>([]);
   const [result, setResult] = useState<PullAndInstallResult | null>(null);
-  const [relaunching, setRelaunching] = useState(false);
-
-  const pendingRef = useRef(pending);
-  pendingRef.current = pending;
-
-  useEffect(() => {
-    const unsub = (events as any).setup.progress.subscribe(
-      (data: { pluginName: string; line: string }) => {
-        if (!pendingRef.current) return;
-        if (data.pluginName !== pluginName) return;
-        setProgress((lines: string[]) => {
-          const next = [...lines, data.line];
-          return next.length > 200 ? next.slice(next.length - 200) : next;
-        });
-      },
-    );
-    return () => unsub();
-  }, [events, pluginName]);
+  const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | null>(null);
 
   const run = useCallback(async () => {
     setPending(true);
-    setProgress([]);
     setResult(null);
     try {
       const r: PullAndInstallResult = await (rpc as any).gitUpdates.pullAndInstall({
@@ -982,43 +964,17 @@ function PullAndInstallButton({
       });
       setResult(r);
       onComplete?.(r);
+      if (r.ok && r.pending && r.version != null) {
+        setPendingUpdate({ plugin: r.plugin, version: r.version });
+      } else {
+        setPendingUpdate(null);
+      }
     } finally {
       setPending(false);
     }
   }, [rpc, pluginName, onComplete]);
 
-  const relaunch = useCallback(async () => {
-    if (!(result?.ok && result.pending && result.version != null)) return;
-    setRelaunching(true);
-    try {
-      // Writes state + triggers app.relaunch(). Transport dies mid-response,
-      // that's expected.
-      await (rpc as any).gitUpdates.commitPluginUpdate({
-        plugin: result.plugin,
-        version: result.version,
-      });
-    } catch {
-      // process exits from under us; swallow
-    }
-  }, [rpc, result]);
-
-  const dismissRelaunch = useCallback(async () => {
-    if (!(result?.ok && result.pending)) return;
-    try {
-      await (rpc as any).gitUpdates.rollbackPluginUpdate({
-        plugin: result.plugin,
-        headBefore: result.headBefore,
-      });
-    } catch (err) {
-      console.error("[PullAndInstallButton] rollback failed:", err);
-    }
-    setResult((r: PullAndInstallResult | null) =>
-      r && r.ok && r.pending ? { ...r, pending: false } : r,
-    );
-  }, [rpc, result]);
-
   const buttonDisabled = pending || !!disabled;
-  const relaunchDialogOpen = !!(result?.ok && result.pending);
 
   return (
     <div className="space-y-2">
@@ -1027,17 +983,11 @@ function PullAndInstallButton({
           <span className="text-xs text-muted-foreground">{disabledReason}</span>
         )}
         <Button size="sm" onClick={run} disabled={buttonDisabled}>
-          {pending ? "Updating…" : label}
+          {pending ? "Checking…" : label}
         </Button>
       </div>
 
-      {(pending || progress.length > 0) && progress.length > 0 && (
-        <pre className="max-h-40 overflow-auto rounded-md border border-border bg-muted/40 p-2 text-[11px] font-mono whitespace-pre-wrap break-words">
-          {progress.join("\n")}
-        </pre>
-      )}
-
-      {result?.ok && !result.pending && !result.setupRan && result.updated && (
+      {result?.ok && !result.pending && result.updated && !result.setupRan && (
         <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs">
           Pulled new commits (no setup changes).
         </div>
@@ -1047,11 +997,6 @@ function PullAndInstallButton({
           Up to date.
         </div>
       )}
-      {result?.ok && !result.pending && result.setupRan && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
-          Update was rolled back. Click Pull updates to try again.
-        </div>
-      )}
       {result && !result.ok && (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           <p className="font-medium">Failed ({result.stage})</p>
@@ -1059,41 +1004,10 @@ function PullAndInstallButton({
         </div>
       )}
 
-      <Dialog
-        open={relaunchDialogOpen}
-        onOpenChange={(next: boolean) => {
-          if (!next) dismissRelaunch();
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Full restart required</DialogTitle>
-            <DialogDescription>
-              Updating {pluginName} brought in new dependencies. Zenbu needs to
-              relaunch to pick them up. Your chats and windows will reopen on
-              the next start.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={dismissRelaunch}
-              disabled={relaunching}
-            >
-              Later
-            </Button>
-            <Button
-              size="sm"
-              onClick={relaunch}
-              disabled={relaunching}
-              className="bg-blue-500 text-white hover:bg-blue-600"
-            >
-              {relaunching ? "Relaunching…" : "Relaunch now"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PluginUpdateModal
+        pending={pendingUpdate}
+        onResolved={() => setPendingUpdate(null)}
+      />
     </div>
   );
 }
