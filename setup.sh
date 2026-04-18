@@ -114,6 +114,36 @@ verify_sha256() {
   return 0
 }
 
+# Hash the contents of one or more files into a single sha256 digest.
+# Missing files contribute an empty string so the signature still stabilizes
+# (i.e. the absence of a file is itself a consistent input).
+file_sig() {
+  local f
+  {
+    for f in "$@"; do
+      if [ -f "$f" ]; then
+        cat "$f"
+      fi
+      printf "\0%s\0" "$f"
+    done
+  } | shasum -a 256 | awk '{print $1}'
+}
+
+# Read/write a signature marker. `read_sig <path>` emits the stored signature
+# (empty if the file is missing or unreadable). `write_sig <path> <sig>` stores
+# the signature atomically.
+read_sig() {
+  [ -f "$1" ] && cat "$1" 2>/dev/null || true
+}
+
+write_sig() {
+  local path="$1" value="$2"
+  local dir
+  dir="$(dirname "$path")"
+  mkdir -p "$dir"
+  printf "%s" "$value" > "$path"
+}
+
 # ---------- ensure_* steps ----------
 
 ensure_dirs() {
@@ -224,8 +254,24 @@ ensure_remote() {
 }
 
 ensure_deps_installed() {
+  # Skip when pnpm-lock.yaml is unchanged since the last successful install.
+  # Also keyed on the pnpm binary version so toolchain bumps force a re-install.
+  local marker="${BIN_DIR}/.deps.sig"
+  local sig
+  sig="$(file_sig \
+    "${REPO_DIR}/pnpm-lock.yaml" \
+    "${REPO_DIR}/pnpm-workspace.yaml" \
+    "${BIN_DIR}/.pnpm.version")"
+  if [ -d "${REPO_DIR}/node_modules" ] && [ "$(read_sig "$marker")" = "$sig" ]; then
+    log_ok "deps up-to-date"
+    return
+  fi
+  log_do "installing pnpm deps"
   # Full output (no --silent) so real errors surface in the setup window log.
-  "${BIN_DIR}/pnpm" install --filter='!@zenbu/kernel'
+  # CI=true makes pnpm non-interactive; otherwise it prompts on node_modules
+  # divergence and aborts when there's no TTY (setup-window / zen-open cases).
+  CI=true "${BIN_DIR}/pnpm" install --filter='!@zenbu/kernel'
+  write_sig "$marker" "$sig"
 }
 
 ensure_tsconfig_local() {
@@ -375,10 +421,30 @@ ensure_registry_types() {
   # `zen link` looks up from CWD for a zenbu.plugin.json. setup.sh's CWD is
   # the repo root, which has no manifest — pass the manifests explicitly for
   # both plugins so both sections land in ~/.zenbu/registry/.
+  #
+  # Inputs: the manifest files + the schema files they reference. If anything
+  # in that set changes, regenerate. The global config.json is also part of
+  # the signature so installing/removing a third-party plugin triggers a
+  # regen without the user remembering to `zen link`.
+  local marker="${REGISTRY_DIR}/.types.sig"
+  local config_json="${HOME_DIR}/.zenbu/config.json"
+  local sig
+  sig="$(file_sig \
+    "$config_json" \
+    "${REPO_DIR}/packages/init/zenbu.plugin.json" \
+    "${REPO_DIR}/packages/zen/zenbu.plugin.json" \
+    "${REPO_DIR}/packages/init/shared/schema/index.ts" \
+    "${REPO_DIR}/packages/zen/shared/schema.ts")"
+  if [ -f "${REGISTRY_DIR}/db-sections.ts" ] && [ "$(read_sig "$marker")" = "$sig" ]; then
+    log_ok "registry types up-to-date"
+    return
+  fi
+  log_do "regenerating registry types"
   "${BIN_DIR}/bun" "${REPO_DIR}/packages/zen/src/bin.ts" link \
     "${REPO_DIR}/packages/init/zenbu.plugin.json"
   "${BIN_DIR}/bun" "${REPO_DIR}/packages/zen/src/bin.ts" link \
     "${REPO_DIR}/packages/zen/zenbu.plugin.json"
+  write_sig "$marker" "$sig"
 }
 
 ensure_db_config() {
@@ -403,10 +469,26 @@ PY
 
 ensure_app_path() {
   local default="/Applications/Zenbu.app/Contents/MacOS/Zenbu"
-  if [ -x "$default" ]; then
-    "${BIN_DIR}/bun" "${REPO_DIR}/packages/zen/src/bin.ts" \
-      config set appPath "$default" 2>/dev/null || true
+  [ -x "$default" ] || return 0
+  # `zen config` writes into packages/init/.zenbu/db/root.json under
+  # plugin["zen-cli"].appPath. Read it directly so the idempotency check
+  # doesn't pay for spawning bun+zen every setup run.
+  local root_json="${REPO_DIR}/packages/init/.zenbu/db/root.json"
+  local current=""
+  if [ -f "$root_json" ]; then
+    current="$(python3 -c "
+import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get('plugin',{}).get('zen-cli',{}).get('appPath',''))
+except Exception:
+    pass
+" "$root_json" 2>/dev/null || true)"
   fi
+  if [ "$current" = "$default" ]; then
+    return
+  fi
+  "${BIN_DIR}/bun" "${REPO_DIR}/packages/zen/src/bin.ts" \
+    config set appPath "$default" 2>/dev/null || true
 }
 
 # ---------- grouped step runner ----------
