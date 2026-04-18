@@ -1,4 +1,4 @@
-{"name": "sidebar", "description": "A sidebar for views", "repo": "https://github.com/zenbu-labs/sidebar"}
-{"name": "event-log-viewer", "description": "View event log state for zenbu", "repo": "https://github.com/zenbu-labs/event-log-viewer"}
-{"name": "left-sidebar", "description": "Left sidebar for the chat view listing past user messages", "repo": "https://github.com/zenbu-labs/left-sidebar"}
-{"name": "recent-agents", "description": "Cmd+P command palette in the chat view for switching between recently-used chats", "repo": "https://github.com/zenbu-labs/recent-agents"}
+{"name": "sidebar", "description": "Resizable right panel that hosts any registered view — file browser, git log, terminal, and more.", "repo": "https://github.com/zenbu-labs/sidebar"}
+{"name": "inspector", "description": "Live viewer for raw agent events — user prompts, tool calls, permissions, streaming output. Great for debugging ACP sessions.", "repo": "https://github.com/zenbu-labs/event-log-viewer"}
+{"name": "history", "description": "Left rail in the chat view listing your past prompts. Click any entry to jump back to that message.", "repo": "https://github.com/zenbu-labs/left-sidebar"}
+{"name": "recent-agents", "description": "Cmd+P command palette to instantly switch between your recently-used chats — VSCode style.", "repo": "https://github.com/zenbu-labs/recent-agents"}
