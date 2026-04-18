@@ -69,6 +69,7 @@ function parseJsonl(raw: string): RegistryEntry[] {
       ) {
         entries.push({
           name: obj.name,
+          title: typeof obj.title === "string" ? obj.title : undefined,
           description: typeof obj.description === "string" ? obj.description : "",
           repo: obj.repo,
         })
