@@ -1,1 +1,2 @@
 {"name": "sidebar", "description": "A sidebar for views", "repo": "https://github.com/zenbu-labs/sidebar"}
+{"name": "event-log-viewer", "description": "View event log state for zenbu", "repo": "https://github.com/zenbu-labs/event-log-viewer"}
