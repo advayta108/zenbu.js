@@ -739,13 +739,9 @@ type UpdateStatus =
       conflictingFiles: string[];
       head: Commit;
       upstream: Commit;
+      commits: Commit[];
       checkedAt: number;
     };
-
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
 
 function formatRelative(ts: number): string {
   const diff = Date.now() - ts;
@@ -758,28 +754,6 @@ function formatRelative(ts: number): string {
   if (days < 30) return `${days}d ago`;
   return new Date(ts).toLocaleDateString();
 }
-
-function CommitCard({ label, commit }: { label: string; commit: Commit }) {
-  return (
-    <div className="rounded-md border border-border bg-muted/30 p-3 space-y-1">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          {label}
-        </span>
-        <span className="font-mono text-[10px] text-muted-foreground">
-          {commit.shortSha}
-        </span>
-      </div>
-      <p className="text-sm truncate" title={commit.subject}>
-        {commit.subject || "(no message)"}
-      </p>
-      <p className="text-xs text-muted-foreground truncate">
-        {commit.authorName} · {formatRelative(commit.authorDate)}
-      </p>
-    </div>
-  );
-}
-
 
 type TabKey = "overview" | "changes" | "history" | "branches" | "advanced";
 
@@ -857,13 +831,8 @@ function UpdatesSection() {
 
   return (
     <div className="p-5 space-y-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-base font-semibold">Updates</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Pull the latest Core, commit your changes, or open a pull request.
-          </p>
-        </div>
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-base font-semibold">Updates</h2>
         <Button
           variant="outline"
           size="sm"
@@ -954,42 +923,6 @@ function ErrorBox({ message }: { message: string }) {
       <pre className="whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-xs text-muted-foreground">
         {message}
       </pre>
-    </div>
-  );
-}
-
-function StatusBlock({
-  tone,
-  title,
-  detail,
-  children,
-}: {
-  tone: "ok" | "info" | "danger" | "neutral";
-  title: string;
-  detail?: string;
-  children?: ReactNode;
-}) {
-  const toneClasses = {
-    ok: "border-emerald-500/30 bg-emerald-500/5",
-    info: "border-blue-500/30 bg-blue-500/5",
-    danger: "border-destructive/40 bg-destructive/5",
-    neutral: "border-border bg-muted/30",
-  }[tone];
-
-  return (
-    <div className={cn("rounded-md border p-4 space-y-2", toneClasses)}>
-      <p className="text-sm font-medium">{title}</p>
-      {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
-      {children && <div className="pt-1 space-y-2">{children}</div>}
-    </div>
-  );
-}
-
-function CommitPair({ head, upstream }: { head: Commit; upstream: Commit }) {
-  return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 pt-1">
-      <CommitCard label="You have" commit={head} />
-      <CommitCard label="Upstream has" commit={upstream} />
     </div>
   );
 }
@@ -1085,149 +1018,116 @@ function OverviewTab({
     return result;
   });
 
-  let canPull = false;
-  let pullDisabledReason = "";
-  if (status && status.kind === "ok") {
-    if (status.behind === 0) {
-      pullDisabledReason = "Already up to date";
-    } else if (status.dirty) {
-      pullDisabledReason = "Commit or discard your changes first";
-    } else if (status.mergeable === false) {
-      pullDisabledReason = "Resolve conflicts first";
-    } else {
-      canPull = true;
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <CoreStatusCard
-        status={status}
-        loading={loadingUpstream}
-        error={upstreamError}
-      />
-      {status && status.kind === "ok" && status.behind > 0 && (
-        <div className="flex items-center gap-3">
-          <Button
-            size="sm"
-            onClick={() => pull.run()}
-            disabled={!canPull || pull.pending}
-          >
-            {pull.pending ? "Pulling…" : `Pull ${status.behind} update${status.behind === 1 ? "" : "s"}`}
-          </Button>
-          {pullDisabledReason && !canPull && (
-            <span className="text-xs text-muted-foreground">
-              {pullDisabledReason}
-            </span>
-          )}
-        </div>
-      )}
-      <Feedback feedback={pull.feedback} />
-    </div>
-  );
-}
-
-function CoreStatusCard({
-  status,
-  loading,
-  error,
-}: {
-  status: UpdateStatus | null;
-  loading: boolean;
-  error: string | null;
-}) {
-  if (error) return <ErrorBox message={error} />;
-  if (!status && loading) {
-    return <StatusBlock tone="neutral" title="Checking for updates…" />;
+  if (upstreamError) return <ErrorBox message={upstreamError} />;
+  if (!status && loadingUpstream) {
+    return <p className="text-sm text-muted-foreground">Checking…</p>;
   }
   if (!status) return null;
 
-  if (status.kind === "not-a-repo") {
-    return (
-      <StatusBlock
-        tone="neutral"
-        title="Can't check for updates"
-        detail="Core isn't a git checkout."
-      />
-    );
-  }
-  if (status.kind === "no-remote") {
-    return (
-      <StatusBlock
-        tone="neutral"
-        title="Can't check for updates"
-        detail="No remote is configured for Core."
-      />
-    );
-  }
-  if (status.kind === "detached-head") {
-    return (
-      <StatusBlock
-        tone="neutral"
-        title="Detached HEAD"
-        detail="Core isn't on a branch right now. Check out a branch to compare against upstream."
-      />
-    );
-  }
-  if (status.kind === "git-missing") {
-    return (
-      <StatusBlock
-        tone="danger"
-        title="git isn't installed"
-        detail="Install git to enable update checks."
-      />
-    );
-  }
-  if (status.kind === "fetch-error") {
-    return (
-      <StatusBlock
-        tone="danger"
-        title="Couldn't reach upstream"
-        detail={status.message}
-      />
-    );
+  if (status.kind !== "ok") {
+    return <p className="text-sm text-muted-foreground">{nonOkMessage(status)}</p>;
   }
 
-  const { ahead, behind, mergeable, conflictingFiles, head, upstream, checkedAt } = status;
+  const { ahead, behind, dirty, mergeable, conflictingFiles, head, commits } = status;
 
-  if (behind === 0) {
-    return (
-      <StatusBlock
-        tone="ok"
-        title="Core is up to date"
-        detail={`Last checked ${formatTime(checkedAt)}${ahead > 0 ? ` · ${ahead} of your change${ahead === 1 ? "" : "s"} aren't shared yet` : ""}`}
-      />
-    );
-  }
+  let canPull = false;
+  let pullReason = "";
+  if (behind === 0) pullReason = "";
+  else if (dirty) pullReason = "Commit or discard your changes first";
+  else if (mergeable === false) pullReason = "Resolve conflicts first";
+  else canPull = true;
 
-  if (mergeable === false) {
-    return (
-      <StatusBlock
-        tone="danger"
-        title={`Update available, but it would conflict with ${conflictingFiles.length} of your file${conflictingFiles.length === 1 ? "" : "s"}`}
-        detail="Resolve these before pulling to avoid a merge conflict."
-      >
-        <div className="rounded-md border border-border bg-background/50 p-2 space-y-0.5">
+  const statusLine =
+    behind > 0
+      ? `${behind} update${behind === 1 ? "" : "s"} available`
+      : ahead > 0
+        ? `${ahead} local commit${ahead === 1 ? "" : "s"} not pushed`
+        : "Up to date";
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm">{statusLine}</p>
+        {behind > 0 && (
+          <div className="flex items-center gap-2">
+            {pullReason && !canPull && (
+              <span className="text-xs text-muted-foreground">{pullReason}</span>
+            )}
+            <Button
+              size="sm"
+              onClick={() => pull.run()}
+              disabled={!canPull || pull.pending}
+            >
+              {pull.pending ? "Pulling…" : "Pull"}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {mergeable === false && conflictingFiles.length > 0 && (
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">Conflicts</p>
           {conflictingFiles.map((file) => (
             <div key={file} className="font-mono text-xs break-all">
               {file}
             </div>
           ))}
         </div>
-        <CommitPair head={head} upstream={upstream} />
-      </StatusBlock>
-    );
-  }
+      )}
 
-  return (
-    <StatusBlock
-      tone="info"
-      title={`${behind} update${behind === 1 ? "" : "s"} available`}
-      detail={`Pulling will cleanly apply ${behind === 1 ? "a change" : "these changes"}. Last checked ${formatTime(checkedAt)}.`}
-    >
-      <CommitPair head={head} upstream={upstream} />
-    </StatusBlock>
+      <div className="space-y-3">
+        {commits.map((c) => {
+          const isCurrent = c.sha === head.sha;
+          const body = c.body.trim();
+          return (
+            <div key={c.sha} className="flex gap-3">
+              <span
+                className={cn(
+                  "pt-0.5 text-xs select-none w-3 shrink-0",
+                  isCurrent ? "text-foreground" : "text-muted-foreground/60",
+                )}
+                aria-label={isCurrent ? "current" : undefined}
+              >
+                {isCurrent ? "●" : "○"}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <p className={cn("text-sm truncate", isCurrent && "font-medium")}>
+                    {c.subject || "(no message)"}
+                  </p>
+                  <span className="font-mono text-[10px] text-muted-foreground shrink-0">
+                    {c.shortSha}
+                  </span>
+                </div>
+                {body && (
+                  <p className="mt-0.5 text-xs text-muted-foreground whitespace-pre-wrap">
+                    {body}
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <Feedback feedback={pull.feedback} />
+    </div>
   );
+}
+
+function nonOkMessage(status: Exclude<UpdateStatus, { kind: "ok" }>): string {
+  switch (status.kind) {
+    case "not-a-repo":
+      return "Core isn't a git checkout.";
+    case "no-remote":
+      return "No remote is configured for Core.";
+    case "detached-head":
+      return "Core isn't on a branch right now.";
+    case "git-missing":
+      return "git isn't installed.";
+    case "fetch-error":
+      return `Couldn't reach upstream: ${status.message}`;
+  }
 }
 
 /* ------------------------------ Changes tab ------------------------------ */

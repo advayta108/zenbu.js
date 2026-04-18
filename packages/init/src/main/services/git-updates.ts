@@ -48,6 +48,7 @@ export type UpdateStatus =
       conflictingFiles: string[]
       head: Commit
       upstream: Commit
+      commits: Commit[]
       checkedAt: number
     }
 
@@ -187,6 +188,17 @@ export class GitUpdatesService extends Service {
 
       const { ahead, behind } = await getAheadBehind(cwd, "HEAD", "FETCH_HEAD")
 
+      const [headLog, upstreamLog] = await Promise.all([
+        getLog(cwd, { ref: headSha, limit: 15 }),
+        behind > 0 ? getLog(cwd, { ref: upstreamSha, limit: 15 }) : Promise.resolve<Commit[]>([]),
+      ])
+      const bySha = new Map<string, Commit>()
+      for (const c of upstreamLog) bySha.set(c.sha, c)
+      for (const c of headLog) bySha.set(c.sha, c)
+      const commits = [...bySha.values()]
+        .sort((a, b) => b.authorDate - a.authorDate)
+        .slice(0, 15)
+
       let mergeable: boolean | null = null
       let conflictingFiles: string[] = []
       if (behind > 0) {
@@ -222,6 +234,7 @@ export class GitUpdatesService extends Service {
         conflictingFiles,
         head,
         upstream,
+        commits,
         checkedAt: Date.now(),
       }
     } catch (err) {
