@@ -991,7 +991,14 @@ function PullAndInstallButton({
     }
   }, [rpc]);
 
+  const dismissRelaunch = useCallback(() => {
+    setResult((r: PullAndInstallResult | null) =>
+      r && r.ok && r.requiresRelaunch ? { ...r, requiresRelaunch: false } : r,
+    );
+  }, []);
+
   const buttonDisabled = pending || !!disabled;
+  const relaunchDialogOpen = !!(result?.ok && result.requiresRelaunch);
 
   return (
     <div className="space-y-2">
@@ -1002,16 +1009,6 @@ function PullAndInstallButton({
         <Button size="sm" onClick={run} disabled={buttonDisabled}>
           {pending ? "Updating…" : label}
         </Button>
-        {result?.ok && result.requiresRelaunch && (
-          <Button
-            size="sm"
-            onClick={relaunch}
-            disabled={relaunching}
-            className="bg-blue-500 text-white hover:bg-blue-600"
-          >
-            {relaunching ? "Relaunching…" : "Relaunch"}
-          </Button>
-        )}
       </div>
 
       {(pending || progress.length > 0) && progress.length > 0 && (
@@ -1041,6 +1038,42 @@ function PullAndInstallButton({
           <p className="whitespace-pre-wrap break-words">{result.error}</p>
         </div>
       )}
+
+      <Dialog
+        open={relaunchDialogOpen}
+        onOpenChange={(next: boolean) => {
+          if (!next) dismissRelaunch();
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Full restart required</DialogTitle>
+            <DialogDescription>
+              Updating {pluginName} brought in new dependencies. Zenbu needs to
+              relaunch to pick them up. Your chats and windows will reopen on
+              the next start.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={dismissRelaunch}
+              disabled={relaunching}
+            >
+              Later
+            </Button>
+            <Button
+              size="sm"
+              onClick={relaunch}
+              disabled={relaunching}
+              className="bg-blue-500 text-white hover:bg-blue-600"
+            >
+              {relaunching ? "Relaunching…" : "Relaunch now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
