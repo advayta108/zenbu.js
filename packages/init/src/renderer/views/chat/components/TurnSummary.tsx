@@ -153,12 +153,18 @@ function getLastTurnData(messages: MaterializedMessage[]) {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "user") { lastUserIdx = i; break }
   }
-  if (lastUserIdx === -1) return null
+  console.log("[TurnSummary] getLastTurnData start", { messagesLength: messages.length, lastUserIdx })
+  if (lastUserIdx === -1) {
+    console.log("[TurnSummary] bail: no user message found")
+    return null
+  }
 
   const diffs: DiffEntry[] = []
   const createdFiles = new Set<string>()
   const createdFileContents = new Map<string, string>()
   const editedFiles = new Set<string>()
+
+  const turnToolSummaries: unknown[] = []
 
   for (let i = lastUserIdx + 1; i < messages.length; i++) {
     const msg = messages[i]
@@ -180,10 +186,41 @@ function getLastTurnData(messages: MaterializedMessage[]) {
           editedFiles.add(d.path)
         }
       }
+
+      turnToolSummaries.push({
+        toolName: msg.toolName,
+        kind: msg.kind,
+        status: msg.status,
+        isWriteTool: isWriteTool(msg),
+        writePath,
+        contentItemTypes: msg.contentItems.map(c => c.type),
+        diffPaths: msg.contentItems.filter(c => c.type === "diff").map((c: any) => c.path),
+        childCount: msg.children.length,
+        children: msg.children.map(c => ({
+          toolName: c.toolName,
+          kind: c.kind,
+          contentItemTypes: c.contentItems.map(ci => ci.type),
+          diffPaths: c.contentItems.filter(ci => ci.type === "diff").map((ci: any) => ci.path),
+        })),
+        toolDiffsFound: toolDiffs.length,
+      })
+    } else {
+      turnToolSummaries.push({ nonToolRole: msg.role })
     }
   }
 
-  if (diffs.length === 0 && createdFiles.size === 0) return null
+  console.log("[TurnSummary] turn tool scan", {
+    diffsTotal: diffs.length,
+    createdFilesCount: createdFiles.size,
+    createdFiles: [...createdFiles],
+    editedFiles: [...editedFiles],
+    turnToolSummaries,
+  })
+
+  if (diffs.length === 0 && createdFiles.size === 0) {
+    console.log("[TurnSummary] bail: no diffs and no created files")
+    return null
+  }
 
   return { diffs, createdFiles, createdFileContents, editedFiles }
 }
