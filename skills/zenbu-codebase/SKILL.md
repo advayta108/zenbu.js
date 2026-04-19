@@ -14,6 +14,20 @@ live without restart.
 > the first time you touch anything non-trivial. This file points at specific
 > parts.
 
+## Terminology
+
+| Term | What it refers to |
+|---|---|
+| **layout** / **orchestrator** | The outer React app the Electron window loads. It's not a registered view — it's the root shell that hosts every other view in an iframe, owns tabs/panes/windows/chrome. Lives at `packages/init/src/renderer/views/orchestrator/` (entry: `App.tsx`). |
+| **view** | Any Vite-served React page loaded in an iframe by the orchestrator. Each view has a unique **scope** (string) and registers itself via `ViewRegistryService`. |
+| **scope** | The string identity of a view (`"chat"`, `"settings"`, `"file-viewer"`, …). Used as the key for advice targeting, content scripts, shortcuts, and iframe subdomain isolation. |
+| **chat** | The specific view that renders the agent conversation UI (chat log + composer + minimap). Scope name `"chat"`. Lives at `packages/init/src/renderer/views/chat/`. Everything a user types to an agent flows through here. |
+| **composer** | The Lexical-based text input inside the chat view where the user composes messages to the agent. File: `views/chat/components/Composer.tsx`. See "Lexical / composer" below. |
+| **service** | A `Service` subclass on the main process. Auto-exposed over RPC by its `static key`. |
+| **plugin** | A directory with a `zenbu.plugin.json` manifest. Contributes services, views, schemas, advice. The kernel is itself a plugin (`packages/init/`). |
+| **section** | A plugin's slice of the Kyju root DB: `root.plugin.<plugin-name>.*`. Declared by the plugin's `schema.ts` + manifest `schema` field. |
+| **advice** | Emacs-style function interception. A plugin can replace/wrap a top-level function exported from any view without editing the target. |
+
 ## Repository layout
 
 ```
@@ -210,6 +224,116 @@ target file's path relative to the view's Vite root
 **Inject a content script into a view.** `registerContentScript(scope,
 absolutePath)` from the same file. Scope `"*"` targets every view.
 
+### Understand the view system (scopes, iframes, subdomains, sockets)
+
+- **`ViewRegistryService`** — `packages/init/src/main/services/view-registry.ts`.
+  `register(scope, root, configFile?)` spins a Vite dev server for the
+  view's source directory and stores `scope → { url, port }`. Registry
+  snapshot syncs to `root.plugin.kernel.viewRegistry` (lines 133-149).
+  `registerAlias(scope, reloaderId, pathPrefix)` reuses an existing server
+  at a subpath — what most kernel views do on the shared `"core"` server.
+- **How the orchestrator mounts a view.** `orchestrator/components/LeafPane.tsx:435-461`
+  renders `<iframe src="http://${hostname}.localhost:${wsPort}${chatPath}/index.html?wsPort=${wsPort}&windowId=...&paneId=...">`.
+  The host is derived from the tab id (`tabId.toLowerCase().replace(/[^a-z0-9]/g, "")`),
+  giving each tab a **unique subdomain** under `.localhost` — every iframe
+  gets its own Origin, so cookies / localStorage / postMessage targets
+  don't collide.
+- **Kernel HTTP server is a single port** (the `wsPort` from
+  `runtime.json`) proxying every subdomain to the right Vite server based
+  on the URL path. `packages/init/src/main/services/http.ts` + `server.ts`.
+- **Views talk back on one WebSocket.** `packages/init/src/renderer/lib/ws-connection.ts:46-109`
+  opens `ws://127.0.0.1:${wsPort}` and muxes two channels over it:
+  `{ ch: "rpc", data }` (zenrpc) and `{ ch: "db", data }` (Kyju replica
+  events). Mirror this exact shape if you need a non-view process to
+  connect — `packages/zen/src/lib/rpc.ts` is the canonical Node example.
+- **Views don't know about each other directly.** They coordinate through
+  the DB (write to `viewRegistry` / modes / shared fields) and through
+  shortcut dispatches + RPC events. No `postMessage` bus.
+- **Tab / pane / window model.** Layout is stored on the kernel schema
+  (`windowStates[*].panes`, `rootPaneId`, `focusedPaneId`). The
+  orchestrator reads this and decides which scope goes in which iframe —
+  `App.tsx` picks the leaves, `LeafPane.tsx` renders them.
+
+### Extend / edit the chat composer (Lexical)
+
+**Composer.tsx is where agent input is composed.** Path:
+`packages/init/src/renderer/views/chat/components/Composer.tsx` (626
+lines). The `<LexicalComposer>` config at lines 195-201 declares
+`nodes: [FileReferenceNode, ImageNode]`; children are the active
+Lexical plugins (`HistoryPlugin`, `FilePickerPlugin`, `ImagePastePlugin`,
+`DraftPersistencePlugin`, `SlashCommandPlugin`, `CtrlNPPlugin`,
+`RichPastePlugin`). Adding a new feature almost always means adding a
+new plugin component to that list.
+
+**Lexical plugin = a React component that calls `useLexicalComposerContext()`
+and registers effects / commands.** Three representative examples:
+- `views/chat/plugins/FilePickerPlugin.tsx` — wraps
+  `LexicalTypeaheadMenuPlugin`, matches a `/` trigger, renders the
+  picker, dispatches insert commands on selection.
+- `views/chat/plugins/ImagePastePlugin.tsx` — registers `PASTE_COMMAND`,
+  detects image MIME types in the clipboard, creates an `ImageNode` and
+  uploads to blob storage.
+- `views/chat/plugins/DraftPersistencePlugin.tsx:26-50` — debounced hook
+  that serialises editor state every 300ms into
+  `root.plugin.kernel.composerDrafts[agentId]`.
+
+**Key event handling & preventing defaults.** Register with
+`editor.registerCommand(COMMAND, handler, PRIORITY)` and **return `true`**
+to consume the event; the handler should also call `event.preventDefault()`
+when appropriate. Canonical example: `Composer.tsx:102-127` handles
+`KEY_ENTER_COMMAND` at `COMMAND_PRIORITY_HIGH`, checks refs for
+open menus (so Enter selects instead of submitting), and returns `true`
+to stop propagation. When adding new keybindings in the composer:
+- Use `COMMAND_PRIORITY_HIGH` (not `LOW`) so you run before default text
+  handlers when you need to intercept.
+- If a menu is open, always stop Enter/Arrow/Tab from reaching the editor.
+- Never swallow keys conditionally without an early-return guard — a half-
+  consumed event will desync the IME / selection.
+
+**`Ctrl+N` / `Ctrl+P` as Down/Up — always.** Users expect emacs-style
+arrow navigation inside any menu / typeahead in the composer. The
+reusable primitive is `CtrlNPPlugin` at
+`views/chat/plugins/KeyboardPlugins.tsx:15-45`: registers one
+`KEY_DOWN_COMMAND` handler that converts `Ctrl+n` → dispatch
+`KEY_ARROW_DOWN_COMMAND`, `Ctrl+p` → `KEY_ARROW_UP_COMMAND`. Any new
+typeahead/menu in the composer inherits the behaviour for free.
+
+**Custom decorator nodes (React inside the editor).** Subclass
+`DecoratorNode`, implement `getType`, `clone`, `createDOM`, `decorate`,
+`exportJSON`, `static importJSON`. Canonical: `FileReferenceNode.tsx` and
+`ImageNode.tsx` in `views/chat/lib/`. **To avoid layout shift when the
+component mounts** set `display: "inline"` on the DOM element returned by
+`createDOM()` (see `FileReferenceNode.tsx:46-49` and `ImageNode.tsx:46-49`).
+Nodes that change height dynamically will shift the caret and scroll the
+chat — always lock the line box with a fixed height or `line-height`.
+
+**Store metadata on nodes.** The constructor + `exportJSON` +
+`importJSON` is the full API. Examples:
+- `FileReferenceNode` (`views/chat/lib/FileReferenceNode.tsx:87-99`)
+  persists `filePath`, `fileName`, `fileContent`.
+- `MentionNode` (`views/chat/lib/MentionNode.tsx:52-62`) persists
+  `mentionType`, `label`. Version bumping is declarative — increment the
+  `version` in the JSON, handle older versions in `importJSON`.
+
+**UI anchored to the caret.** `views/chat/components/FilePickerMenu.tsx:1-49`
+portals the menu with `position: "absolute"` positioned relative to an
+anchor element captured from the typeahead plugin's match result.
+`LexicalTypeaheadMenuPlugin` gives you that anchor; non-typeahead menus
+can read the DOM caret rect via `editor.getRootElement().ownerDocument.getSelection()`.
+
+**Serialization on cut / copy / paste.**
+- Copy: Lexical's default writes `application/x-lexical-editor` (JSON) +
+  `text/plain` to the clipboard. Don't override unless you need custom
+  pre-processing.
+- Paste: register `PASTE_COMMAND` at `COMMAND_PRIORITY_HIGH`, inspect
+  `event.clipboardData.types`. `views/chat/plugins/RichPastePlugin.tsx:22-51`
+  shows the pattern: if `application/x-lexical-editor` is present use
+  `$insertDataTransferForRichText()`; fall back to plaintext otherwise.
+- Server-side round-trip: `views/chat/lib/serialize.ts:48-62` walks the
+  tree to produce the `{ text, images, ... }` payload the agent sees.
+  Every new decorator node whose metadata matters to the agent must be
+  read in that walk — no exceptions.
+
 ### CLI ↔ app transport (for when you edit the CLI itself)
 
 - App-side: `packages/init/src/main/services/cli.ts` — `CliService`
@@ -257,7 +381,7 @@ The Service base class + DAG initializer lives at
 | Concern | Location |
 |---|---|
 | Orchestrator root UI (iframe host, tabs, panes) | `orchestrator/App.tsx` |
-| Chat view | `views/chat/` (components, plugins, ChatDisplay.tsx, Composer.tsx) |
+| Chat view (scope `"chat"`: composer + log + minimap) | `views/chat/` (components, plugins, ChatDisplay.tsx, Composer.tsx) |
 | Minimap | `views/chat/components/MinimapContent.tsx` |
 | Settings view | `views/settings/` |
 | Shared hooks / providers (`useRpc`, `useDb`) | `lib/providers.ts`, `lib/ws-connection.ts` |
