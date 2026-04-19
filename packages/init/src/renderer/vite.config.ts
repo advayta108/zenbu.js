@@ -15,6 +15,12 @@ export default defineConfig({
     },
   },
   server: {
+    warmup: {
+      clientFiles: [
+        "./views/orchestrator/main.tsx",
+        "./views/chat/main.tsx",
+      ],
+    },
     hmr: {
       protocol: "ws",
       host: "localhost",
