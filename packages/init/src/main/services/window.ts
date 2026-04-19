@@ -781,25 +781,6 @@ export class WindowService extends Service {
       };
     });
 
-    this.effect("composer-cwd-advice", () => {
-      return registerAdvice("chat", {
-        moduleId: "views/chat/components/Composer.tsx",
-        name: "Composer",
-        type: "around",
-        modulePath: path.resolve(
-          __dirname,
-          "..",
-          "..",
-          "renderer",
-          "views",
-          "orchestrator",
-          "advice",
-          "composer-cwd.tsx",
-        ),
-        exportName: "ComposerWrapper",
-      });
-    });
-
     this.effect("no-minimap-advice", () => {
       return registerAdvice("chat", {
         moduleId: "views/chat/components/Minimap.tsx",

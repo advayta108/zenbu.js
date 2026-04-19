@@ -1,4 +1,5 @@
 import { Composer } from "./components/Composer"
+import { ComposerToolbar } from "./components/ComposerToolbar"
 import type { ExpectedVisibleMessage } from "./lib/chat-invariants"
 
 export type ComposerPanelProps = {
@@ -19,6 +20,7 @@ export function ComposerPanel({
         scrollToBottom={scrollToBottom}
         debugExpectedVisibleMessageRef={debugExpectedVisibleMessageRef}
       />
+      <ComposerToolbar agentId={agentId} />
     </div>
   )
 }

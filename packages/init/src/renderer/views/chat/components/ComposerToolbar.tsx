@@ -1,4 +1,3 @@
-// will be a plugin
 import { useCallback, useMemo, useState } from "react";
 import { useDb, useCollection } from "../../../lib/kyju-react";
 import { useRpc } from "../../../lib/providers";
@@ -30,23 +29,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-
-type AgentRow = {
-  id: string;
-  configId?: string;
-  model?: string;
-  thinkingLevel?: string;
-  mode?: string;
-  metadata?: Record<string, unknown>;
-  eventLog?: { collectionId: string; debugName: string };
-};
-
-type AgentConfigRow = {
-  id: string;
-  name: string;
-  startCommand: string;
-  availableModes: Array<{ value: string; name: string; description?: string }>;
-};
 
 function ModeCombobox({
   options,
@@ -192,13 +174,7 @@ function ContextIndicator({ used, size }: { used: number; size: number }) {
   );
 }
 
-function ComposerCwdInner({
-  Original,
-  agentId,
-}: {
-  Original: (props: { agentId: string }) => any;
-  agentId: string;
-}) {
+export function ComposerToolbar({ agentId }: { agentId: string }) {
   const rpc = useRpc();
 
   const agent = useDb((root) =>
@@ -206,14 +182,10 @@ function ComposerCwdInner({
   );
   const agentConfigs = useDb((root) => root.plugin.kernel.agentConfigs);
   const { items: events } = useCollection(agent?.eventLog);
-  const hasUserMessages = useMemo(
-    () => events.some((e) => e.data?.kind === "user_prompt"),
-    [events],
-  );
   const usage = useMemo(() => {
     if (!events) return null;
     for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i] ;
+      const e = events[i];
       if (
         e?.data?.kind === "session_update" &&
         e.data.update?.sessionUpdate === "usage_update" &&
@@ -259,70 +231,60 @@ function ComposerCwdInner({
   const showMode = availableModes.length > 0;
   const showBar = showCwd || showMode || !!usage;
 
+  if (!showBar) return null;
+
   const cwdDisplayName = agentCwd ? agentCwd.split("/").pop() || agentCwd : "";
 
   return (
-    <div>
-      {Original({ agentId })}
-      {showBar && (
-        <div className="mx-auto w-full max-w-[919px] px-[1.625rem] pb-2 flex items-center">
-          {showCwd ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="text-xs text-neutral-400 hover:text-neutral-600 transition-colors truncate max-w-[200px]"
-                  title={agentCwd!}
-                >
-                  {cwdDisplayName}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="start"
-                className="min-w-[160px] text-xs"
-              >
-                <DropdownMenuItem
-                  className="text-xs"
-                  onClick={() => rpc.window.copyToClipboard(agentCwd!)}
-                >
-                  <CopyIcon className="size-3" />
-                  Copy full path
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  className="text-xs"
-                  onClick={() => rpc.window.openInFinder(agentCwd!)}
-                >
-                  <FolderOpenIcon className="size-3" />
-                  Open in Finder
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs" onClick={handlePickCwd}>
-                  <FolderSyncIcon className="size-3" />
-                  Change cwd
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : (
-            <div />
-          )}
-          <div className="ml-auto flex items-center gap-1">
-            {showMode && (
-              <ModeCombobox
-                options={availableModes}
-                currentValue={currentMode}
-                onSelect={handleModeChange}
-              />
-            )}
-            {usage && <ContextIndicator used={usage.used} size={usage.size} />}
-          </div>
-        </div>
+    <div className="mx-auto w-full max-w-[919px] px-[1.625rem] pb-2 flex items-center">
+      {showCwd ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="text-xs text-neutral-400 hover:text-neutral-600 transition-colors truncate max-w-[200px]"
+              title={agentCwd!}
+            >
+              {cwdDisplayName}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="min-w-[160px] text-xs"
+          >
+            <DropdownMenuItem
+              className="text-xs"
+              onClick={() => rpc.window.copyToClipboard(agentCwd!)}
+            >
+              <CopyIcon className="size-3" />
+              Copy full path
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-xs"
+              onClick={() => rpc.window.openInFinder(agentCwd!)}
+            >
+              <FolderOpenIcon className="size-3" />
+              Open in Finder
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-xs" onClick={handlePickCwd}>
+              <FolderSyncIcon className="size-3" />
+              Change cwd
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        <div />
       )}
+      <div className="ml-auto flex items-center gap-1">
+        {showMode && (
+          <ModeCombobox
+            options={availableModes}
+            currentValue={currentMode}
+            onSelect={handleModeChange}
+          />
+        )}
+        {usage && <ContextIndicator used={usage.used} size={usage.size} />}
+      </div>
     </div>
   );
-}
-
-export function ComposerWrapper(
-  Original: (props: { agentId: string }) => any,
-  props: { agentId: string },
-) {
-  return <ComposerCwdInner Original={Original} agentId={props.agentId} />;
 }
