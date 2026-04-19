@@ -1,0 +1,34 @@
+# {{name}}
+
+A Zenbu plugin scaffolded by `zen init {{name}}{{recipesFlag}}`.
+{{recipesList}}
+
+## Layout
+
+```
+{{name}}/
+├── zenbu.plugin.json        # manifest
+├── package.json             # deps
+├── tsconfig.json
+├── tsconfig.local.json      # path maps for #registry/* and @testbu/*
+├── setup.ts                 # idempotent dep installer
+└── src/services/{{name}}.ts # main service (RPC-accessible via rpc["{{name}}"])
+```
+
+Each recipe you selected layers additional files on top. See
+`~/.zenbu/plugins/zenbu/packages/zen/templates/plugin/recipes/<name>/` for
+the raw templates.
+
+## Common edits
+
+- **Add an RPC method.** Add a public method on a `Service` subclass; run
+  `zen link` from this dir to refresh registry types. Hot-reloads on save.
+- **Change the schema** (if you have the `db` recipe). Edit `src/schema.ts`,
+  run `zen kyju generate --name <tag>`, then `zen link`.
+- **Add a dep.** Edit `package.json`, run `zen setup --dir .` — the app
+  shows a Relaunch dialog because `node_modules` can't hot-reload.
+
+## References
+
+- Architecture: `~/.zenbu/plugins/zenbu/DOCS.md`
+- Recipes skill overview: `~/.zenbu/plugins/zenbu/skills/zenbu-codebase/SKILL.md`

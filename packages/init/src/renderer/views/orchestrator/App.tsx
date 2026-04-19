@@ -53,6 +53,7 @@ import {
   PluginUpdateModal,
   type PendingUpdate,
 } from "./components/PluginUpdateModal";
+import { CliRelaunchModal } from "./components/CliRelaunchModal";
 import { ShortcutForwarderProvider } from "./providers/shortcut-forwarder";
 import { useFocusOnRequest } from "../../lib/focus-request";
 import {
@@ -446,6 +447,7 @@ function ReloadMenu() {
       onResolved={() => setPendingUpdate(null)}
       descriptionPending="A new version of Zenbu is ready. This will install the update and restart the app."
     />
+    <CliRelaunchModal />
     </>
   );
 }

@@ -31,6 +31,8 @@ export type RegistryListing = {
       installPath: string
       enabled: boolean
       manifestPath: string | null
+      /** true for plugins present in ~/.zenbu/config but not in any registry.jsonl catalog (e.g. `zen init` scaffolds, out-of-tree local dirs). */
+      local: boolean
     }
   >
   warning?: string
@@ -211,28 +213,71 @@ export class RegistryService extends Service {
         installPath: installPathFor(e.name),
         enabled: status?.enabled ?? false,
         manifestPath: status?.manifestPath ?? null,
+        local: false,
       }
+    }
+
+    /**
+     * Synthesize entries for plugins registered in the user's config that
+     * are NOT in the catalog. `zen init` scaffolds and out-of-tree plugins
+     * land here. Pulls description/title from the plugin's manifest when
+     * available; marked `local: true` so the UI can hide install/security
+     * controls that need a repo.
+     */
+    const localEntries = (catalogNames: Set<string>) => {
+      const extra: RegistryListing["entries"] = []
+      for (const s of statuses) {
+        if (catalogNames.has(s.name)) continue
+        let title: string | undefined
+        let description = ""
+        try {
+          const m = JSON.parse(fs.readFileSync(s.manifestPath, "utf8"))
+          if (typeof m.title === "string") title = m.title
+          if (typeof m.description === "string") description = m.description
+        } catch {}
+        extra.push({
+          name: s.name,
+          title,
+          description,
+          repo: "",
+          installed: true,
+          installPath: path.dirname(path.resolve(s.manifestPath)),
+          enabled: s.enabled,
+          manifestPath: s.manifestPath,
+          local: true,
+        })
+      }
+      return extra
     }
 
     const remote = await fetchRemoteRegistry()
     if ("entries" in remote) {
+      const catalog = remote.entries.map(enrich)
+      const names = new Set(catalog.map((e) => e.name))
       return {
         ok: true,
         listing: {
           source: "remote",
-          entries: remote.entries.map(enrich),
+          entries: [...catalog, ...localEntries(names)],
         },
       }
     }
 
     const local = readLocalRegistry()
-    if (local.length === 0) return { ok: false, error: remote.error }
+    if (local.length === 0 && statuses.length === 0) {
+      return { ok: false, error: remote.error }
+    }
+    const catalog = local.map(enrich)
+    const names = new Set(catalog.map((e) => e.name))
     return {
       ok: true,
       listing: {
         source: "local",
-        warning: `Using local registry (${remote.error})`,
-        entries: local.map(enrich),
+        warning:
+          local.length === 0
+            ? `Showing only locally installed plugins (${remote.error})`
+            : `Using local registry (${remote.error})`,
+        entries: [...catalog, ...localEntries(names)],
       },
     }
   }

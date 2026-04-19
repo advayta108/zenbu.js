@@ -9,6 +9,7 @@
   "main": "src/bin.ts",
   "dependencies": {
     "@zenbu/kyju": "workspace:*",
+    "@zenbu/zenrpc": "workspace:*",
     "zod": "^4.3.6"
   },
   "devDependencies": {

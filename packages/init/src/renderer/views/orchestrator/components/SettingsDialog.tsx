@@ -1753,6 +1753,8 @@ type RegistryEntry = {
   installPath: string;
   enabled: boolean;
   manifestPath: string | null;
+  /** true for plugins in the user's config but not in any catalog — no repo to install/update from. */
+  local: boolean;
 };
 
 function displayTitle(entry: { title?: string; name: string }): string {
@@ -1867,6 +1869,7 @@ function RegistrySection() {
     (async () => {
       await Promise.all(
         listing.entries.map(async (entry) => {
+          if (entry.local || !entry.repo) return;
           const result: RepoInfoResult = await (rpc).registry.getRepoInfo({
             repo: entry.repo,
           });
@@ -1886,6 +1889,7 @@ function RegistrySection() {
     const entry = listing?.entries.find((e) => e.name === selectedName);
     if (!entry) return;
     readmeRequestedRef.current.add(selectedName);
+    if (entry.local || !entry.repo) return;
     let cancelled = false;
     (async () => {
       try {
@@ -2254,12 +2258,19 @@ function RegistryCard({
         {entry.installed && (
           <InstalledBadge disabled={!entry.enabled} />
         )}
+        {entry.local && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 uppercase tracking-wide">
+            Local
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
         <span className="truncate">
-          {metadata?.ownerLogin
-            ? `By ${metadata.ownerLogin}`
-            : entry.repo.replace(/^https?:\/\/github\.com\//, "")}
+          {entry.local
+            ? entry.manifestPath ?? "(no manifest)"
+            : metadata?.ownerLogin
+              ? `By ${metadata.ownerLogin}`
+              : entry.repo.replace(/^https?:\/\/github\.com\//, "")}
         </span>
       </div>
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -2421,11 +2432,18 @@ function RegistrySidebarItem({
         {entry.installed && (
           <InstalledBadge small disabled={!entry.enabled} />
         )}
+        {entry.local && (
+          <span className="text-[9px] px-1 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 uppercase tracking-wide">
+            Local
+          </span>
+        )}
       </div>
       <div className="text-[11px] text-muted-foreground truncate">
-        {metadata?.ownerLogin
-          ? `By ${metadata.ownerLogin}`
-          : entry.repo.replace(/^https?:\/\/github\.com\//, "")}
+        {entry.local
+          ? entry.manifestPath ?? "(no manifest)"
+          : metadata?.ownerLogin
+            ? `By ${metadata.ownerLogin}`
+            : entry.repo.replace(/^https?:\/\/github\.com\//, "")}
       </div>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1">
@@ -2541,16 +2559,21 @@ function RegistryDetail({
                   </button>
                 </div>
               )}
-              <div>
-                Repository:{" "}
-                <button
-                  type="button"
-                  onClick={() => (rpc).window.openExternal(repoHref)}
-                  className="text-foreground hover:underline break-all"
-                >
-                  {repoHref}
-                </button>
-              </div>
+              {!entry.local && repoHref && (
+                <div>
+                  Repository:{" "}
+                  <button
+                    type="button"
+                    onClick={() => (rpc).window.openExternal(repoHref)}
+                    className="text-foreground hover:underline break-all"
+                  >
+                    {repoHref}
+                  </button>
+                </div>
+              )}
+              {entry.local && (
+                <div className="italic">Local plugin (not in registry)</div>
+              )}
               {metadata?.updatedAt && (
                 <div>Last update: {formatRelativeTime(metadata.updatedAt)}</div>
               )}
@@ -2585,28 +2608,37 @@ function RegistryDetail({
                 {entry.enabled ? "Disable" : "Enable"}
               </Button>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setReviewOpen(true)}
-              className="text-xs"
-              title="Security-review prompt"
-            >
-              <ShieldCheckIcon className="size-3" />
-              Review
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => (rpc).window.openExternal(repoHref)}
-              className="text-xs"
-            >
-              <ExternalLinkIcon className="size-3" />
-              Open on GitHub
-            </Button>
+            {!entry.local && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setReviewOpen(true)}
+                className="text-xs"
+                title="Security-review prompt"
+              >
+                <ShieldCheckIcon className="size-3" />
+                Review
+              </Button>
+            )}
+            {!entry.local && entry.repo && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => (rpc).window.openExternal(repoHref)}
+                className="text-xs"
+              >
+                <ExternalLinkIcon className="size-3" />
+                Open on GitHub
+              </Button>
+            )}
+            {entry.local && entry.manifestPath && (
+              <span className="text-[11px] px-2 py-1 rounded bg-muted text-muted-foreground">
+                Local: {entry.manifestPath}
+              </span>
+            )}
           </div>
 
-          {entry.installed && entry.manifestPath && (
+          {!entry.local && entry.installed && entry.manifestPath && (
             <div className="pt-1">
               <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
                 Update

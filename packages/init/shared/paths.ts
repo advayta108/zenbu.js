@@ -10,5 +10,3 @@ export const PLUGIN_SETUP_STATE_JSON = path.join(
   INTERNAL_DIR,
   "plugin-setup-state.json",
 );
-export const SOCKET_DIR = path.join(ZENBU_HOME, "run");
-export const CLI_SOCKET_PATH = path.join(SOCKET_DIR, "cli.sock");

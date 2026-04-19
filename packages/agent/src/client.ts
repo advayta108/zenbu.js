@@ -202,9 +202,16 @@ export class AcpClient {
   resumeSession = (params: { sessionId: string; cwd: string; mcpServers?: acp.McpServer[] }) => {
     const { stateRef, sessionIdRef, connection } = this;
     return Effect.gen(function* () {
-      yield* Effect.tryPromise(() => (connection as any).unstable_resumeSession(params));
+      // Return the ACP response so the caller can reconcile configOptions —
+      // resume, like newSession, carries the agent's current mode / model /
+      // thinking defaults that we need to override with the user's persisted
+      // selections.
+      const response = (yield* Effect.tryPromise(() =>
+        (connection as any).unstable_resumeSession(params),
+      )) as acp.ResumeSessionResponse;
       yield* Ref.set(sessionIdRef, params.sessionId);
       yield* Ref.set(stateRef, "ready");
+      return response;
     });
   };
 

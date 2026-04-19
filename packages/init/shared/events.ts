@@ -16,4 +16,12 @@ export type ZenbuEvents = {
     /** A line of stdout/stderr from a setup.ts subprocess, streamed live. */
     progress: { pluginName: string; line: string }
   }
+  cli: {
+    /**
+     * Emitted by `CliService.requestRelaunch` when an external `zen` invocation
+     * wants the UI to confirm a restart. The renderer shows a modal and replies
+     * via `CliService.confirmRelaunch(requestId, "accept" | "reject")`.
+     */
+    relaunchRequested: { requestId: string; pluginName: string; reason: string }
+  }
 }

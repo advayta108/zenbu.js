@@ -685,6 +685,18 @@ export class Agent {
           if (resumeResult._tag === "Right") {
             sessionId = existingSessionId;
             agent._logSyntheticEvent({ kind: "resume_session", sessionId });
+            // ACP doesn't accept initial mode/model/thinking in the resume
+            // request — each session starts fresh on those axes until we
+            // push our persisted selections back via setSessionConfigOption.
+            // Without this, a relaunched agent reverts to ACP's defaults
+            // for permission mode / model / thinking even though the DB
+            // still records the user's picks.
+            if (resumeResult.right.configOptions) {
+              yield* agent._reconcileConfigOptions(
+                resumeResult.right.configOptions,
+                sessionId,
+              );
+            }
           } else {
             yield* agent._generateHandoff();
             const session = yield* agent.client.newSession({

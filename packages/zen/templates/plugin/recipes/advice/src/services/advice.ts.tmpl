@@ -1,0 +1,41 @@
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { Service, runtime } from "@testbu/init/src/main/runtime"
+import { registerAdvice } from "@testbu/init/src/main/services/advice-config"
+
+const WRAPPER_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "replacements",
+  "sample-wrapper.tsx",
+)
+
+/**
+ * Registers this plugin's advice (component wrap/replace) against a target
+ * view. Change `scope`, `moduleId`, `name`, and `type` to target a
+ * different component.
+ *
+ * - `scope`: which view (`"chat"`, `"orchestrator"`, …).
+ * - `moduleId`: path of the target file, relative to the view's Vite root
+ *    (`packages/init/src/renderer/`).
+ * - `type`: `"replace"` swaps the component entirely; `"around"` wraps it
+ *    (see `packages/init/src/main/services/advice-config.ts`).
+ */
+export class {{PascalName}}AdviceService extends Service {
+  static key = "{{name}}-advice"
+  static deps = {}
+
+  evaluate() {
+    this.effect("register-advice", () =>
+      registerAdvice("orchestrator", {
+        moduleId: "views/orchestrator/components/TitleBar.tsx",
+        name: "TitleBar",
+        type: "around",
+        modulePath: WRAPPER_PATH,
+        exportName: "TitleBarWrapper",
+      }),
+    )
+  }
+}
+
+runtime.register({{PascalName}}AdviceService, (import.meta as any).hot)

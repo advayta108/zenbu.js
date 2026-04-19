@@ -1,0 +1,35 @@
+import { Service, runtime } from "@testbu/init/src/main/runtime"
+import { ShortcutService } from "@testbu/init/src/main/services/shortcut"
+
+/**
+ * Registers this plugin's keyboard shortcuts. Each binding is registered in
+ * an `effect` so HMR unregisters cleanly on file change.
+ *
+ * Scope string matches a view scope (`"chat"`, `"orchestrator"`, …) or
+ * `"global"`. Renderer-side handling: call `useShortcutHandler({ scope, id })`
+ * from inside the view if you need DOM access.
+ *
+ * See `packages/init/src/main/services/shortcut.ts` for the full API and
+ * `packages/init/src/main/services/focus-shortcuts.ts` for more examples.
+ */
+export class {{PascalName}}ShortcutsService extends Service {
+  static key = "{{name}}-shortcuts"
+  static deps = { shortcut: ShortcutService }
+  declare ctx: { shortcut: ShortcutService }
+
+  evaluate() {
+    this.effect("register:example", () =>
+      this.ctx.shortcut.register({
+        id: "{{name}}.example",
+        defaultBinding: "cmd+shift+e",
+        description: "Example shortcut for {{name}}",
+        scope: "global",
+        handler: (ctx) => {
+          console.log(`[{{name}}] example shortcut fired`, ctx)
+        },
+      }),
+    )
+  }
+}
+
+runtime.register({{PascalName}}ShortcutsService, (import.meta as any).hot)

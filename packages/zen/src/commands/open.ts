@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process"
-import { createConnection } from "node:net"
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { resolveAppPath } from "../app-path"
+import { connectCli } from "../lib/rpc"
+import { readRuntimeConfig } from "../lib/runtime"
 
-const RUNTIME_JSON = join(homedir(), ".zenbu", ".internal", "runtime.json")
 const DB_CONFIG_JSON = join(homedir(), ".zenbu", ".internal", "db.json")
 
 type Args = {
@@ -32,24 +32,6 @@ function parseArgs(argv: string[]): Args {
   return { agent, blocking, resume, verbose }
 }
 
-type RuntimeConfig = { socketPath: string; dbPath: string; pid: number }
-
-function readRuntimeConfig(): RuntimeConfig | null {
-  try {
-    if (!existsSync(RUNTIME_JSON)) return null
-    const data = JSON.parse(readFileSync(RUNTIME_JSON, "utf-8"))
-    if (!data.socketPath || !data.pid) return null
-    try {
-      process.kill(data.pid, 0)
-    } catch {
-      return null
-    }
-    return data
-  } catch {
-    return null
-  }
-}
-
 function readDbPath(): string | null {
   try {
     if (!existsSync(DB_CONFIG_JSON)) return null
@@ -60,44 +42,19 @@ function readDbPath(): string | null {
   }
 }
 
-function sendSocketCommand(
-  socketPath: string,
-  cmd: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const conn = createConnection(socketPath, () => {
-      conn.write(JSON.stringify(cmd) + "\n")
-    })
-    let buffer = ""
-    conn.on("data", (chunk) => {
-      buffer += chunk.toString()
-      const newlineIdx = buffer.indexOf("\n")
-      if (newlineIdx !== -1) {
-        const line = buffer.slice(0, newlineIdx)
-        conn.end()
-        try {
-          resolve(JSON.parse(line))
-        } catch {
-          reject(new Error("Invalid response"))
-        }
-      }
-    })
-    conn.on("error", reject)
-    conn.setTimeout(3000, () => {
-      conn.destroy()
-      reject(new Error("Socket timeout"))
-    })
-  })
-}
-
 type AgentRow = {
   id: string
   name: string
   configId: string
   status: string
-  lastUserMessageAt?: number
+  lastUserMessageAt?: number | null
 }
 
+/**
+ * Cold-path fallback for reading the most-recently-used agent without a
+ * running app — parses `root.json` off disk. When the app is running we
+ * prefer `cli.listAgents()` over RPC.
+ */
 function readAgentsFromDb(dbPath: string): AgentRow[] {
   try {
     const rootPath = join(dbPath, "root.json")
@@ -109,8 +66,7 @@ function readAgentsFromDb(dbPath: string): AgentRow[] {
   }
 }
 
-function getLastAgentId(dbPath: string): string | undefined {
-  const agents = readAgentsFromDb(dbPath)
+function pickLastAgent(agents: AgentRow[]): string | undefined {
   if (agents.length === 0) return undefined
   const sorted = [...agents]
     .filter((a) => a.lastUserMessageAt != null)
@@ -118,11 +74,12 @@ function getLastAgentId(dbPath: string): string | undefined {
   return sorted[0]?.id
 }
 
-async function interactiveResume(config: RuntimeConfig) {
-  const agents = readAgentsFromDb(config.dbPath)
+async function promptAgentSelection(
+  agents: AgentRow[],
+): Promise<AgentRow | null> {
   if (agents.length === 0) {
     console.log("No agents found.")
-    process.exit(0)
+    return null
   }
   console.log("\nAvailable agents:\n")
   for (let i = 0; i < agents.length; i++) {
@@ -142,18 +99,9 @@ async function interactiveResume(config: RuntimeConfig) {
   const idx = parseInt(input, 10) - 1
   if (isNaN(idx) || idx < 0 || idx >= agents.length) {
     console.error("Invalid selection.")
-    process.exit(1)
+    return null
   }
-  const selected = agents[idx]!
-  console.log(`\nOpening ${selected.name}...`)
-  const result = await sendSocketCommand(config.socketPath, {
-    cmd: "create-window",
-    agentId: selected.id,
-  })
-  if ((result as any).error) {
-    console.error("Error:", (result as any).error)
-    process.exit(1)
-  }
+  return agents[idx]!
 }
 
 export async function runOpen(argv: string[]) {
@@ -162,35 +110,42 @@ export async function runOpen(argv: string[]) {
     ? (...args: unknown[]) => console.error("[zen]", ...args)
     : () => {}
   const cwd = process.cwd()
-  const config = readRuntimeConfig()
 
   log("parsed args:", { agent, blocking, resume })
 
   if (resume) {
-    if (!config) {
+    const conn = await connectCli()
+    if (!conn) {
       console.error("Zenbu is not running. Start it first.")
       process.exit(1)
     }
-    await interactiveResume(config)
+    try {
+      const { agents } = await conn.rpc.cli.listAgents()
+      const selected = await promptAgentSelection(agents)
+      if (!selected) process.exit(1)
+      console.log(`\nOpening ${selected.name}...`)
+      await conn.rpc.cli.createWindow({ agentId: selected.id })
+    } catch (err) {
+      console.error("Error:", err instanceof Error ? err.message : String(err))
+      process.exit(1)
+    } finally {
+      conn.close()
+    }
     return
   }
 
-  if (config) {
+  const conn = await connectCli()
+  if (conn) {
     try {
-      const lastAgentId = agent ? undefined : getLastAgentId(config.dbPath)
-      const result = await sendSocketCommand(config.socketPath, {
-        cmd: "create-window",
-        agent,
-        agentId: lastAgentId,
-        cwd,
-      })
-      if ((result as any).error) {
-        console.error("Error:", (result as any).error)
-        process.exit(1)
-      }
+      const lastAgentId = agent
+        ? undefined
+        : pickLastAgent((await conn.rpc.cli.listAgents()).agents)
+      await conn.rpc.cli.createWindow({ agent, agentId: lastAgentId, cwd })
       return
     } catch (err) {
-      log("socket failed, falling through to spawn:", err)
+      log("rpc createWindow failed, falling through to spawn:", err)
+    } finally {
+      conn.close()
     }
   }
 
@@ -207,8 +162,8 @@ export async function runOpen(argv: string[]) {
   if (agent) {
     electronArgs.push(`--zen-agent=${agent}`)
   } else {
-    const dbPath = config?.dbPath ?? readDbPath()
-    const lastAgentId = dbPath ? getLastAgentId(dbPath) : undefined
+    const dbPath = readRuntimeConfig()?.dbPath ?? readDbPath()
+    const lastAgentId = dbPath ? pickLastAgent(readAgentsFromDb(dbPath)) : undefined
     if (lastAgentId) electronArgs.push(`--zen-agent-id=${lastAgentId}`)
   }
   electronArgs.push(`--zen-cwd=${cwd}`)

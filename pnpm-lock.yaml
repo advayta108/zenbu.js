@@ -698,6 +698,9 @@ importers:
       '@zenbu/kyju':
         specifier: workspace:*
         version: link:../kyju
+      '@zenbu/zenrpc':
+        specifier: workspace:*
+        version: link:../zenrpc
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -3917,6 +3920,7 @@ packages:
   '@xmldom/xmldom@0.8.12':
     resolution: {integrity: sha512-9k/gHF6n/pAi/9tqr3m3aqkuiNosYTurLLUtc7xQ9sxB/wm7WPygCv8GYa6mS0fLJEHhqMC1ATYhz++U/lRHqg==}
     engines: {node: '>=10.0.0'}
+    deprecated: this version has critical issues, please update to the latest version
 
   '@xterm/addon-fit@0.11.0':
     resolution: {integrity: sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==}
