@@ -230,10 +230,16 @@ export class CliService extends Service {
     this.pendingRelaunches.delete(requestId);
     resolve(decision);
     if (decision === "accept") {
-      setTimeout(() => {
-        app.relaunch();
+      // Match the canonical relaunch pattern used by runtime-control.ts,
+      // git-updates.ts, and the ipcMain("relaunch") handler in the kernel
+      // shell. `queueMicrotask` runs after zenrpc serializes this method's
+      // return value but inside the same tick — no arbitrary buffer for
+      // native FSEvents callbacks to race shutdown. `{ args: [app.getAppPath()] }`
+      // avoids the dev-mode "Unable to find Electron app" dialog.
+      queueMicrotask(() => {
+        app.relaunch({ args: [app.getAppPath()] });
         app.quit();
-      }, 50);
+      });
     }
     return { ok: true as const };
   }

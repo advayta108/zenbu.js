@@ -335,8 +335,16 @@ app.whenReady().then(async () => {
         } catch (err) {
           console.error("[shell] closeAllWatchers failed:", err);
         }
-        shutdownState = "ready";
-        app.quit();
+        // Yield once so any FSEvents/dispatch callbacks queued before
+        // watcher.close() ran get delivered into the now-closed watchers
+        // (where they're dropped) instead of racing Electron's final
+        // unwind. Without this drain, a late fsevents dispatch can fire
+        // during V8 isolate teardown → napi assertion → SIGABRT →
+        // macOS shows "Zenbu quit unexpectedly" after a clean relaunch.
+        setImmediate(() => {
+          shutdownState = "ready";
+          app.quit();
+        });
       };
 
       const r = (globalThis as any).__zenbu_service_runtime__;
