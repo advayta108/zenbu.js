@@ -61,12 +61,14 @@ export async function resolveManifestModulePath(
 }
 
 async function importFreshModule(modulePath: string): Promise<any> {
-  const stat = await fs.stat(modulePath);
-  // These schema/migration imports happen later inside DbService, so they are
-  // not part of the shell's original dynohot-managed module graph. Plain
-  // import(fileUrl) would stay cached even if the file changed on disk, so we
-  // cache-bust by mtime until section loading is moved into the main hot graph.
-  return import(`${pathToFileURL(modulePath).href}?v=${stat.mtimeMs}`);
+  // Plain `import()` so dynohot wraps the schema/migrations as live deps of
+  // DbService. When these files change, dynohot's file watcher invalidates
+  // them and propagates upward via `iterateWithDynamics`; DbService's
+  // `runtime.register(..., import.meta.hot)` accept handler re-runs
+  // evaluate(), which re-discovers sections and calls createDb with the new
+  // migrations array. Kyju's migration plugin then applies only the delta
+  // against the existing on-disk DB.
+  return import(pathToFileURL(modulePath).href);
 }
 
 function resolveConfigPath(): string {
