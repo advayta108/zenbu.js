@@ -28,6 +28,11 @@ function parseArgs(argv: string[]): Args {
     else if (arg === "--agent" && i + 1 < argv.length) agent = argv[++i]
     else if (arg.startsWith("--agent=")) agent = arg.slice("--agent=".length)
     else if (!arg.startsWith("-") && agent == null) agent = arg
+    else {
+      console.error(`zen: unknown flag "${arg}"`)
+      console.error(`valid: --agent <name>, --resume, --blocking, --verbose`)
+      process.exit(1)
+    }
   }
   return { agent, blocking, resume, verbose }
 }

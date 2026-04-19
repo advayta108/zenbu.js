@@ -44,6 +44,13 @@ Usage:
 async function main() {
   const argv = process.argv.slice(2)
   const first = argv[0]
+  // A bare positional that isn't a subcommand is almost always a typo —
+  // error instead of silently treating it as an agent name.
+  if (first && !first.startsWith("-") && !SUBCOMMANDS.has(first)) {
+    console.error(`zen: unknown subcommand "${first}"`)
+    printUsage()
+    process.exit(1)
+  }
   if (!first || !SUBCOMMANDS.has(first)) {
     await runOpen(argv)
     return
