@@ -1,31 +1,27 @@
 <p align="center">
-  <img src="./docs/logo.png" alt="Zenbu" width="48" />
+  <img src="./docs/logo.png" alt="Zenbu" width="60" />
 </p>
 
 <h1 align="center">Zenbu</h1>
 
 <p align="center">
   <img alt="status: beta" src="https://img.shields.io/badge/status-beta-orange"><br>
-  The extensible coding agent GUI.
+  The extensible coding agent GUI
 </p>
 
+
+
 <p align="center">
-  <img src="./docs/screenshot.webp" alt="Zenbu Screenshot" width="400" />
+  <img src="./docs/screenshot.webp" width="640" style="background: transparent;" />
 </p>
 
 ## Installation
 
 Download the latest build from [zenbu.dev/download](https://www.zenbu.dev/download) or [GitHub Releases](https://github.com/zenbu-labs/zenbu/releases).
 
-When you launch the app, this repo will be cloned under ~/.zenbu/plugins. You can modify any source code of the app in this directory and changes will hot reload.
-
-### Dependencies:
-
-- git
-
 ## Plugins
 
-Zenbu is built out of plugins. Plugins are units of code that can modify the app's behavior.
+Plugins are units of code that can modify the app's behavior.
 
 Plugins are configured at `~/.zenbu/config.jsonc`:
 
@@ -37,7 +33,7 @@ Plugins are configured at `~/.zenbu/config.jsonc`:
 }
 ```
 
-The plugin API is not yet stable or complete, but you can reference the [core plugin](https://github.com/zenbu-labs/zenbu/tree/main/packages/init) to learn about what plugin API's are available and how to setup a plugin
+The plugin API is not yet stable or complete, but you can reference the [core plugin](https://github.com/zenbu-labs/zenbu/tree/main/packages/init) to learn what plugin API's are available and how to setup a plugin
 
 ## Configuring agents
 
@@ -85,4 +81,4 @@ Run `zen --help` for the full list of subcommands.
 
 This is a very early project and may include breaking changes on any commit
 
-If an agent or update breaks your code, `git stash` inside `~/.zenbu/plugins/zenbu`, or delete `~/.zenbu/` and the app will reinstall itself on next launch.
+If an agent or update breaks your app, remove your changes made to `~/.zenbu/plugins/zenbu` with `git`, or delete `~/.zenbu/` and the app will reinstall itself on next launch.
