@@ -198,6 +198,7 @@ function GeneralSection() {
         availableModels: [],
         availableThinkingLevels: [],
         availableModes: [],
+        defaultConfiguration: {}
       },
     ]);
     if (!selectedConfigId) {
@@ -2273,15 +2274,7 @@ function RegistryCard({
               : entry.repo.replace(/^https?:\/\/github\.com\//, "")}
         </span>
       </div>
-      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-1">
-          <DownloadCloudIcon className="size-3.5" />
-          {metadata ? numberFormatter.format(metadata.stars) : "—"}
-        </span>
-        {metadata?.updatedAt && (
-          <span>Updated {formatRelativeTime(metadata.updatedAt)}</span>
-        )}
-      </div>
+    
       {entry.description && (
         <p className="text-xs text-muted-foreground line-clamp-3 flex-1">
           {entry.description}
