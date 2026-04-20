@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="./docs/screenshot.webp" alt="Zenbu Screenshot" />
+  <img src="./docs/screenshot.webp" alt="Zenbu Screenshot" width="400" />
 </p>
 
 ## Installation
