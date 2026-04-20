@@ -1,12 +1,12 @@
-
+<img src="./docs/logo.png" alt="Zenbu" width="72" />
 
 # Zenbu
 
-status: beta
+![status: beta](https://img.shields.io/badge/status-beta-orange)
 
 The extensible coding agent GUI.
 
-
+![Zenbu](./docs/screenshot.webp)
 
 ## Installation
 
