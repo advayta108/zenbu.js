@@ -1,0 +1,1 @@
+An abstraction over the agent client protocol to simplify state syncronization and agent incompatibilities

@@ -1,0 +1,1 @@
+[Emacs Lisp](https://www.gnu.org/software/emacs/manual/html_node/elisp/Advising-Functions.html) inspired function modification
