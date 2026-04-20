@@ -13,6 +13,8 @@ import { INTERNAL_DIR, RUNTIME_JSON } from "../../../shared/paths";
 import {
   insertHotAgent,
   validSelectionFromTemplate,
+  findExistingAgentTab,
+  activateAgentTab,
   type ArchivedAgent,
 } from "../../../shared/agent-ops";
 
@@ -146,6 +148,18 @@ export class CliService extends Service {
 
       agentId = newAgentId;
     } else if (agentId) {
+      const existing = findExistingAgentTab(kernel.windowStates, agentId);
+      if (existing) {
+        await Effect.runPromise(
+          client.update((root) => {
+            activateAgentTab(root.plugin.kernel, existing);
+          }),
+        );
+        const win = this.ctx.baseWindow.windows.get(existing.windowId);
+        if (win && !win.isDestroyed()) win.focus();
+        return { windowId: existing.windowId, agentId };
+      }
+
       const sessionId = nanoid();
       await Effect.runPromise(
         client.update((root) => {

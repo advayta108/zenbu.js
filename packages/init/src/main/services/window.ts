@@ -24,6 +24,8 @@ import { registerAdvice, registerContentScript } from "./advice-config";
 import {
   insertHotAgent,
   validSelectionFromTemplate,
+  findExistingAgentTab,
+  activateAgentTab,
   type ArchivedAgent,
 } from "../../../shared/agent-ops";
 
@@ -138,6 +140,18 @@ export class WindowService extends Service {
       )[0];
 
     if (!lastAgent) return this.createWindowWithAgent();
+
+    const existing = findExistingAgentTab(kernel.windowStates, lastAgent.id);
+    if (existing) {
+      await Effect.runPromise(
+        client.update((root) => {
+          activateAgentTab(root.plugin.kernel, existing);
+        }),
+      );
+      const win = baseWindow.windows.get(existing.windowId);
+      if (win && !win.isDestroyed()) win.focus();
+      return { windowId: existing.windowId, agentId: lastAgent.id };
+    }
 
     const windowId = nanoid();
     const sessionId = nanoid();

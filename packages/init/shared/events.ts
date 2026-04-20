@@ -24,4 +24,18 @@ export type ZenbuEvents = {
      */
     relaunchRequested: { requestId: string; pluginName: string; reason: string }
   }
+  fileViewer: {
+    /**
+     * Emitted by `FileViewerService.callExtension` to ask the connected VSCode
+     * extension (zenbu-bridge) to execute a stringified function against the
+     * vscode API. The extension replies via `completeExtensionCall(requestId, ...)`.
+     */
+    extensionCallRequested: { requestId: string; fnString: string; context: unknown }
+    /**
+     * Emitted by `FileViewerService.openFile` so the orchestrator-level advice
+     * opens the code-server iframe modal, regardless of whether the extension
+     * ultimately navigates successfully.
+     */
+    openFileRequested: { filePath: string }
+  }
 }

@@ -8,6 +8,8 @@ import { DbService } from "./db";
 import {
   insertHotAgent,
   validSelectionFromTemplate,
+  findExistingAgentTab,
+  activateAgentTab,
   type ArchivedAgent,
 } from "../../../shared/agent-ops";
 
@@ -79,10 +81,25 @@ export class CliIntentService extends Service {
     }
 
     let evicted: ArchivedAgent[] = [];
+    let focusWindowId: string | null = null;
 
     Effect.runPromise(
       client.update((root) => {
         const kernel = root.plugin.kernel;
+
+        // Prune orphaned windowStates (from prior cold-started sessions with
+        // no matching live Electron window). Otherwise they accumulate
+        // forever and show up as stale entries in the recent-agents palette.
+        const liveWindowIds = new Set(this.ctx.baseWindow.windows.keys());
+        const prunedCount = kernel.windowStates.filter(
+          (ws) => !liveWindowIds.has(ws.id),
+        ).length;
+        if (prunedCount > 0) {
+          kernel.windowStates = kernel.windowStates.filter((ws) =>
+            liveWindowIds.has(ws.id),
+          );
+          console.log(`[cli-intent] pruned ${prunedCount} orphaned windowStates`);
+        }
 
         if (existingAgentId) {
           const existingAgent = kernel.agents.find(
@@ -90,6 +107,16 @@ export class CliIntentService extends Service {
           );
           if (!existingAgent) {
             console.warn(`[cli-intent] No agent with id "${existingAgentId}"`);
+            return;
+          }
+
+          const existingTab = findExistingAgentTab(
+            kernel.windowStates,
+            existingAgentId,
+          );
+          if (existingTab) {
+            activateAgentTab(kernel, existingTab);
+            focusWindowId = existingTab.windowId;
             return;
           }
 
@@ -184,6 +211,10 @@ export class CliIntentService extends Service {
           await Effect.runPromise(
             client.plugin.kernel.archivedAgents.concat(evicted),
           ).catch(() => {});
+        }
+        if (focusWindowId) {
+          const win = this.ctx.baseWindow.windows.get(focusWindowId);
+          if (win && !win.isDestroyed()) win.focus();
         }
       })
       .catch((err) => {
