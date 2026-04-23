@@ -20,7 +20,7 @@
 //   useFocusOnRequest("orchestrator", () => rootRef.current?.focus())
 
 import { useCallback, useEffect, useRef } from "react";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { useDb } from "./kyju-react";
 import { useKyjuClient } from "./providers";
 

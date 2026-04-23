@@ -1,5 +1,4 @@
-import type { Effect } from "effect";
-
+import type * as Effect from "effect/Effect";
 export type AnyRouter = {
   [key: string]: ((...args: any[]) => any) | AnyRouter;
 };

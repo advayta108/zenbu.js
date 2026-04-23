@@ -128,7 +128,7 @@ describe("Terminal + AcpClient handler wiring", () => {
       removeDestroy?.();
       if (agent) {
         try {
-          await Effect.runPromise(agent.close());
+          await agent.close();
         } catch {}
       }
     });
@@ -152,7 +152,7 @@ describe("Terminal + AcpClient handler wiring", () => {
         cwd: process.cwd(),
       };
 
-      agent = await Effect.runPromise(Agent.create(config));
+      agent = await Agent.create(config);
 
       const tm = agent.getTerminalManager();
       expect(tm).toBeDefined();
@@ -183,14 +183,14 @@ describe("Terminal + AcpClient handler wiring", () => {
         cwd: process.cwd(),
       };
 
-      agent = await Effect.runPromise(Agent.create(config));
+      agent = await Agent.create(config);
 
       const tm = agent.getTerminalManager();
       tm.create({ command: "sleep", args: ["60"], sessionId: "" });
       tm.create({ command: "sleep", args: ["60"], sessionId: "" });
       expect(tm.getAll().length).toBe(2);
 
-      await Effect.runPromise(agent.close());
+      await agent.close();
       agent = null;
       expect(tm.getAll().length).toBe(0);
     });

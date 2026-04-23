@@ -50,7 +50,7 @@ function makeObserver() {
 }
 
 async function currentSessionId(agent: Agent): Promise<string | null> {
-  const state = await Effect.runPromise(agent.getState());
+  const state = await agent.getState();
   return state.kind === "ready" || state.kind === "prompting"
     ? state.sessionId
     : null;
@@ -78,8 +78,7 @@ function createCodexAgent(
   cwd: string,
   id?: string,
 ) {
-  return Effect.runPromise(
-    Agent.create({
+  return Agent.create({
       id,
       clientConfig: {
         command: "npx",
@@ -89,8 +88,7 @@ function createCodexAgent(
       },
       cwd,
       onSessionUpdate,
-    }),
-  );
+    });
 }
 
 function createCursorAgent(
@@ -98,8 +96,7 @@ function createCursorAgent(
   cwd: string,
   id?: string,
 ) {
-  return Effect.runPromise(
-    Agent.create({
+  return Agent.create({
       id,
       clientConfig: {
         command: "agent",
@@ -109,8 +106,7 @@ function createCursorAgent(
       },
       cwd,
       onSessionUpdate,
-    }),
-  );
+    });
 }
 
 function makeTempDir(suffix: string): string {
@@ -132,7 +128,7 @@ describe.skipIf(!codexAvailable)("Agent config update (Codex)", () => {
 
   afterEach(async () => {
     if (agent) {
-      await Effect.runPromise(agent.close()).catch(() => {});
+      await agent.close().catch(() => {});
     }
   });
 
@@ -143,14 +139,12 @@ describe.skipIf(!codexAvailable)("Agent config update (Codex)", () => {
 
     agent = await createCodexAgent(obs.onSessionUpdate, dirA, "cwd-test");
 
-    await Effect.runPromise(
-      agent.send([
+    await agent.send([
         {
           type: "text",
           text: "Respond with ONLY the absolute path of your current working directory. No other text.",
         },
-      ]),
-    );
+      ]);
 
     const responseA = extractResponseText(obs.events);
     expect(responseA).toContain(dirA);
@@ -159,18 +153,16 @@ describe.skipIf(!codexAvailable)("Agent config update (Codex)", () => {
     expect(sessionBefore).toBeTruthy();
     const eventCountBefore = obs.events.length;
 
-    await Effect.runPromise(agent.changeCwd(dirB));
+    await agent.changeCwd(dirB);
 
-    await Effect.runPromise(
-      agent.send([
+    await agent.send([
         {
           type: "text",
           text: "Respond with ONLY the absolute path of your current working directory. No other text.",
         },
-      ]),
-    );
+      ]);
 
-    const state = await Effect.runPromise(agent.getState());
+    const state = await agent.getState();
     expect(state.kind).toBe("ready");
 
     const responseB = extractResponseText(obs.events, eventCountBefore);
@@ -194,16 +186,14 @@ describe.skipIf(!codexAvailable)("Agent config update (Codex)", () => {
       "preserve-test",
     );
 
-    await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
+    await agent.send([{ type: "text", text: "hello" }]);
 
     const sessionBefore = await currentSessionId(agent);
     expect(sessionBefore).toBeTruthy();
 
-    await Effect.runPromise(agent.changeCwd(dirB));
+    await agent.changeCwd(dirB);
 
-    await Effect.runPromise(
-      agent.send([{ type: "text", text: "hello again" }]),
-    );
+    await agent.send([{ type: "text", text: "hello again" }]);
 
     const sessionAfter = await currentSessionId(agent);
     expect(sessionAfter).toBe(sessionBefore);
@@ -217,7 +207,7 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
 
     afterEach(async () => {
       if (agent) {
-        await Effect.runPromise(agent.close()).catch(() => {});
+        await agent.close().catch(() => {});
       }
     });
 
@@ -227,14 +217,12 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
 
       agent = await createCodexAgent(obs.onSessionUpdate, dir, "switch-test");
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "Respond with ONLY the word 'alpha'. Nothing else.",
           },
-        ]),
-      );
+        ]);
 
       const codexResponse = extractResponseText(obs.events).toLowerCase();
       expect(codexResponse).toContain("alpha");
@@ -243,18 +231,16 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
       const sessionBefore = await currentSessionId(agent);
       expect(sessionBefore).toBeTruthy();
 
-      await Effect.runPromise(agent.changeStartCommand("agent", ["acp"]));
+      await agent.changeStartCommand("agent", ["acp"]);
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "Respond with ONLY the word 'beta'. Nothing else.",
           },
-        ]),
-      );
+        ]);
 
-      const stateAfterSend = await Effect.runPromise(agent.getState());
+      const stateAfterSend = await agent.getState();
       expect(stateAfterSend.kind).toBe("ready");
 
       const cursorResponse = extractResponseText(
@@ -280,14 +266,12 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
         "switch-back-test",
       );
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "Respond with ONLY the word 'gamma'. Nothing else.",
           },
-        ]),
-      );
+        ]);
 
       const cursorResponse = extractResponseText(obs.events).toLowerCase();
       expect(cursorResponse).toContain("gamma");
@@ -295,20 +279,16 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
 
       const sessionBefore = await currentSessionId(agent);
 
-      await Effect.runPromise(
-        agent.changeStartCommand("npx", ["tsx", codexAcpBridge]),
-      );
+      await agent.changeStartCommand("npx", ["tsx", codexAcpBridge]);
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "Respond with ONLY the word 'delta'. Nothing else.",
           },
-        ]),
-      );
+        ]);
 
-      const state = await Effect.runPromise(agent.getState());
+      const state = await agent.getState();
       expect(state.kind).toBe("ready");
 
       const codexResponse = extractResponseText(
@@ -329,14 +309,14 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
 
       agent = await createCodexAgent(obs.onSessionUpdate, dir, "clear-test");
 
-      await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
+      await agent.send([{ type: "text", text: "hello" }]);
 
       const sessionBefore = await currentSessionId(agent);
       expect(sessionBefore).toBeTruthy();
 
-      await Effect.runPromise(agent.changeStartCommand("agent", ["acp"]));
+      await agent.changeStartCommand("agent", ["acp"]);
 
-      await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
+      await agent.send([{ type: "text", text: "hello" }]);
 
       const sessionAfter = await currentSessionId(agent);
       expect(sessionAfter).toBeTruthy();
@@ -356,23 +336,23 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
 
       agent = await createCodexAgent(obs.onSessionUpdate, dir, "bad-cmd-test");
 
-      await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
+      await agent.send([{ type: "text", text: "hello" }]);
 
-      const stateBefore = await Effect.runPromise(agent.getState());
+      const stateBefore = await agent.getState();
       expect(stateBefore.kind).toBe("ready");
 
-      await Effect.runPromise(
-        agent.changeStartCommand(
+      await agent.changeStartCommand(
           "nonexistent-binary-that-does-not-exist-xyz",
           [],
-        ),
       );
 
-      const result = await Effect.runPromiseExit(
-        agent.send([{ type: "text", text: "hello" }]),
-      );
-
-      expect(result._tag).toBe("Failure");
+      let threw = false;
+      try {
+        await agent.send([{ type: "text", text: "hello" }]);
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(true);
     }, 30_000);
   },
 );
@@ -384,7 +364,7 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
 
     afterEach(async () => {
       if (agent) {
-        await Effect.runPromise(agent.close()).catch(() => {});
+        await agent.close().catch(() => {});
       }
     });
 
@@ -398,30 +378,26 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
         "handoff-codeword-test",
       );
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "Remember this codeword: pineapple. Just acknowledge it.",
           },
-        ]),
-      );
+        ]);
 
       const codexResponse = extractResponseText(obs.events).toLowerCase();
       expect(codexResponse.length).toBeGreaterThan(0);
 
       const eventsBeforeSwitch = obs.events.length;
 
-      await Effect.runPromise(agent.changeStartCommand("agent", ["acp"]));
+      await agent.changeStartCommand("agent", ["acp"]);
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "What was the codeword from the previous conversation? Respond with ONLY the codeword inside a <codeword> XML tag, like <codeword>word</codeword>. Nothing else.",
           },
-        ]),
-      );
+        ]);
 
       const cursorResponse = extractResponseText(obs.events, eventsBeforeSwitch);
       const match = cursorResponse.match(/<codeword>(.*?)<\/codeword>/i);
@@ -439,27 +415,23 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
         "handoff-once-test",
       );
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "Remember: the secret is 'mango'. Acknowledge.",
           },
-        ]),
-      );
+        ]);
 
       const eventsBeforeSwitch = obs.events.length;
 
-      await Effect.runPromise(agent.changeStartCommand("agent", ["acp"]));
+      await agent.changeStartCommand("agent", ["acp"]);
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "What was the secret from the previous conversation? Reply with ONLY the secret word in a <secret> tag.",
           },
-        ]),
-      );
+        ]);
 
       const firstResponse = extractResponseText(obs.events, eventsBeforeSwitch);
       const firstMatch = firstResponse.match(/<secret>(.*?)<\/secret>/i);
@@ -468,14 +440,12 @@ describe.skipIf(!codexAvailable || !cursorAvailable)(
 
       const eventsAfterFirst = obs.events.length;
 
-      await Effect.runPromise(
-        agent.send([
+      await agent.send([
           {
             type: "text",
             text: "Reply with ONLY the word 'confirmed'. Nothing else.",
           },
-        ]),
-      );
+        ]);
 
       const secondResponse = extractResponseText(
         obs.events,
@@ -492,7 +462,7 @@ describe.skipIf(!codexAvailable)("Agent handoff on loadSession unsupported", () 
 
   afterEach(async () => {
     if (agent) {
-      await Effect.runPromise(agent.close()).catch(() => {});
+      await agent.close().catch(() => {});
     }
   });
 
@@ -500,8 +470,7 @@ describe.skipIf(!codexAvailable)("Agent handoff on loadSession unsupported", () 
     const obs = makeObserver();
     const dir = makeTempDir("no-load");
 
-    agent = await Effect.runPromise(
-      Agent.create({
+    agent = await Agent.create({
         id: "no-load-test",
         clientConfig: {
           command: "npx",
@@ -511,17 +480,14 @@ describe.skipIf(!codexAvailable)("Agent handoff on loadSession unsupported", () 
         },
         cwd: dir,
         onSessionUpdate: obs.onSessionUpdate,
-      }),
-    );
+      });
 
-    await Effect.runPromise(
-      agent.send([
+    await agent.send([
         {
           type: "text",
           text: "Remember this exact word: starfruit. Just say 'acknowledged'.",
         },
-      ]),
-    );
+      ]);
 
     const responseAfterFirst = extractResponseText(obs.events);
     expect(responseAfterFirst.length).toBeGreaterThan(0);
@@ -531,16 +497,14 @@ describe.skipIf(!codexAvailable)("Agent handoff on loadSession unsupported", () 
 
     const eventsBeforeRestart = obs.events.length;
 
-    await Effect.runPromise(agent.changeCwd(makeTempDir("no-load-b")));
+    await agent.changeCwd(makeTempDir("no-load-b"));
 
-    await Effect.runPromise(
-      agent.send([
+    await agent.send([
         {
           type: "text",
           text: "In the conversation transcript you were given, what word was the user asked you to remember? Say ONLY that single word, nothing else.",
         },
-      ]),
-    );
+      ]);
 
     const sessionAfter = await currentSessionId(agent);
     expect(sessionAfter).not.toBe(sessionBefore);

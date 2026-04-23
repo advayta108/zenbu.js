@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { Effect } from "effect";
-import { NodeContext } from "@effect/platform-node";
-import { FileSystem } from "@effect/platform";
+import * as NodeContext from "@effect/platform-node/NodeContext";
+import * as FileSystem from "@effect/platform/FileSystem";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -10,6 +10,7 @@ import {
   cleanupStaleTmpFiles,
   readJsonFile,
   writeJsonFile,
+  type DbConfig,
 } from "../src/v2/db/helpers";
 
 /**
@@ -18,18 +19,42 @@ import {
  * the file truncated to zero bytes, then every subsequent boot crashed
  * with `SyntaxError: Unexpected end of JSON input` from `JSON.parse`.
  *
- * The atomic implementation writes to `${path}.tmp-<nanoid>` and renames
- * over the destination — `rename(2)` is atomic within a filesystem, so
- * readers see either the old contents or the new contents, never empty.
+ * The atomic implementation stages writes in `config.tmpDir`
+ * (`<dbPath>/.tmp/`) and renames to the destination — `rename(2)` is
+ * atomic within a filesystem, so readers see either the old contents or
+ * the new, never partial.
+ *
+ * The dedicated `.tmp/` directory (vs sibling `.tmp-<id>` files scattered
+ * beside every destination) keeps startup recovery O(pending-writes): one
+ * readdir of `.tmp/`, delete everything there.
  */
 
 const runFs = <A>(eff: Effect.Effect<A, unknown, FileSystem.FileSystem>): Promise<A> =>
   Effect.runPromise(eff.pipe(Effect.provide(NodeContext.layer)) as any) as Promise<A>;
 
 let dir: string;
+let cfg: DbConfig;
 beforeEach(() => {
   dir = path.join(os.tmpdir(), `kyju-helpers-${nanoid()}`);
   fs.mkdirSync(dir, { recursive: true });
+  const tmpDir = path.join(dir, ".tmp");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  // Only fields writeJsonFile actually reads — dbPath + tmpDir.
+  cfg = {
+    dbPath: dir,
+    tmpDir,
+    rootName: "root",
+    collectionsDirName: "collections",
+    collectionIndexName: "index",
+    pagesDirName: "pages",
+    pageIndexName: "index",
+    pageDataName: "data",
+    blobsDirName: "blobs",
+    blobIndexName: "index",
+    blobDataName: "data",
+    maxPageSize: 1024 * 1024,
+    checkReferences: false,
+  };
 });
 afterEach(() => {
   try {
@@ -44,7 +69,7 @@ describe("writeJsonFile", () => {
     await runFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        yield* writeJsonFile({ fs, path: target, data });
+        yield* writeJsonFile({ fs, config: cfg, path: target, data });
       }),
     );
 
@@ -62,13 +87,21 @@ describe("writeJsonFile", () => {
     await runFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        yield* writeJsonFile({ fs, path: target, data: { ok: true } });
+        yield* writeJsonFile({
+          fs,
+          config: cfg,
+          path: target,
+          data: { ok: true },
+        });
       }),
     );
-    const stragglers = fs
-      .readdirSync(dir)
-      .filter((name) => name.startsWith("root.json.tmp-"));
-    expect(stragglers).toEqual([]);
+    // After successful write, tmpDir should be empty — the staged file was
+    // renamed over the destination.
+    expect(fs.readdirSync(cfg.tmpDir)).toEqual([]);
+    // And no stray files appear beside the destination either.
+    expect(fs.readdirSync(dir).filter((n) => n !== ".tmp").sort()).toEqual([
+      "root.json",
+    ]);
   });
 
   it("never leaves the destination empty (rename is atomic)", async () => {
@@ -86,13 +119,12 @@ describe("writeJsonFile", () => {
       data: "old",
     });
 
-    // Now perform an atomic write. Even if we observe the destination
-    // mid-flight, it's never empty — it's the old contents or the new.
     const writePromise = runFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* writeJsonFile({
           fs,
+          config: cfg,
           path: target,
           data: { version: 2, data: "new".repeat(10000) },
         });
@@ -113,11 +145,9 @@ describe("writeJsonFile", () => {
 
     for (const content of observations) {
       expect(content.length).toBeGreaterThan(0);
-      // Should not throw — atomic writes never expose partial JSON.
       JSON.parse(content);
     }
 
-    // Final state is the new payload.
     const final = JSON.parse(fs.readFileSync(target, "utf-8"));
     expect(final.version).toBe(2);
   });
@@ -127,43 +157,51 @@ describe("writeJsonFile", () => {
     await runFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        yield* writeJsonFile({ fs, path: target, data: { v: 1 } });
-        yield* writeJsonFile({ fs, path: target, data: { v: 2 } });
-        yield* writeJsonFile({ fs, path: target, data: { v: 3 } });
+        yield* writeJsonFile({ fs, config: cfg, path: target, data: { v: 1 } });
+        yield* writeJsonFile({ fs, config: cfg, path: target, data: { v: 2 } });
+        yield* writeJsonFile({ fs, config: cfg, path: target, data: { v: 3 } });
       }),
     );
     expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({ v: 3 });
+    expect(fs.readdirSync(cfg.tmpDir)).toEqual([]);
   });
 
-  it("cleanupStaleTmpFiles removes orphaned *.tmp-<id> files", async () => {
-    // Simulate stragglers left by a hard-killed previous process.
-    fs.writeFileSync(path.join(dir, "root.json"), JSON.stringify({ ok: true }));
-    fs.writeFileSync(path.join(dir, "root.json.tmp-abc12345"), "partial");
-    fs.writeFileSync(path.join(dir, "blobs.json.tmp-xyz98765"), "partial2");
-    // Files we MUST NOT touch — no `.tmp-` infix.
+  it("cleanupStaleTmpFiles reclaims everything in tmpDir", async () => {
+    // Simulate orphans left behind by a hard-killed previous process.
+    // Anything in tmpDir is by definition orphaned at startup — a successful
+    // write would have renamed its file away.
+    fs.writeFileSync(path.join(cfg.tmpDir, "root.json-abc12345"), "partial1");
+    fs.writeFileSync(path.join(cfg.tmpDir, "index.json-def67890"), "partial2");
+    fs.writeFileSync(path.join(cfg.tmpDir, "anything-at-all"), "partial3");
+
+    // Files outside tmpDir must NOT be touched.
+    fs.writeFileSync(path.join(dir, "root.json"), "{}");
     fs.writeFileSync(path.join(dir, "real-data.json"), "{}");
-    fs.writeFileSync(path.join(dir, "weird-name.tmpfoo"), "{}");
-    // Subdirectory with another straggler — sweep recurses.
     const sub = path.join(dir, "collections", "messages");
     fs.mkdirSync(sub, { recursive: true });
-    fs.writeFileSync(path.join(sub, "page.json.tmp-deadbeef"), "p");
-    fs.writeFileSync(path.join(sub, "page.json"), "{}");
+    fs.writeFileSync(path.join(sub, "index.json"), "{}");
 
     await runFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        yield* cleanupStaleTmpFiles(fs, dir);
+        yield* cleanupStaleTmpFiles(fs, cfg.tmpDir);
       }),
     );
 
-    const top = fs.readdirSync(dir).sort();
-    expect(top).toEqual(["collections", "real-data.json", "root.json", "weird-name.tmpfoo"]);
-    const subEntries = fs.readdirSync(sub).sort();
-    expect(subEntries).toEqual(["page.json"]);
+    // tmpDir drained.
+    expect(fs.readdirSync(cfg.tmpDir)).toEqual([]);
+    // Non-tmp files preserved.
+    expect(fs.readdirSync(dir).sort()).toEqual([
+      ".tmp",
+      "collections",
+      "real-data.json",
+      "root.json",
+    ]);
+    expect(fs.readdirSync(sub)).toEqual(["index.json"]);
   });
 
-  it("cleanupStaleTmpFiles is a no-op when dbPath doesn't exist", async () => {
-    const missing = path.join(dir, "does-not-exist");
+  it("cleanupStaleTmpFiles is a no-op when tmpDir doesn't exist", async () => {
+    const missing = path.join(dir, "missing-tmp");
     await runFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -174,17 +212,17 @@ describe("writeJsonFile", () => {
   });
 
   it("uses unique tmp paths so concurrent writes don't clobber each other", async () => {
-    // If two writes raced through a fixed `${path}.tmp` filename one
-    // could rename a partial of the other. nanoid suffixes prevent that.
+    // If two writes raced through a fixed filename one could rename a
+    // partial of the other. nanoid suffixes prevent that.
     const target = path.join(dir, "root.json");
     await runFs(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* Effect.all(
           [
-            writeJsonFile({ fs, path: target, data: { who: "a" } }),
-            writeJsonFile({ fs, path: target, data: { who: "b" } }),
-            writeJsonFile({ fs, path: target, data: { who: "c" } }),
+            writeJsonFile({ fs, config: cfg, path: target, data: { who: "a" } }),
+            writeJsonFile({ fs, config: cfg, path: target, data: { who: "b" } }),
+            writeJsonFile({ fs, config: cfg, path: target, data: { who: "c" } }),
           ],
           { concurrency: "unbounded" },
         );
@@ -193,11 +231,6 @@ describe("writeJsonFile", () => {
 
     const final = JSON.parse(fs.readFileSync(target, "utf-8"));
     expect(["a", "b", "c"]).toContain(final.who);
-
-    // No leftover tmp files regardless of race ordering.
-    const stragglers = fs
-      .readdirSync(dir)
-      .filter((name) => name.startsWith("root.json.tmp-"));
-    expect(stragglers).toEqual([]);
+    expect(fs.readdirSync(cfg.tmpDir)).toEqual([]);
   });
 });

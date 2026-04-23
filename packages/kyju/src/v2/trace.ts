@@ -1,5 +1,4 @@
-import { Effect } from "effect";
-
+import * as Effect from "effect/Effect";
 /**
  * Boot-trace instrumentation for kyju's hot paths.
  *

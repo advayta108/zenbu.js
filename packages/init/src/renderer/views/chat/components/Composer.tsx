@@ -397,23 +397,27 @@ export function Composer({
         client.plugin.kernel.composerDrafts.set(next);
       }
 
-      if (streaming) {
-        // Interrupt with prompt — server handles event log ordering
-        // (interrupted event, then user_prompt, then sends to agent)
-        try {
-          await rpc.agent.interrupt(
-            agentId,
-            text,
-            images.length > 0 ? images : undefined,
-          );
-        } catch (err) {
-          console.error("[composer] rpc.agent.interrupt failed", err);
-        }
-        if (images.length > 0) {
-          client.plugin.kernel.chatBlobs.set([]).catch(() => {});
-        }
-        return;
-      }
+      console.log('sending', text);
+      
+      // if (streaming) {
+      //   // Interrupt with prompt — server handles event log ordering
+      //   // (interrupted event, then user_prompt, then sends to agent)
+      //   try {
+      //     console.log('interrupt');
+          
+      //     await rpc.agent.interrupt(
+      //       agentId,
+      //       text,
+      //       images.length > 0 ? images : undefined,
+      //     );
+      //   } catch (err) {
+      //     console.error("[composer] rpc.agent.interrupt failed", err);
+      //   }
+      //   if (images.length > 0) {
+      //     client.plugin.kernel.chatBlobs.set([]).catch(() => {});
+      //   }
+      //   return;
+      // }
 
       const agentIndex = client.plugin.kernel.agents
         .read()

@@ -144,7 +144,7 @@ export function createBridge(opts?: { noLoadSession?: boolean }) {
     async initialize(
       params: acp.InitializeRequest,
     ): Promise<acp.InitializeResponse> {
-      codex = createCodexTransport();
+      codex = await createCodexTransport();
       setupCodexListeners(codex, this.conn);
 
       await codex.sendRequest("initialize", {

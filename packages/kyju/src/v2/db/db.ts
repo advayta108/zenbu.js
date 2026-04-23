@@ -1,7 +1,9 @@
-import { Effect, Ref } from "effect";
-import { FileSystem } from "@effect/platform";
-import { NodeFileSystem } from "@effect/platform-node";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as FileSystem from "@effect/platform/FileSystem";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { nanoid } from "nanoid";
+import nodePath from "node:path";
 import type { DbSendEvent, KyjuJSON, ServerEvent } from "../shared";
 import {
   type DbConfig,
@@ -14,6 +16,7 @@ import {
   writeJsonFile,
 } from "./helpers";
 import { makeRootCache } from "./root-cache";
+import { traceKyju } from "../trace";
 import type { Schema, SchemaShape } from "./schema";
 import type { KyjuMigration, SectionConfig } from "../migrations";
 import type { DbHandlerContext } from "./helpers";
@@ -68,7 +71,7 @@ export type Db<TShape extends SchemaShape = SchemaShape> = {
 
 const DEFAULT_CONFIG: Omit<
   DbConfig,
-  "dbPath" | "maxPageSize" | "checkReferences"
+  "dbPath" | "tmpDir" | "maxPageSize" | "checkReferences"
 > = {
   rootName: "root",
   collectionsDirName: "collections",
@@ -139,7 +142,7 @@ const finalizeAndWriteRoot = function* (
     yield* createCollection({ fs, config, collectionId });
   }
 
-  yield* writeJsonFile({ fs, path: paths.root({ config }), data: finalRoot });
+  yield* writeJsonFile({ fs, config, path: paths.root({ config }), data: finalRoot });
 };
 
 const initializeDbIfNeeded = (
@@ -189,33 +192,49 @@ const createDbEffect = <TShape extends SchemaShape>(
     const config: DbConfig = {
       ...DEFAULT_CONFIG,
       dbPath: userConfig.path,
+      tmpDir: nodePath.join(userConfig.path, ".tmp"),
       maxPageSize: userConfig.maxPageSize ?? 1024 * 1024,
       checkReferences: userConfig.checkReferences ?? false,
     };
 
-    if (userConfig.sections) {
-      const names = userConfig.sections.map((s) => s.name);
-      const dupes = names.filter((n, i) => names.indexOf(n) !== i);
-      if (dupes.length > 0) {
-        throw new Error(
-          `Duplicate section names: ${[...new Set(dupes)].join(", ")}`,
-        );
-      }
-      yield* initializeSectionedDbIfNeeded(fs, config, userConfig.sections);
-    } else if (userConfig.schema) {
-      yield* initializeDbIfNeeded(fs, config, userConfig.schema);
-    }
+    // Ensure the dedicated tmp staging directory exists before anything else
+    // can try to write. Every `writeJsonFile` stages through `config.tmpDir`
+    // and then renames to its destination; the rename is only atomic when
+    // both paths live on the same filesystem, which they do by construction
+    // (both under `dbPath`).
+    yield* fs.makeDirectory(config.tmpDir, { recursive: true });
 
-    // `writeJsonFile` writes to `*.tmp-<nanoid>` then renames over the
-    // destination. If the process is hard-killed between the tmp write
-    // and the rename, the tmp file is left behind. Sweep them on init —
-    // they're guaranteed orphaned at this point because no writer is
-    // active yet.
-    yield* cleanupStaleTmpFiles(fs, config.dbPath).pipe(
-      Effect.catchAll((err) => {
-        console.error("[kyju:db] tmp sweep failed (non-fatal):", err);
-        return Effect.void;
+    yield* traceKyju(
+      "kyju:db.init.dir-setup",
+      Effect.gen(function* () {
+        if (userConfig.sections) {
+          const names = userConfig.sections.map((s) => s.name);
+          const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+          if (dupes.length > 0) {
+            throw new Error(
+              `Duplicate section names: ${[...new Set(dupes)].join(", ")}`,
+            );
+          }
+          yield* initializeSectionedDbIfNeeded(fs, config, userConfig.sections);
+        } else if (userConfig.schema) {
+          yield* initializeDbIfNeeded(fs, config, userConfig.schema);
+        }
       }),
+    );
+
+    // Reclaim orphan tmp files from prior processes. Runs inline — it's a
+    // single flat `readdir` on a directory that's empty in the common case,
+    // so it costs nothing when there's nothing to clean. Safe because no
+    // writer is active yet: every file currently in `tmpDir` is by
+    // definition an orphan (successful writes were renamed away).
+    yield* traceKyju(
+      "kyju:db.init.tmp-cleanup",
+      cleanupStaleTmpFiles(fs, config.tmpDir).pipe(
+        Effect.catchAll((err) => {
+          console.error("[kyju:db] tmp sweep failed (non-fatal):", err);
+          return Effect.void;
+        }),
+      ),
     );
 
     const sessionsRef = yield* Ref.make(new Map<string, Session>());
@@ -229,7 +248,10 @@ const createDbEffect = <TShape extends SchemaShape>(
     // there's something to read; runs BEFORE `runPlugins` (which executes
     // migrations via client.update → handleWrite, which now reads/writes
     // through the cache).
-    const rootCache = yield* makeRootCache(fs, config, rootMutex);
+    const rootCache = yield* traceKyju(
+      "kyju:db.init.make-cache",
+      makeRootCache(fs, config, rootMutex),
+    );
 
     const ctx: DbHandlerContext = {
       fs,
@@ -284,14 +306,17 @@ const createDbEffect = <TShape extends SchemaShape>(
       ];
     }
 
-    const localReplica = yield* runPlugins(ctx, postMessageEffect, plugins);
+    const localReplica = yield* traceKyju(
+      "kyju:db.init.run-plugins",
+      runPlugins(ctx, postMessageEffect, plugins),
+    );
     yield* latch.open;
 
     // Migrations may have written to the root cache; drain to disk before
     // returning so the on-disk state reflects all pre-start work. If we
     // crashed between createDb resolving and the next flush, the next boot
     // would otherwise re-run migrations (since their effects live in cache).
-    yield* rootCache.flush();
+    yield* traceKyju("kyju:db.init.final-flush", rootCache.flush());
 
     const client = createClient<TShape>(localReplica);
     const effectClient = createEffectClient<TShape>(localReplica);

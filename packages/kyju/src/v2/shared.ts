@@ -1,5 +1,6 @@
-import { Context, Ref, SubscriptionRef } from "effect";
-
+import * as Context from "effect/Context";
+import * as Ref from "effect/Ref";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 export const VERSION = 0;
 
 export type KyjuJSON =

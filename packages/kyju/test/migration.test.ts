@@ -743,9 +743,12 @@ describe("migration plugin (default-only alter via runtime)", () => {
       mode: f.string().default(""),
     });
 
-    const { replica: r0 } = await openDb(dbPath, initialSchema, []);
+    const { db: db0, replica: r0 } = await openDb(dbPath, initialSchema, []);
     const c0 = createClient<InferSchema<typeof initialSchema>>(r0);
     await c0.mode.set("user-custom-mode");
+    // Lagged persistence: flush db0 to disk before reopening, mimicking
+    // what production does on shutdown / hot-reload.
+    await db0.flush();
 
     const nextSchema = createSchema({
       mode: f.string().default("fundamental-mode"),
@@ -867,7 +870,7 @@ describe("migration plugin (imperative array transform)", () => {
     });
 
     // Create DB with initial data
-    const { replica: r0 } = await openDb(dbPath, initialSchema, []);
+    const { db: db0, replica: r0 } = await openDb(dbPath, initialSchema, []);
     const c0 = createClient<InferSchema<typeof initialSchema>>(r0);
 
     // Add some views without agentId
@@ -881,6 +884,9 @@ describe("migration plugin (imperative array transform)", () => {
       { id: "codex-acp", name: "Codex", startCommand: "" },
     ]);
     expect((c0.views.read() as any[]).every((v: any) => !v.agentId)).toBe(true);
+
+    // Lagged persistence: flush db0 to disk before reopening.
+    await db0.flush();
 
     // Now open with migration that adds mock-acp and agentId
     const nextSchema = createSchema({

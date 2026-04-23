@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { Service, runtime } from "../runtime";
 import { ReloaderService, type ReloaderEntry } from "./reloader";
 import { DbService } from "./db";
@@ -97,7 +97,7 @@ export class ViewRegistryService extends Service {
   evaluate() {
     this.loadManifestIcons();
 
-    this.effect("view-registry-cleanup", () => {
+    this.setup("view-registry-cleanup", () => {
       return async () => {
         for (const [scope, entry] of this.views) {
           if (entry.ownsServer) {
@@ -131,7 +131,7 @@ export class ViewRegistryService extends Service {
   }
 
   private async syncToDb(): Promise<void> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     const snapshot = [...this.views.values()].map((e) => ({
       scope: e.scope,
       url: e.url,

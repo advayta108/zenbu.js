@@ -142,6 +142,30 @@ function needsBootstrapper(): boolean {
 
 app.whenReady().then(async () => {
   try {
+    // Optional CPU profile for boot-time diagnosis. Enable with
+    // ZENBU_CPU_PROFILE=1. Writes `~/.zenbu/.internal/boot.cpuprofile` on
+    // bootBus.ready, parseable by Chrome DevTools or our own analyzer.
+    // Started HERE (first thing in whenReady) to capture the whole boot.
+    let cpuProfilerSession:
+      | { post: (method: string, params?: any) => Promise<any>; disconnect: () => void }
+      | null = null;
+    if (process.env.ZENBU_CPU_PROFILE === "1") {
+      try {
+        const inspector = await import("node:inspector/promises");
+        const s = new inspector.Session();
+        s.connect();
+        await s.post("Profiler.enable");
+        // Sampling interval in microseconds. Default is 1000µs (1ms) —
+        // enough granularity for our ~2-3s plugin-import phase.
+        await s.post("Profiler.setSamplingInterval", { interval: 500 });
+        await s.post("Profiler.start");
+        cpuProfilerSession = s as any;
+        console.log("[cpu-prof] started (sampling every 500µs)");
+      } catch (err) {
+        console.error("[cpu-prof] failed to start:", err);
+      }
+    }
+
     // Anchor the boot timeline the moment Electron is ready — everything we do
     // from here forward is attributable. Wire the trace collectors before any
     // `traceSpan`/`mark` so the first events aren't dropped.
@@ -417,6 +441,24 @@ app.whenReady().then(async () => {
 
           console.log(`[boot-trace] wrote ${tracePath}`);
 
+          // Stop + dump CPU profile if enabled. Do it BEFORE app.quit() so
+          // the inspector session has a chance to flush.
+          if (cpuProfilerSession) {
+            try {
+              const { profile } = await cpuProfilerSession.post(
+                "Profiler.stop",
+              );
+              const profPath = path.join(internalDir, "boot.cpuprofile");
+              fs.writeFileSync(profPath, JSON.stringify(profile));
+              try {
+                cpuProfilerSession.disconnect();
+              } catch {}
+              console.log(`[cpu-prof] wrote ${profPath}`);
+            } catch (err) {
+              console.error("[cpu-prof] stop/write failed:", err);
+            }
+          }
+
           // Perf harness mode: exit cleanly after writing the trace so a
           // wrapper script can spawn-measure-spawn-measure in a loop.
           if (process.env.ZENBU_PERF_EXIT_ON_READY === "1") {
@@ -531,6 +573,54 @@ app.whenReady().then(async () => {
 
     process.chdir(projectRoot);
     console.log("[shell] cwd:", process.cwd());
+
+    // Preload discovery + kickoff. Each plugin may declare a `preload` field
+    // pointing to a module with a default async export; the kernel imports it
+    // HERE — before plugin-import — so its work overlaps with the ~2s of
+    // transform/wrap/eval that plugin-import incurs. Results live on a
+    // globalThis-keyed Map and are accessed via `getPreload(name)` (see
+    // `packages/init/src/main/preload-get.ts`).
+    //
+    // Preloads deliberately do NOT pass `{ with: { hot: "import" } }` to
+    // import(), so dynohot doesn't wrap them. Reason: dynohot's entrypoint
+    // shim owns the "hot:main" slot, and only the plugin root should occupy
+    // it. Preloads are kernel-driven code, not hot-reloadable user code.
+    const preloads = new Map<string, Promise<unknown>>();
+    (globalThis as unknown as { __zenbu_preloads__: Map<string, Promise<unknown>> })
+      .__zenbu_preloads__ = preloads;
+    await traceSpan("preload-kickoff", async () => {
+      for (const manifestPath of config.plugins) {
+        let manifest: { name?: string; preload?: string };
+        try {
+          manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        } catch (err) {
+          console.error(`[shell] failed to read manifest ${manifestPath}:`, err);
+          continue;
+        }
+        if (!manifest.name || !manifest.preload) continue;
+        const preloadAbs = path.resolve(
+          path.dirname(manifestPath),
+          manifest.preload,
+        );
+        const preloadURL = pathToFileURL(preloadAbs).href;
+        // `then(m => m.default())` invokes the default-export async function,
+        // so the stored Promise resolves to the preload's RESULT, not the
+        // module. This matches what consumers see via `getPreload`.
+        preloads.set(
+          manifest.name,
+          import(preloadURL).then(
+            (m) => (m.default as () => Promise<unknown>)(),
+            (err) => {
+              console.error(
+                `[shell] preload import failed for ${manifest.name}:`,
+                err,
+              );
+              throw err;
+            },
+          ),
+        );
+      }
+    });
 
     bootBus.emit("status", { message: "Loading plugins…" });
 

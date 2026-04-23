@@ -11,7 +11,7 @@ import {
   globalShortcut,
   shell,
 } from "electron";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid";
 import { makeCollection } from "@zenbu/kyju/schema";
 import electronContextMenu from "electron-context-menu";
@@ -70,7 +70,7 @@ export class WindowService extends Service {
 
   async createWindowWithAgent() {
     const { baseWindow, db } = this.ctx;
-    const client = db.client;
+    const client = db.effect.client;
     const kernel = client.readRoot().plugin.kernel;
     const selectedConfig =
       kernel.agentConfigs.find((c) => c.id === kernel.selectedConfigId) ??
@@ -134,7 +134,7 @@ export class WindowService extends Service {
 
   async createWindowWithLastOrNewAgent() {
     const { baseWindow, db } = this.ctx;
-    const client = db.client;
+    const client = db.effect.client;
     const kernel = client.readRoot().plugin.kernel;
     const lastAgent = kernel.agents
       .filter((a) => a.lastUserMessageAt != null)
@@ -237,7 +237,7 @@ export class WindowService extends Service {
     sessionId: string;
   }): Promise<{ windowId: string } | null> {
     const { baseWindow, db } = this.ctx;
-    const client = db.client;
+    const client = db.effect.client;
     const kernel = client.readRoot().plugin.kernel;
 
     const sourceWinState = (kernel.windowStates ?? []).find(
@@ -312,7 +312,7 @@ export class WindowService extends Service {
     screenY: number;
   }): Promise<{ previewWindowId: string } | null> {
     const { baseWindow, db } = this.ctx;
-    const client = db.client;
+    const client = db.effect.client;
     const kernel = client.readRoot().plugin.kernel;
 
     const sourceWinState = (kernel.windowStates ?? []).find(
@@ -495,7 +495,7 @@ export class WindowService extends Service {
     if (preview && !preview.isDestroyed()) preview.close();
 
     const { baseWindow, db } = this.ctx;
-    const client = db.client;
+    const client = db.effect.client;
 
     const windowId = nanoid();
     const newSessionId = nanoid();
@@ -557,7 +557,7 @@ export class WindowService extends Service {
     this.previewWindows.delete(opts.previewWindowId);
 
     if (pending) {
-      const client = this.ctx.db.client;
+      const client = this.ctx.db.effect.client;
       await Effect.runPromise(
         client.update((root) => {
           const srcWs = (root.plugin.kernel.windowStates ?? []).find(
@@ -619,7 +619,7 @@ export class WindowService extends Service {
   evaluate() {
     const { baseWindow, db, http, reloader, rpc } = this.ctx;
 
-    this.effect("preview-cleanup", () => {
+    this.setup("preview-cleanup", () => {
       return () => {
         for (const preview of this.previewWindows.values()) {
           if (!preview.isDestroyed()) preview.close();
@@ -629,7 +629,7 @@ export class WindowService extends Service {
       };
     });
 
-    this.effect("content-views", () => {
+    this.setup("content-views", () => {
       const viewEntries = this.views;
       const scrollTouchHandlers = new Map<
         Electron.WebContents,
@@ -637,7 +637,7 @@ export class WindowService extends Service {
       >();
 
       let currentViewPath =
-        db.client.readRoot().plugin.kernel.orchestratorViewPath ??
+        db.effect.client.readRoot().plugin.kernel.orchestratorViewPath ??
         DEFAULT_VIEW_PATH;
 
       const attachView = (
@@ -767,7 +767,7 @@ export class WindowService extends Service {
         };
         const onClosed = () => {
           Effect.runPromise(
-            db.client.update((root) => {
+            db.effect.client.update((root) => {
               root.plugin.kernel.windowStates = (
                 root.plugin.kernel.windowStates ?? []
               ).filter((ws) => ws.id !== windowId || ws.persisted === true);
@@ -828,7 +828,7 @@ export class WindowService extends Service {
       this._mountNewWindows = mountNew;
       mountNew();
 
-      const unsub = db.client.plugin.kernel.orchestratorViewPath.subscribe(
+      const unsub = db.effect.client.plugin.kernel.orchestratorViewPath.subscribe(
         (newPath) => {
           const resolved = newPath || DEFAULT_VIEW_PATH;
           if (resolved === currentViewPath) return;
@@ -845,7 +845,7 @@ export class WindowService extends Service {
       };
     });
 
-    this.effect("no-minimap-advice", () => {
+    this.setup("no-minimap-advice", () => {
       return registerAdvice("chat", {
         moduleId: "views/chat/components/Minimap.tsx",
         name: "Minimap",
@@ -864,7 +864,7 @@ export class WindowService extends Service {
       });
     });
 
-    this.effect("devtools-shortcut", () => {
+    this.setup("devtools-shortcut", () => {
       const accelerator =
         process.platform === "darwin"
           ? "CommandOrControl+Option+I"
@@ -877,7 +877,7 @@ export class WindowService extends Service {
       };
     });
 
-    this.effect("context-menu", () => {
+    this.setup("context-menu", () => {
       const handler = (
         _event: Electron.Event,
         contents: Electron.WebContents,
@@ -890,7 +890,7 @@ export class WindowService extends Service {
       };
     });
 
-    this.effect("dock-menu", () => {
+    this.setup("dock-menu", () => {
       if (process.platform !== "darwin") return;
       app.dock?.setMenu(
         Menu.buildFromTemplate([
@@ -904,7 +904,7 @@ export class WindowService extends Service {
       );
     });
 
-    this.effect("activate", () => {
+    this.setup("activate", () => {
       const handler = () => {
         if (baseWindow.windows.size === 0) {
           this.createWindowWithLastOrNewAgent();
@@ -916,7 +916,7 @@ export class WindowService extends Service {
       };
     });
 
-    this.effect("focused-window-tracking", () => {
+    this.setup("focused-window-tracking", () => {
       const tracked = new Map<
         Electron.BaseWindow,
         { windowId: string; onFocus: () => void; onBlur: () => void }
@@ -924,7 +924,7 @@ export class WindowService extends Service {
 
       const writeFocusedWindowId = (id: string | null) => {
         Effect.runPromise(
-          db.client.update((root) => {
+          db.effect.client.update((root) => {
             if (root.plugin.kernel.focusedWindowId !== id) {
               root.plugin.kernel.focusedWindowId = id;
             }

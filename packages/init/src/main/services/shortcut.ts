@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, webContents, type WebContents } from "electron";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { RpcService } from "./rpc";
@@ -144,7 +144,7 @@ export class ShortcutService extends Service {
    * override and fall back to the default.
    */
   async setBinding(id: string, binding: string | null): Promise<{ ok: boolean }> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     await Effect.runPromise(
       client.update((root) => {
         const overrides = root.plugin.kernel.shortcutOverrides ?? {};
@@ -167,7 +167,7 @@ export class ShortcutService extends Service {
 
   /** RPC: disable a shortcut (no binding fires it). Enable via `enable(id)`. */
   async disable(id: string): Promise<{ ok: boolean }> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     await Effect.runPromise(
       client.update((root) => {
         const disabled = root.plugin.kernel.shortcutDisabled ?? [];
@@ -180,7 +180,7 @@ export class ShortcutService extends Service {
   }
 
   async enable(id: string): Promise<{ ok: boolean }> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     await Effect.runPromise(
       client.update((root) => {
         const disabled = root.plugin.kernel.shortcutDisabled ?? [];
@@ -266,7 +266,7 @@ export class ShortcutService extends Service {
     this.entries ??= new Map<string, ShortcutEntry>();
     this.lastDispatchedAt ??= new Map<string, number>();
 
-    this.effect("content-script", () => {
+    this.setup("content-script", () => {
       const remove = registerContentScript("*", CAPTURE_SCRIPT_PATH);
       console.log(
         "[shortcut] registered capture content script:",
@@ -279,7 +279,7 @@ export class ShortcutService extends Service {
     // listener per webContents (current + future). Reads `this.entries` live
     // on each keystroke so individual shortcut register/unregister doesn't
     // need to rebind listeners.
-    this.effect("webContents-capture", () => {
+    this.setup("webContents-capture", () => {
       const tracked = new Set<WebContents>();
 
       const handleInput = (
@@ -292,7 +292,7 @@ export class ShortcutService extends Service {
           if (!matchesBinding(entry.parsedBinding, input)) continue;
           event.preventDefault();
           const focusedWindowId =
-            this.ctx.db.client.readRoot().plugin.kernel.focusedWindowId ??
+            this.ctx.db.effect.client.readRoot().plugin.kernel.focusedWindowId ??
             null;
           void this.dispatch(
             entry.id,
@@ -332,7 +332,7 @@ export class ShortcutService extends Service {
   }
 
   private async syncRegistryToDb(): Promise<void> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     const snapshot = [...this.entries.values()].map((e) => ({
       id: e.id,
       defaultBinding: e.defaultBinding,

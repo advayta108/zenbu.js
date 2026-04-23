@@ -18,7 +18,7 @@ export class {{PascalName}}ShortcutsService extends Service {
   declare ctx: { shortcut: ShortcutService }
 
   evaluate() {
-    this.effect("register:example", () =>
+    this.setup("register:example", () =>
       this.ctx.shortcut.register({
         id: "{{name}}.example",
         defaultBinding: "cmd+shift+e",

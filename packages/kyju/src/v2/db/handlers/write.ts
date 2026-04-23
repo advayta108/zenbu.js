@@ -1,4 +1,5 @@
-import { Effect, Ref } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import { nanoid } from "nanoid";
 import type { ServerEvent } from "../../shared";
 import {
@@ -166,6 +167,7 @@ const handleWriteImpl = (ctx: DbHandlerContext, event: WriteEvent) =>
               yield* Effect.all([
                 writeJsonFile({
                   fs: ctx.fs,
+                  config: ctx.config,
                   path: paths.pageIndex({
                     config: ctx.config,
                     collectionId: typedOp.collectionId,
@@ -199,6 +201,7 @@ const handleWriteImpl = (ctx: DbHandlerContext, event: WriteEvent) =>
             collectionIndex.totalCount += typedOp.data.length;
             yield* writeJsonFile({
               fs: ctx.fs,
+              config: ctx.config,
               path: collectionIndexPath,
               data: collectionIndex,
             });
@@ -367,6 +370,7 @@ const handleWriteImpl = (ctx: DbHandlerContext, event: WriteEvent) =>
             };
             yield* writeJsonFile({
               fs: ctx.fs,
+              config: ctx.config,
               path: paths.blobIndex({ config: ctx.config, blobId: typedOp.blobId }),
               data: bIdx,
             });

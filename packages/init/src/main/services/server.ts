@@ -39,7 +39,7 @@ export class ServerService extends Service {
       console.log(`[server] listening on port ${this.port}`)
     }
 
-    this.effect("server-cleanup", () => {
+    this.setup("server-cleanup", () => {
       return () => {
         this.wss?.close()
         this.server?.close()

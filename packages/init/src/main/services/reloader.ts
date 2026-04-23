@@ -320,7 +320,7 @@ export class ReloaderService extends Service {
   }
 
   evaluate() {
-    this.effect("vite-cleanup", () => {
+    this.setup("vite-cleanup", () => {
       return async () => {
         // Close each server independently — a single throw must NOT
         // skip the rest, otherwise orphan chokidar+fsevents watchers

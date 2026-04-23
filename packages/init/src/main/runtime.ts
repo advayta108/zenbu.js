@@ -2,8 +2,8 @@ import { bootBus } from "../../shared/boot-bus"
 import { trace as traceSpan, traceSync as traceSpanSync, type SpanOptions } from "../../shared/tracer"
 
 export type CleanupReason = "reload" | "shutdown"
-type EffectCleanup = ((reason: CleanupReason) => void | Promise<void>) | void
-type EffectSetup = () => EffectCleanup
+type SetupCleanup = ((reason: CleanupReason) => void | Promise<void>) | void
+type SetupFn = () => SetupCleanup
 
 interface HotContext {
   accept(): void
@@ -44,23 +44,23 @@ export abstract class Service {
 
   ctx: any
 
-  private __effectCleanups: Map<string, (reason: CleanupReason) => void | Promise<void>> = new Map()
+  private __setupCleanups: Map<string, (reason: CleanupReason) => void | Promise<void>> = new Map()
 
   abstract evaluate(): void | Promise<void>
 
-  protected effect(key: string, setup: EffectSetup): void {
-    const existing = this.__effectCleanups.get(key)
+  protected setup(key: string, fn: SetupFn): void {
+    const existing = this.__setupCleanups.get(key)
     if (existing) {
-      try { existing("reload") } catch (e) { console.error(`[hot] effect cleanup "${key}" failed:`, e) }
+      try { existing("reload") } catch (e) { console.error(`[hot] setup cleanup "${key}" failed:`, e) }
     }
     const serviceKey = (this.constructor as typeof Service).key
-    const cleanup = traceSpanSync(`effect:${key}`, () => setup(), {
+    const cleanup = traceSpanSync(`setup:${key}`, () => fn(), {
       parentKey: serviceKey,
     })
     if (cleanup) {
-      this.__effectCleanups.set(key, cleanup)
+      this.__setupCleanups.set(key, cleanup)
     } else {
-      this.__effectCleanups.delete(key)
+      this.__setupCleanups.delete(key)
     }
   }
 
@@ -94,15 +94,15 @@ export abstract class Service {
   }
 
   /** @internal */
-  async __cleanupAllEffects(reason: CleanupReason = "shutdown") {
-    for (const [key, cleanup] of this.__effectCleanups) {
+  async __cleanupAllSetups(reason: CleanupReason = "shutdown") {
+    for (const [key, cleanup] of this.__setupCleanups) {
       try {
         await cleanup(reason)
       } catch (e) {
-        console.error(`[hot] effect cleanup "${key}" failed:`, e)
+        console.error(`[hot] setup cleanup "${key}" failed:`, e)
       }
     }
-    this.__effectCleanups.clear()
+    this.__setupCleanups.clear()
   }
 }
 
@@ -301,7 +301,7 @@ export class ServiceRuntime {
     slot.error = null
 
     if (instance) {
-      await instance.__cleanupAllEffects(options.reason ?? "shutdown")
+      await instance.__cleanupAllSetups(options.reason ?? "shutdown")
     }
 
     if (options.removeSlot) {
@@ -368,7 +368,7 @@ export class ServiceRuntime {
       await Promise.all(level.map(async (key) => {
         const slot = this.slots.get(key)
         if (slot?.instance) {
-          await slot.instance.__cleanupAllEffects("reload")
+          await slot.instance.__cleanupAllSetups("reload")
         }
       }))
     }
@@ -416,7 +416,7 @@ export class ServiceRuntime {
 
     const startedAt = Date.now()
     try {
-      await instance.__cleanupAllEffects("reload")
+      await instance.__cleanupAllSetups("reload")
       this.injectCtx(instance, ServiceClass)
       // Announce the service being evaluated so the kernel loading view can
       // surface it. Only on cold boot — hot reloads are fast and the UI

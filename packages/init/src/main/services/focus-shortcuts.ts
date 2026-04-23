@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { ShortcutService } from "./shortcut";
@@ -17,7 +17,7 @@ export class FocusShortcutsService extends Service {
   declare ctx: { db: DbService; shortcut: ShortcutService };
 
   evaluate() {
-    this.effect("register:focusOrchestrator", () =>
+    this.setup("register:focusOrchestrator", () =>
       this.ctx.shortcut.register({
         id: "kernel.focusOrchestrator",
         defaultBinding: "cmd+shift+o",
@@ -27,7 +27,7 @@ export class FocusShortcutsService extends Service {
       }),
     );
 
-    this.effect("register:focusActiveView", () =>
+    this.setup("register:focusActiveView", () =>
       this.ctx.shortcut.register({
         id: "kernel.focusActiveView",
         defaultBinding: "cmd+shift+i",
@@ -42,7 +42,7 @@ export class FocusShortcutsService extends Service {
     target: string,
     windowId: string | null,
   ): Promise<void> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     const nonce = `${Date.now().toString(36)}-${Math.random()
       .toString(36)
       .slice(2, 8)}`;

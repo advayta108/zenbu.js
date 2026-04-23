@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import type { ServerEvent } from "../../shared";
 import { makeAck, sendAck } from "../helpers";
 import { type DbHandlerContext, validateSession } from "../helpers";

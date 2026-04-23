@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid";
 import { makeCollection } from "@zenbu/kyju/schema";
 import { Service, runtime } from "../runtime";
@@ -60,7 +60,7 @@ export class CliIntentService extends Service {
 
     this._processed = true;
 
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
 
     // When nothing was passed on the CLI (spotlight/dock open), fall back to
     // the last agent the user interacted with. If none exists, create a fresh

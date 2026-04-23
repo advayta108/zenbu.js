@@ -1,4 +1,5 @@
-import { Effect, Ref } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import { nanoid } from "nanoid";
 import type { ServerEvent } from "../../shared";
 import type { ClientProxy } from "../../client/client";
@@ -7,6 +8,7 @@ import type { Session } from "../helpers";
 import { createReplica } from "../../replica/replica";
 import { createClient } from "../../client/client";
 import type { DbHandlerContext } from "../helpers";
+import { traceKyju } from "../../trace";
 
 export type PluginContext = {
   client: ClientProxy<SchemaShape>;
@@ -61,11 +63,15 @@ export const runPlugins = (
 
     for (const plugin of plugins) {
       if (!plugin.onBeforeStart) continue;
-      yield* Effect.promise(() =>
-        plugin.onBeforeStart!({
-          client,
-          pluginPath: ["_plugins", plugin.name],
-        }),
+      yield* traceKyju(
+        "kyju:db.plugin.onBeforeStart",
+        Effect.promise(() =>
+          plugin.onBeforeStart!({
+            client,
+            pluginPath: ["_plugins", plugin.name],
+          }),
+        ),
+        { plugin: plugin.name },
       );
     }
 

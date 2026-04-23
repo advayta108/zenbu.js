@@ -475,7 +475,12 @@ async function ensureRegistryTypes(): Promise<void> {
     path.join(REPO_DIR, "packages/zen/shared/schema.ts"),
   )
   const dbSections = path.join(REGISTRY_DIR, "db-sections.ts")
-  if (fs.existsSync(dbSections) && readSig(marker) === sig) {
+  const preloads = path.join(REGISTRY_DIR, "preloads.ts")
+  if (
+    fs.existsSync(dbSections) &&
+    fs.existsSync(preloads) &&
+    readSig(marker) === sig
+  ) {
     logOk("registry types up-to-date")
     return
   }

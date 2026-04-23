@@ -74,7 +74,7 @@ export class BaseWindowService extends Service {
       }
     }
 
-    this.effect("window-cleanup", () => {
+    this.setup("window-cleanup", () => {
       return () => {
         this.savedWindows = [...this.windows.entries()].map(([windowId, win]) => ({
           windowId,

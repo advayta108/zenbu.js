@@ -1,5 +1,6 @@
-import { Effect, Ref } from "effect";
-import { FileSystem } from "@effect/platform";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
+import * as FileSystem from "@effect/platform/FileSystem";
 import nodePath from "node:path";
 import { nanoid } from "nanoid";
 import type { Ack, ClientEvent, DbSendEvent, DbUpdateMessage, KyjuJSON, KyjuError, WriteOp } from "../shared";
@@ -7,6 +8,14 @@ import type { Ack, ClientEvent, DbSendEvent, DbUpdateMessage, KyjuJSON, KyjuErro
 
 export type DbConfig = {
   dbPath: string;
+  /**
+   * Single location for all in-flight atomic writes. Every `writeJsonFile`
+   * stages to `${tmpDir}/${basename}-${nanoid}`, then renames to its final
+   * path. Startup recovery reads just this one directory — O(pending) not
+   * O(db size) — and by the time kyju starts, any file here is provably
+   * orphaned.
+   */
+  tmpDir: string;
   rootName: string;
   collectionsDirName: string;
   collectionIndexName: string;
@@ -251,6 +260,7 @@ export const createCollection = ({
     yield* Effect.all([
       writeJsonFile({
         fs,
+        config,
         path: paths.collectionIndex({ config, collectionId }),
         data: {
           activePageId: pageId,
@@ -260,6 +270,7 @@ export const createCollection = ({
       }),
       writeJsonFile({
         fs,
+        config,
         path: paths.pageIndex({ config, collectionId, pageId }),
         data: { pageId, order: 0 } satisfies PageIndex,
       }),
@@ -292,6 +303,7 @@ export const createBlob = ({
 
     yield* writeJsonFile({
       fs,
+      config,
       path: paths.blobIndex({ config, blobId }),
       data: {
         blobId,
@@ -307,76 +319,76 @@ export const readJsonFile = ({ fs, path: filePath }: { fs: FileSystem.FileSystem
   });
 
 /**
- * Atomic JSON write: write to a sibling tempfile then `rename` over the
- * destination. Prevents a process-kill mid-write (Electron shutdown,
- * SIGABRT, ctrl-C) from leaving the file truncated to zero bytes — a
- * non-atomic `writeFileString` opens with O_TRUNC|O_CREAT and the file
- * is empty until the write completes, so any death in that window
- * corrupts callers that JSON.parse it next boot ("Unexpected end of
- * JSON input").
+ * Atomic JSON write.
  *
- * `rename(2)` on POSIX is atomic within the same filesystem, so readers
- * always see either the old contents or the fully-written new contents,
- * never a partial. Tmp filenames carry a nanoid suffix so concurrent
- * writes can't clobber each other.
+ * Writes happen in two steps: the JSON is staged in the dedicated
+ * `config.tmpDir` under a unique filename, then `rename(2)`'d over the
+ * final path. `rename` is atomic within a filesystem, so readers always
+ * observe either the prior contents or the fully-written new contents —
+ * never a partial. A process death between write and rename leaves an
+ * orphan tmp file; `cleanupStaleTmpFiles` sweeps those at boot.
+ *
+ * Staging all tmp files into a single, known directory (rather than
+ * alongside each destination as `<file>.tmp-<id>`) means recovery is O(1)
+ * in directory count: one readdir on `<dbPath>/.tmp/`. The previous
+ * "sentinel suffix scattered across the tree" layout forced an O(db-size)
+ * tree walk on every boot.
+ *
+ * Precondition: `config.tmpDir` must exist (createDb creates it during
+ * init) and live on the same filesystem as `filePath` (always true when
+ * both are under `config.dbPath`).
  */
-export const TMP_SUFFIX_PREFIX = ".tmp-";
-
-export const writeJsonFile = ({ fs, path: filePath, data }: { fs: FileSystem.FileSystem; path: string; data: unknown }) =>
+export const writeJsonFile = ({
+  fs,
+  config,
+  path: filePath,
+  data,
+}: {
+  fs: FileSystem.FileSystem;
+  config: DbConfig;
+  path: string;
+  data: unknown;
+}) =>
   Effect.gen(function* () {
     const json = JSON.stringify(data);
-    const tmpPath = `${filePath}${TMP_SUFFIX_PREFIX}${nanoid(8)}`;
+    const tmpPath = nodePath.join(
+      config.tmpDir,
+      `${nodePath.basename(filePath)}-${nanoid(8)}`,
+    );
     yield* fs.writeFileString(tmpPath, json);
     yield* fs.rename(tmpPath, filePath);
   });
 
 /**
- * Sweep orphaned `*.tmp-<nanoid>` files under `dbPath`. These can be
- * left behind if the process was hard-killed between `writeFileString`
- * and `rename` in `writeJsonFile`. Safe to call once on init — by then
- * no writer is active yet so any tmp file is provably stale. Best-effort:
- * a single file we fail to delete doesn't abort the rest.
+ * Reclaim orphan tmp files under `config.tmpDir`. Intended to run at
+ * startup, before any writer is active — every file remaining in tmpDir
+ * at that moment is by definition an orphan from a prior process (the
+ * successful writes got rename'd away; the unsuccessful ones never made
+ * it to their final destinations).
+ *
+ * O(pending tmp files), not O(db size). Single flat directory, no
+ * recursion, no sentinel matching.
  */
 export const cleanupStaleTmpFiles = (
   fs: FileSystem.FileSystem,
-  dbPath: string,
+  tmpDir: string,
 ) =>
   Effect.gen(function* () {
-    if (!(yield* fs.exists(dbPath))) return;
-    yield* sweepDir(fs, dbPath);
-  });
-
-const sweepDir = (
-  fs: FileSystem.FileSystem,
-  dir: string,
-): Effect.Effect<void, never, never> =>
-  Effect.gen(function* () {
-    const entries = (yield* fs.readDirectory(dir).pipe(
+    if (!(yield* fs.exists(tmpDir))) return;
+    const entries = yield* fs.readDirectory(tmpDir).pipe(
       Effect.catchAll(() => Effect.succeed([] as string[])),
-    )) as string[];
+    );
     for (const name of entries) {
-      const full = nodePath.join(dir, name);
-      const stat = yield* fs.stat(full).pipe(
-        Effect.catchAll(() => Effect.succeed(null)),
+      const full = nodePath.join(tmpDir, name);
+      yield* fs.remove(full).pipe(
+        Effect.catchAll((err) => {
+          console.error(
+            `[kyju:db] failed to remove stale tmp ${full}:`,
+            err,
+          );
+          return Effect.void;
+        }),
       );
-      if (!stat) continue;
-      if (stat.type === "Directory") {
-        yield* sweepDir(fs, full);
-        continue;
-      }
-      // We only delete files whose basename includes our well-known
-      // sentinel — never touch user data.
-      if (name.includes(TMP_SUFFIX_PREFIX)) {
-        yield* fs.remove(full).pipe(
-          Effect.catchAll((err) => {
-            console.error(
-              `[kyju:db] failed to remove stale tmp ${full}:`,
-              err,
-            );
-            return Effect.void;
-          }),
-        );
-      }
     }
   });
 

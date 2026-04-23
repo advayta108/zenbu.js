@@ -14,7 +14,7 @@ export class {{PascalName}}ViewService extends Service {
   declare ctx: { viewRegistry: ViewRegistryService }
 
   evaluate() {
-    this.effect("register-view", () => {
+    this.setup("register-view", () => {
       const serviceDir = path.dirname(fileURLToPath(import.meta.url))
       const viewRoot = path.resolve(serviceDir, "..", "view")
       const configFile = path.resolve(serviceDir, "..", "..", "vite.config.ts")

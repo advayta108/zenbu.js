@@ -9,6 +9,7 @@ import type {
   KillTerminalResponse,
   ReleaseTerminalResponse,
 } from "@agentclientprotocol/sdk";
+import { applyUserShellPath } from "./user-shell-env";
 
 export type TerminalExitStatus = {
   exitCode: number | null;
@@ -233,7 +234,7 @@ export class TerminalManager {
     this.maxLifetimeMs = opts?.maxLifetimeMs ?? DEFAULT_MAX_LIFETIME_MS;
   }
 
-  create(params: CreateTerminalRequest): CreateTerminalResponse {
+  async create(params: CreateTerminalRequest): Promise<CreateTerminalResponse> {
     const terminalId = nanoid();
     const args = params.args ?? [];
     console.log("creating terminal", args);
@@ -248,6 +249,21 @@ export class TerminalManager {
       }
     }
 
+    // Augment the spawn env with the user's login-shell PATH so commands
+    // installed via ~/.zshrc (rbenv, custom brew prefixes, ~/.hades/bin, ...)
+    // are discoverable. The preload runs concurrently with kernel boot, so
+    // this is typically resolved already.
+    const augmented = await applyUserShellPath(
+      env ? { ...process.env, ...env } : { ...process.env },
+    );
+    // Re-project back to Record<string, string> for the ManagedTerminal ctor,
+    // which further merges with process.env — but since `augmented` already
+    // is the full env, the ctor's merge is a no-op on PATH.
+    const mergedEnv: Record<string, string> = {};
+    for (const [k, v] of Object.entries(augmented)) {
+      if (typeof v === "string") mergedEnv[k] = v;
+    }
+
     const outputByteLimit = params.outputByteLimit ?? null;
 
     const terminal = new ManagedTerminal(
@@ -255,7 +271,7 @@ export class TerminalManager {
       params.command,
       args,
       cwd,
-      env,
+      mergedEnv,
       outputByteLimit,
       this.maxLifetimeMs,
     );

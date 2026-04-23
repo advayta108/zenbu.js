@@ -1,4 +1,8 @@
-import { Effect, Fiber, Ref, Stream, SubscriptionRef } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { nanoid } from "nanoid";
 import {
   type Ack,

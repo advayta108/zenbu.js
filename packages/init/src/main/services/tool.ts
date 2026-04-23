@@ -107,7 +107,7 @@ export class ToolService extends Service {
       }
     });
 
-    this.effect("tool-cleanup", () => {
+    this.setup("tool-cleanup", () => {
       return async (reason) => {
         unsubCreate();
         unsubDestroy();

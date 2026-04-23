@@ -1,18 +1,17 @@
 import { describe, it, expectTypeOf } from "vitest";
-import type { Effect } from "effect";
-import type { EffectClientProxy, KyjuError } from "@zenbu/kyju";
+import type { ClientProxy } from "@zenbu/kyju";
 import { agentSchema, type AgentDb, type AgentRoot } from "../src/schema.ts";
 import type { AgentConfig } from "../src/agent.ts";
 
 type AgentShape = typeof agentSchema.shape;
-type FragmentClient = EffectClientProxy<AgentShape>;
+type FragmentClient = ClientProxy<AgentShape>;
 
 /**
  * These tests never execute meaningful runtime code; they exist purely so
  * the TypeScript compiler checks the structural contract between the agent
- * package's expectations (`AgentDb`) and what a real kyju effect client
- * provides. `expectTypeOf` throws at runtime only if the types don't line
- * up statically, so it's safe to assert once per case.
+ * package's expectations (`AgentDb`) and what a real kyju client provides.
+ * `expectTypeOf` throws at runtime only if the types don't line up
+ * statically, so it's safe to assert once per case.
  */
 describe("AgentDb structural contract", () => {
   it("a kyju client over exactly agentSchema satisfies AgentDb", () => {
@@ -23,10 +22,8 @@ describe("AgentDb structural contract", () => {
     expectTypeOf<AgentDb["readRoot"]>().returns.toEqualTypeOf<AgentRoot>();
   });
 
-  it("update() returns the kyju Effect<void, KyjuError>", () => {
-    expectTypeOf<AgentDb["update"]>().returns.toEqualTypeOf<
-      Effect.Effect<void, KyjuError>
-    >();
+  it("update() returns Promise<void>", () => {
+    expectTypeOf<AgentDb["update"]>().returns.toEqualTypeOf<Promise<void>>();
   });
 
   it("a handle with extra fields is still a valid AgentDb (structural subset)", () => {

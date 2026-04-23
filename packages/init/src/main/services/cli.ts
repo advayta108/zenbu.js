@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { app } from "electron";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid";
 import { makeCollection } from "@zenbu/kyju/schema";
 import { Service, runtime } from "../runtime";
@@ -70,7 +70,7 @@ export class CliService extends Service {
   }
 
   listAgents() {
-    const kernel = this.ctx.db.client.readRoot().plugin.kernel;
+    const kernel = this.ctx.db.effect.client.readRoot().plugin.kernel;
     return {
       agents: kernel.agents.map((a) => ({
         id: a.id,
@@ -86,7 +86,7 @@ export class CliService extends Service {
     windowId: string;
     agentId: string | null;
   }> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     const kernel = client.readRoot().plugin.kernel;
     const windowId = nanoid();
 
@@ -298,7 +298,7 @@ export class CliService extends Service {
 
   evaluate() {
     this.writeRuntimeJson();
-    this.effect("runtime-json-cleanup", () => {
+    this.setup("runtime-json-cleanup", () => {
       return () => {
         try {
           fs.unlinkSync(RUNTIME_JSON);

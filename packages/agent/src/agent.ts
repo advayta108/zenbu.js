@@ -1,4 +1,3 @@
-import { Effect, Ref, Deferred, Cause } from "effect";
 import { nanoid } from "nanoid";
 import { unlinkSync, existsSync } from "node:fs";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -32,7 +31,7 @@ export type AgentConfig = {
   mcpServers?: acp.McpServer[];
   /**
    * Kyju-backed persistence. Structurally, the host's section-scoped
-   * effect-client (e.g. `kernelClient.plugin.kernel`) satisfies this shape.
+   * client (e.g. `kernelClient.plugin.kernel`) satisfies this shape.
    * When omitted the agent runs in ephemeral mode: sessionId + first-prompt
    * latch live in-memory only, event log writes are no-ops, and no
    * agent/config record state is synced to the DB.
@@ -69,7 +68,7 @@ export type AgentConfig = {
    * (checks / writes `firstPromptSentAt` on the agent record); otherwise
    * scoped to this Agent instance.
    */
-  firstPromptPreamble?: () => Effect.Effect<acp.ContentBlock[], unknown>;
+  firstPromptPreamble?: () => Promise<acp.ContentBlock[]>;
 };
 
 type AcpConfigExtract = {
@@ -144,6 +143,19 @@ function reconcileInstanceSelections(
   }
 }
 
+type InitLatch = {
+  promise: Promise<void>;
+  resolve: () => void;
+};
+
+function makeInitLatch(): InitLatch {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 export class Agent {
   private static beforeCreateListeners = new Set<BeforeCreateListener>();
   private static destroyListeners = new Set<DestroyListener>();
@@ -164,9 +176,9 @@ export class Agent {
 
   private id: string;
   private socketPath: string;
-  private stateRef: Ref.Ref<AgentState>;
-  private queueRef: Ref.Ref<acp.ContentBlock[]>;
-  private initDeferred: Deferred.Deferred<void>;
+  private state: AgentState = { kind: "initializing" };
+  private queue: acp.ContentBlock[] = [];
+  private initLatch: InitLatch;
   private client: AcpClient;
   private clientConfig: AcpClientConfig;
   private db: AgentDb | undefined;
@@ -175,11 +187,8 @@ export class Agent {
   private onStateChange?: (state: AgentState) => void;
   private onSessionUpdate?: (update: acp.SessionUpdate) => void;
   private _terminalManager: TerminalManager;
-  private initialContextRef: Ref.Ref<acp.ContentBlock[] | null>;
-  private firstPromptPreamble?: () => Effect.Effect<
-    acp.ContentBlock[],
-    unknown
-  >;
+  private initialContext: acp.ContentBlock[] | null = null;
+  private firstPromptPreamble?: () => Promise<acp.ContentBlock[]>;
   // Ephemeral-mode fallbacks used when `db` is absent.
   private _ephemeralSessionId: string | null = null;
   private _ephemeralFirstFired = false;
@@ -192,7 +201,7 @@ export class Agent {
 
   /**
    * Pending permission requests awaiting a `permission_response` event in
-   * the event log. When the request goes out we stash a deferred here keyed
+   * the event log. When the request goes out we stash a resolver here keyed
    * by requestId; our eventLog subscription resolves it when the user (or
    * any writer) records the response.
    */
@@ -204,32 +213,26 @@ export class Agent {
   private constructor(
     id: string,
     socketPath: string,
-    stateRef: Ref.Ref<AgentState>,
-    queueRef: Ref.Ref<acp.ContentBlock[]>,
-    initDeferred: Deferred.Deferred<void>,
+    initLatch: InitLatch,
     client: AcpClient,
     clientConfig: AcpClientConfig,
     db: AgentDb | undefined,
     cwd: string,
     mcpServers: acp.McpServer[],
     terminalManager: TerminalManager,
-    initialContextRef: Ref.Ref<acp.ContentBlock[] | null>,
     onStateChange?: (state: AgentState) => void,
     onSessionUpdate?: (update: acp.SessionUpdate) => void,
-    firstPromptPreamble?: () => Effect.Effect<acp.ContentBlock[], unknown>,
+    firstPromptPreamble?: () => Promise<acp.ContentBlock[]>,
   ) {
     this.id = id;
     this.socketPath = socketPath;
-    this.stateRef = stateRef;
-    this.queueRef = queueRef;
-    this.initDeferred = initDeferred;
+    this.initLatch = initLatch;
     this.client = client;
     this.clientConfig = clientConfig;
     this.db = db;
     this.cwd = cwd;
     this.mcpServers = mcpServers;
     this._terminalManager = terminalManager;
-    this.initialContextRef = initialContextRef;
     this.onStateChange = onStateChange;
     this.onSessionUpdate = onSessionUpdate;
     this.firstPromptPreamble = firstPromptPreamble;
@@ -250,24 +253,19 @@ export class Agent {
     return this._ephemeralSessionId;
   }
 
-  private _setSessionId(sessionId: string | null): Effect.Effect<void, never> {
+  private async _setSessionId(sessionId: string | null): Promise<void> {
     if (!this.db) {
       this._ephemeralSessionId = sessionId;
-      return Effect.void;
+      return;
     }
-    return this.db
-      .update((root) => {
+    try {
+      await this.db.update((root) => {
         const a = root.agents.find((x) => x.id === this.id);
         if (a) a.sessionId = sessionId;
-      })
-      .pipe(
-        Effect.tapError((err) =>
-          Effect.sync(() =>
-            console.warn(`[agent ${this.id}] setSessionId failed:`, err),
-          ),
-        ),
-        Effect.catchAll(() => Effect.void),
-      );
+      });
+    } catch (err) {
+      console.warn(`[agent ${this.id}] setSessionId failed:`, err);
+    }
   }
 
   private _firstPromptHasFired(): boolean {
@@ -280,43 +278,33 @@ export class Agent {
     return this._ephemeralFirstFired;
   }
 
-  private _firstPromptMarkFired(): Effect.Effect<void, never> {
+  private async _firstPromptMarkFired(): Promise<void> {
     if (!this.db) {
       this._ephemeralFirstFired = true;
-      return Effect.void;
+      return;
     }
-    return this.db
-      .update((root) => {
+    try {
+      await this.db.update((root) => {
         const a = root.agents.find((x) => x.id === this.id);
         if (a) a.firstPromptSentAt = Date.now();
-      })
-      .pipe(
-        Effect.tapError((err) =>
-          Effect.sync(() =>
-            console.warn(
-              `[agent ${this.id}] firstPrompt markFired failed:`,
-              err,
-            ),
-          ),
-        ),
-        Effect.catchAll(() => Effect.void),
+      });
+    } catch (err) {
+      console.warn(
+        `[agent ${this.id}] firstPrompt markFired failed:`,
+        err,
       );
+    }
   }
 
   private _appendEventLog(events: AgentEvent[]): void {
     if (!this.db || events.length === 0) return;
     const node = this.db.agents.find((a) => a.id === this.id);
     if (!node) return;
-    Effect.runFork(
-      node.eventLog.concat(events).pipe(
-        Effect.tapError((err) =>
-          Effect.sync(() =>
-            console.warn(`[agent ${this.id}] eventLog.concat failed:`, err),
-          ),
-        ),
-        Effect.catchAll(() => Effect.void),
-      ),
-    );
+    // Fire-and-forget: eventLog writes shouldn't block callers, but we still
+    // want to surface failures in logs.
+    node.eventLog.concat(events).catch((err) => {
+      console.warn(`[agent ${this.id}] eventLog.concat failed:`, err);
+    });
   }
 
   private _subscribeSessionUpdates() {
@@ -333,7 +321,10 @@ export class Agent {
 
         const update = e.update as any;
         if (update?.configOptions) {
-          Effect.runFork(this._reconcileConfigChange(update.configOptions));
+          // Fire-and-forget: reconcile is best-effort state-sync, don't await.
+          this._reconcileConfigChange(update.configOptions).catch((err) => {
+            console.warn(`[agent ${this.id}] reconcileConfigChange failed:`, err);
+          });
         }
       },
     );
@@ -345,40 +336,32 @@ export class Agent {
     this._appendEventLog([event]);
   }
 
-  private _setState = (state: AgentState) => {
-    const agent = this;
-    return Effect.gen(function* () {
-      yield* Ref.set(agent.stateRef, state);
-      agent.onStateChange?.(state);
-      // Sync the state projection onto the agent's DB record:
-      //   processState: string form of the state machine kind
-      //   status:       "streaming" while prompting, "idle" otherwise
-      //   lastFinishedAt: timestamp of the last transition away from "prompting"
-      if (agent.db) {
-        const status: "idle" | "streaming" =
-          state.kind === "prompting" ? "streaming" : "idle";
-        yield* agent.db
-          .update((root) => {
-            const a = root.agents.find((x) => x.id === agent.id);
-            if (!a) return;
-            a.processState = state.kind;
-            const previousStatus = a.status;
-            a.status = status;
-            if (previousStatus === "streaming" && status === "idle") {
-              a.lastFinishedAt = Date.now();
-            }
-          })
-          .pipe(
-            Effect.tapError((err) =>
-              Effect.sync(() =>
-                console.warn(`[agent ${agent.id}] state sync failed:`, err),
-              ),
-            ),
-            Effect.catchAll(() => Effect.void),
-          );
+  private async _setState(state: AgentState): Promise<void> {
+    this.state = state;
+    this.onStateChange?.(state);
+    // Sync the state projection onto the agent's DB record:
+    //   processState: string form of the state machine kind
+    //   status:       "streaming" while prompting, "idle" otherwise
+    //   lastFinishedAt: timestamp of the last transition away from "prompting"
+    if (this.db) {
+      const status: "idle" | "streaming" =
+        state.kind === "prompting" ? "streaming" : "idle";
+      try {
+        await this.db.update((root) => {
+          const a = root.agents.find((x) => x.id === this.id);
+          if (!a) return;
+          a.processState = state.kind;
+          const previousStatus = a.status;
+          a.status = status;
+          if (previousStatus === "streaming" && status === "idle") {
+            a.lastFinishedAt = Date.now();
+          }
+        });
+      } catch (err) {
+        console.warn(`[agent ${this.id}] state sync failed:`, err);
       }
-    });
-  };
+    }
+  }
 
   /**
    * Reconcile ACP-advertised config options with the DB on session start.
@@ -394,115 +377,117 @@ export class Agent {
    *     still in the available set (e.g. we remember "gpt-5" across session
    *     re-inits).
    */
-  private _reconcileConfigOptions = (
+  private async _reconcileConfigOptions(
     options: any[],
     sessionId: string,
-  ): Effect.Effect<void, never> => {
-    const agent = this;
-    return Effect.gen(function* () {
-      if (!agent.db) return;
-      const extracted = extractAcpConfig(options);
+  ): Promise<void> {
+    if (!this.db) return;
+    const extracted = extractAcpConfig(options);
 
-      const preExisting = agent.db
-        .readRoot()
-        .agents.find((a) => a.id === agent.id);
-      const preModel = preExisting?.model;
-      const preThinking = preExisting?.thinkingLevel;
-      const preMode = preExisting?.mode;
+    const preExisting = this.db
+      .readRoot()
+      .agents.find((a) => a.id === this.id);
+    const preModel = preExisting?.model;
+    const preThinking = preExisting?.thinkingLevel;
+    const preMode = preExisting?.mode;
 
-      yield* agent.db
-        .update((root) => {
-          const instance = root.agents.find((a) => a.id === agent.id);
-          const configId = instance?.configId;
-          if (configId) {
-            const template = root.agentConfigs.find((c) => c.id === configId);
-            if (template) {
-              template.availableModels = extracted.availableModels;
-              template.availableThinkingLevels =
-                extracted.availableThinkingLevels;
-              template.availableModes = extracted.availableModes;
-              // Bootstrap the template's defaultConfiguration on first
-              // handshake for this kind — so newly-created agents have
-              // something to seed from before the user has ever picked a
-              // value explicitly. The user's own toolbar selections (via
-              // setSessionConfigOption) still take precedence because they
-              // overwrite these fields unconditionally.
-              if (!template.defaultConfiguration) {
-                template.defaultConfiguration = {};
-              }
-              if (!template.defaultConfiguration.model && extracted.defaultModel) {
-                template.defaultConfiguration.model = extracted.defaultModel;
-              }
-              if (
-                !template.defaultConfiguration.thinkingLevel &&
-                extracted.defaultThinkingLevel
-              ) {
-                template.defaultConfiguration.thinkingLevel =
-                  extracted.defaultThinkingLevel;
-              }
-              if (!template.defaultConfiguration.mode && extracted.defaultMode) {
-                template.defaultConfiguration.mode = extracted.defaultMode;
-              }
+    await this.db
+      .update((root) => {
+        const instance = root.agents.find((a) => a.id === this.id);
+        const configId = instance?.configId;
+        if (configId) {
+          const template = root.agentConfigs.find((c) => c.id === configId);
+          if (template) {
+            template.availableModels = extracted.availableModels;
+            template.availableThinkingLevels =
+              extracted.availableThinkingLevels;
+            template.availableModes = extracted.availableModes;
+            // Bootstrap the template's defaultConfiguration on first
+            // handshake for this kind — so newly-created agents have
+            // something to seed from before the user has ever picked a
+            // value explicitly. The user's own toolbar selections (via
+            // setSessionConfigOption) still take precedence because they
+            // overwrite these fields unconditionally.
+            if (!template.defaultConfiguration) {
+              template.defaultConfiguration = {};
+            }
+            if (!template.defaultConfiguration.model && extracted.defaultModel) {
+              template.defaultConfiguration.model = extracted.defaultModel;
+            }
+            if (
+              !template.defaultConfiguration.thinkingLevel &&
+              extracted.defaultThinkingLevel
+            ) {
+              template.defaultConfiguration.thinkingLevel =
+                extracted.defaultThinkingLevel;
+            }
+            if (!template.defaultConfiguration.mode && extracted.defaultMode) {
+              template.defaultConfiguration.mode = extracted.defaultMode;
             }
           }
-          if (instance) {
-            if (!instance.model && extracted.defaultModel) {
-              instance.model = extracted.defaultModel;
-            }
-            if (!instance.thinkingLevel && extracted.defaultThinkingLevel) {
-              instance.thinkingLevel = extracted.defaultThinkingLevel;
-            }
-            if (!instance.mode && extracted.defaultMode) {
-              instance.mode = extracted.defaultMode;
-            }
+        }
+        if (instance) {
+          if (!instance.model && extracted.defaultModel) {
+            instance.model = extracted.defaultModel;
           }
-          if (configId) {
-            for (const sibling of root.agents) {
-              if (sibling.configId !== configId) continue;
-              reconcileInstanceSelections(sibling, extracted);
-            }
+          if (!instance.thinkingLevel && extracted.defaultThinkingLevel) {
+            instance.thinkingLevel = extracted.defaultThinkingLevel;
           }
-        })
-        .pipe(Effect.catchAll(() => Effect.void));
+          if (!instance.mode && extracted.defaultMode) {
+            instance.mode = extracted.defaultMode;
+          }
+        }
+        if (configId) {
+          for (const sibling of root.agents) {
+            if (sibling.configId !== configId) continue;
+            reconcileInstanceSelections(sibling, extracted);
+          }
+        }
+      })
+      .catch(() => {});
 
-      // Restore user-preferred selections to ACP if still valid. Calls the
-      // low-level AcpClient directly (not `setSessionConfigOption`) because
-      // we're inside `_initSession` and the high-level method waits on
-      // `initDeferred`, which wouldn't resolve until this function returns —
-      // deadlock.
-      const pushAcp = (configId: string, value: string) =>
-        agent.client
-          .setSessionConfigOption({ sessionId, configId, value })
-          .pipe(Effect.catchAll(() => Effect.succeed({ configOptions: [] })));
+    // Restore user-preferred selections to ACP if still valid. Calls the
+    // low-level AcpClient directly (not `setSessionConfigOption`) because
+    // we're inside `_initSession` and the high-level method waits on
+    // `initLatch`, which wouldn't resolve until this function returns —
+    // deadlock.
+    const pushAcp = async (configId: string, value: string) => {
+      try {
+        await this.client.setSessionConfigOption({
+          sessionId,
+          configId,
+          value,
+        });
+      } catch {}
+    };
 
-      if (
-        preModel &&
-        preModel !== extracted.defaultModel &&
-        (!extracted.availableModels.length ||
-          extracted.availableModels.some((m) => m.value === preModel))
-      ) {
-        yield* pushAcp("model", preModel);
-      }
-      if (
-        preThinking &&
-        preThinking !== extracted.defaultThinkingLevel &&
-        (!extracted.availableThinkingLevels.length ||
-          extracted.availableThinkingLevels.some(
-            (t) => t.value === preThinking,
-          ))
-      ) {
-        yield* pushAcp("reasoning_effort", preThinking);
-      }
-      if (
-        preMode &&
-        preMode !== extracted.defaultMode &&
-        (!extracted.availableModes.length ||
-          extracted.availableModes.some((m) => m.value === preMode))
-      ) {
-        yield* pushAcp("mode", preMode);
-      }
-    });
-  };
+    if (
+      preModel &&
+      preModel !== extracted.defaultModel &&
+      (!extracted.availableModels.length ||
+        extracted.availableModels.some((m) => m.value === preModel))
+    ) {
+      await pushAcp("model", preModel);
+    }
+    if (
+      preThinking &&
+      preThinking !== extracted.defaultThinkingLevel &&
+      (!extracted.availableThinkingLevels.length ||
+        extracted.availableThinkingLevels.some(
+          (t) => t.value === preThinking,
+        ))
+    ) {
+      await pushAcp("reasoning_effort", preThinking);
+    }
+    if (
+      preMode &&
+      preMode !== extracted.defaultMode &&
+      (!extracted.availableModes.length ||
+        extracted.availableModes.some((m) => m.value === preMode))
+    ) {
+      await pushAcp("mode", preMode);
+    }
+  }
 
   /**
    * React to mid-session ACP config changes (e.g. the user switched models
@@ -510,44 +495,41 @@ export class Agent {
    * and this agent instance's current selection, and snaps sibling agents
    * to the new defaults if their current selections fell out of range.
    */
-  private _reconcileConfigChange = (options: any[]) => {
-    const agent = this;
-    return Effect.gen(function* () {
-      if (!agent.db) return;
-      const extracted = extractAcpConfig(options);
+  private async _reconcileConfigChange(options: any[]): Promise<void> {
+    if (!this.db) return;
+    const extracted = extractAcpConfig(options);
 
-      yield* agent.db
-        .update((root) => {
-          const instance = root.agents.find((a) => a.id === agent.id);
-          if (!instance) return;
+    await this.db
+      .update((root) => {
+        const instance = root.agents.find((a) => a.id === this.id);
+        if (!instance) return;
 
-          const configId = instance.configId;
-          if (configId) {
-            const template = root.agentConfigs.find((c) => c.id === configId);
-            if (template) {
-              template.availableModels = extracted.availableModels;
-              template.availableThinkingLevels =
-                extracted.availableThinkingLevels;
-              template.availableModes = extracted.availableModes;
-            }
+        const configId = instance.configId;
+        if (configId) {
+          const template = root.agentConfigs.find((c) => c.id === configId);
+          if (template) {
+            template.availableModels = extracted.availableModels;
+            template.availableThinkingLevels =
+              extracted.availableThinkingLevels;
+            template.availableModes = extracted.availableModes;
           }
+        }
 
-          if (extracted.defaultModel) instance.model = extracted.defaultModel;
-          if (extracted.defaultThinkingLevel)
-            instance.thinkingLevel = extracted.defaultThinkingLevel;
-          if (extracted.defaultMode) instance.mode = extracted.defaultMode;
+        if (extracted.defaultModel) instance.model = extracted.defaultModel;
+        if (extracted.defaultThinkingLevel)
+          instance.thinkingLevel = extracted.defaultThinkingLevel;
+        if (extracted.defaultMode) instance.mode = extracted.defaultMode;
 
-          if (configId) {
-            for (const sibling of root.agents) {
-              if (sibling.id === agent.id || sibling.configId !== configId)
-                continue;
-              reconcileInstanceSelections(sibling, extracted);
-            }
+        if (configId) {
+          for (const sibling of root.agents) {
+            if (sibling.id === this.id || sibling.configId !== configId)
+              continue;
+            reconcileInstanceSelections(sibling, extracted);
           }
-        })
-        .pipe(Effect.catchAll(() => Effect.void));
-    });
-  };
+        }
+      })
+      .catch(() => {});
+  }
 
   private _buildClientConfig(base: AcpClientConfig): AcpClientConfig {
     const tm = this._terminalManager;
@@ -629,10 +611,9 @@ export class Agent {
     });
   }
 
-  private _initSession = (opts?: { freshSession?: boolean }) => {
-    const agent = this;
-    return Effect.gen(function* () {
-      const initResult = yield* agent.client.initialize({
+  private async _initSession(opts?: { freshSession?: boolean }): Promise<void> {
+    try {
+      const initResult = await this.client.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: {
           fs: { readTextFile: true, writeTextFile: true },
@@ -640,79 +621,80 @@ export class Agent {
           auth: { terminal: true },
         },
       });
-      agent.supportsLoadSession = !!initResult.agentCapabilities?.loadSession;
-      agent._logSyntheticEvent({
+      this.supportsLoadSession = !!initResult.agentCapabilities?.loadSession;
+      this._logSyntheticEvent({
         kind: "initialize",
         agentCapabilities: initResult.agentCapabilities,
       });
 
-      const advertisedAuthMethods = initResult.authMethods ?? [];
-
       const existingSessionId = opts?.freshSession
         ? null
-        : agent._getSessionId();
+        : this._getSessionId();
 
       let sessionId: string;
       if (existingSessionId) {
-        if (!agent.supportsLoadSession) {
-          yield* agent._generateHandoff();
-          const session = yield* agent.client.newSession({
-            cwd: agent.cwd,
-            mcpServers: agent.mcpServers,
+        if (!this.supportsLoadSession) {
+          this._generateHandoff();
+          const session = await this.client.newSession({
+            cwd: this.cwd,
+            mcpServers: this.mcpServers,
           });
           sessionId = session.sessionId;
-          yield* agent._setSessionId(sessionId);
-          agent._logSyntheticEvent({
+          await this._setSessionId(sessionId);
+          this._logSyntheticEvent({
             kind: "new_session",
             sessionId,
             configOptions: session.configOptions,
             modes: session.modes,
           });
           if (session.configOptions) {
-            yield* agent._reconcileConfigOptions(
+            await this._reconcileConfigOptions(
               session.configOptions,
               sessionId,
             );
           }
         } else {
-          const resumeResult = yield* Effect.either(
-            agent.client.resumeSession({
+          let resumed: acp.ResumeSessionResponse | null = null;
+          try {
+            resumed = await this.client.resumeSession({
               sessionId: existingSessionId,
-              cwd: agent.cwd,
-              mcpServers: agent.mcpServers,
-            }),
-          );
-          if (resumeResult._tag === "Right") {
+              cwd: this.cwd,
+              mcpServers: this.mcpServers,
+            });
+          } catch {
+            resumed = null;
+          }
+          if (resumed) {
             sessionId = existingSessionId;
-            agent._logSyntheticEvent({ kind: "resume_session", sessionId });
+            this._logSyntheticEvent({ kind: "resume_session", sessionId });
             // ACP doesn't accept initial mode/model/thinking in the resume
             // request — each session starts fresh on those axes until we
             // push our persisted selections back via setSessionConfigOption.
             // Without this, a relaunched agent reverts to ACP's defaults
             // for permission mode / model / thinking even though the DB
             // still records the user's picks.
-            if (resumeResult.right.configOptions) {
-              yield* agent._reconcileConfigOptions(
-                resumeResult.right.configOptions,
+            if (resumed.configOptions) {
+              await this._reconcileConfigOptions(
+                resumed.configOptions,
                 sessionId,
               );
             }
           } else {
-            yield* agent._generateHandoff();
-            const session = yield* agent.client.newSession({
-              cwd: agent.cwd,
-              mcpServers: agent.mcpServers,
+            this._generateHandoff();
+            const session = await this.client.newSession({
+              cwd: this.cwd,
+              mcpServers: this.mcpServers,
             });
             sessionId = session.sessionId;
-            yield* agent._setSessionId(sessionId);
-            agent._logSyntheticEvent({
+            await this._setSessionId(sessionId);
+            this._logSyntheticEvent({
               kind: "new_session",
               sessionId,
               configOptions: session.configOptions,
               modes: session.modes,
             });
             if (session.configOptions) {
-              yield* agent._reconcileConfigOptions(
+              await this._reconcileConfigOptions(
                 session.configOptions,
                 sessionId,
               );
@@ -720,167 +702,136 @@ export class Agent {
           }
         }
       } else {
-        const session = yield* agent.client.newSession({
-          cwd: agent.cwd,
-          mcpServers: agent.mcpServers,
+        const session = await this.client.newSession({
+          cwd: this.cwd,
+          mcpServers: this.mcpServers,
         });
         sessionId = session.sessionId;
-        yield* agent._setSessionId(sessionId);
-        agent._logSyntheticEvent({
+        await this._setSessionId(sessionId);
+        this._logSyntheticEvent({
           kind: "new_session",
           sessionId,
           configOptions: session.configOptions,
           modes: session.modes,
         });
         if (session.configOptions) {
-          yield* agent._reconcileConfigOptions(
+          await this._reconcileConfigOptions(
             session.configOptions,
             sessionId,
           );
         }
       }
 
-      yield* agent._setState({ kind: "ready", sessionId });
-      yield* flushQueue({
-        stateRef: agent.stateRef,
-        queueRef: agent.queueRef,
-        client: agent.client,
-        initialContextRef: agent.initialContextRef,
-        setState: agent._setState,
-        preamble: agent._computePreamble(),
-      });
-    }).pipe(
-      Effect.catchAllCause((cause) =>
-        Effect.gen(function* () {
-          const current = yield* Ref.get(agent.stateRef);
-          if (current.kind !== "closed") {
-            yield* agent._setState({ kind: "error", error: cause });
-          }
-        }),
-      ),
-      Effect.ensuring(Deferred.succeed(agent.initDeferred, void 0)),
+      await this._setState({ kind: "ready", sessionId });
+      await this._flushQueue();
+    } catch (err) {
+      if (this.state.kind !== "closed") {
+        await this._setState({ kind: "error", error: err });
+      }
+    } finally {
+      this.initLatch.resolve();
+    }
+  }
+
+  private _generateHandoff(): void {
+    if (this.eventBuffer.length === 0) return;
+    const { texts } = serializeEventLog(this.eventBuffer);
+    if (texts.length === 0) return;
+    const transcript = texts.join("\n\n");
+    this.pendingHandoffContext = truncateToTokenBudget(
+      `<handoff>\nThis is a continuation of a previous conversation with a different agent. Here is the transcript of that conversation for context:\n\n${transcript}\n</handoff>`,
     );
-  };
+  }
 
-  private _generateHandoff = () => {
-    const agent = this;
-    return Effect.sync(() => {
-      if (agent.eventBuffer.length === 0) return;
-      const { texts } = serializeEventLog(agent.eventBuffer);
-      if (texts.length === 0) return;
-      const transcript = texts.join("\n\n");
-      agent.pendingHandoffContext = truncateToTokenBudget(
-        `<handoff>\nThis is a continuation of a previous conversation with a different agent. Here is the transcript of that conversation for context:\n\n${transcript}\n</handoff>`,
+  private async _restart(opts?: { freshSession?: boolean }): Promise<void> {
+    this._terminalManager.releaseAll();
+    await this.client.close();
+
+    this.initLatch = makeInitLatch();
+    await this._setState({ kind: "initializing" });
+
+    const builtConfig = this._buildClientConfig(this.clientConfig);
+    try {
+      this.client = await AcpClient.create(builtConfig);
+    } catch (err) {
+      await this._setState({ kind: "error", error: err });
+      this.initLatch.resolve();
+      return;
+    }
+    this._subscribeSessionUpdates();
+    this._subscribeEventLog();
+
+    // Fire-and-forget the init; the next send() call awaits initLatch.
+    void this._initSession(opts);
+  }
+
+  static async create(config: AgentConfig): Promise<Agent> {
+    const id = config.id ?? nanoid();
+
+    const hasToolListeners = Agent.beforeCreateListeners.size > 0;
+    const socketPath = getMcpSocketPath(id);
+
+    if (hasToolListeners) {
+      await Promise.all(
+        [...Agent.beforeCreateListeners].map((l) => l(id, socketPath)),
       );
-    });
-  };
+    }
 
-  private _restart = (opts?: { freshSession?: boolean }) => {
-    const agent = this;
-    return Effect.gen(function* () {
-      agent._terminalManager.releaseAll();
-      yield* agent.client.close();
-
-      agent.initDeferred = yield* Deferred.make<void>();
-      yield* agent._setState({ kind: "initializing" });
-
-      const builtConfig = agent._buildClientConfig(agent.clientConfig);
-      const clientResult = yield* Effect.either(AcpClient.create(builtConfig));
-      if (clientResult._tag === "Left") {
-        yield* agent._setState({
-          kind: "error",
-          error: clientResult.left,
-        });
-        yield* Deferred.succeed(agent.initDeferred, void 0);
-        return;
-      }
-      agent.client = clientResult.right;
-      agent._subscribeSessionUpdates();
-      agent._subscribeEventLog();
-
-      yield* Effect.forkDaemon(agent._initSession(opts));
-    });
-  };
-
-  static create = (config: AgentConfig) =>
-    Effect.gen(function* () {
-      const id = config.id ?? nanoid();
-
-      const hasToolListeners = Agent.beforeCreateListeners.size > 0;
-      const socketPath = getMcpSocketPath(id);
-
-      if (hasToolListeners) {
-        yield* Effect.tryPromise(() =>
-          Promise.all(
-            [...Agent.beforeCreateListeners].map((l) => l(id, socketPath)),
-          ),
-        );
-      }
-
-      // The zenbu MCP proxy exposes our in-process tool registry to the ACP
-      // agent via stdio. It's only wired if BOTH conditions hold:
-      //   1. Some caller registered tools (hasToolListeners) — otherwise
-      //      there's nothing to expose.
-      //   2. The host explicitly provided `mcpProxyCommand` pointing at a
-      //      node-compatible runtime. Without this we can't safely spawn the
-      //      proxy script; users may not have node on PATH. Silent fallback
-      //      to "node" would cause ENOENT mid-handshake.
-      let mcpServers: acp.McpServer[];
-      if (hasToolListeners && config.mcpProxyCommand) {
-        const proxyScriptPath = writeProxyScript(socketPath);
-        const proxyMcpServer = {
-          type: "stdio" as const,
-          name: "zenbu",
-          command: config.mcpProxyCommand,
-          args: [proxyScriptPath],
-          env: [],
-        };
-        mcpServers = [proxyMcpServer, ...(config.mcpServers ?? [])];
-      } else {
-        mcpServers = config.mcpServers ?? [];
-      }
-
-      const stateRef = yield* Ref.make<AgentState>({ kind: "initializing" });
-      const queueRef = yield* Ref.make<acp.ContentBlock[]>([]);
-      const initialContextRef = yield* Ref.make<acp.ContentBlock[] | null>(
-        null,
-      );
-      const initDeferred = yield* Deferred.make<void>();
-
-      const terminalManager = new TerminalManager();
-
-      const baseClientConfig: AcpClientConfig = {
-        ...config.clientConfig,
+    // The zenbu MCP proxy exposes our in-process tool registry to the ACP
+    // agent via stdio. It's only wired if BOTH conditions hold:
+    //   1. Some caller registered tools (hasToolListeners) — otherwise
+    //      there's nothing to expose.
+    //   2. The host explicitly provided `mcpProxyCommand` pointing at a
+    //      node-compatible runtime. Without this we can't safely spawn the
+    //      proxy script; users may not have node on PATH. Silent fallback
+    //      to "node" would cause ENOENT mid-handshake.
+    let mcpServers: acp.McpServer[];
+    if (hasToolListeners && config.mcpProxyCommand) {
+      const proxyScriptPath = writeProxyScript(socketPath);
+      const proxyMcpServer = {
+        type: "stdio" as const,
+        name: "zenbu",
+        command: config.mcpProxyCommand,
+        args: [proxyScriptPath],
+        env: [],
       };
+      mcpServers = [proxyMcpServer, ...(config.mcpServers ?? [])];
+    } else {
+      mcpServers = config.mcpServers ?? [];
+    }
 
-      const agent = new Agent(
-        id,
-        socketPath,
-        stateRef,
-        queueRef,
-        initDeferred,
-        null as any,
-        baseClientConfig,
-        config.db,
-        config.cwd,
-        mcpServers,
-        terminalManager,
-        initialContextRef,
-        config.onStateChange,
-        config.onSessionUpdate,
-        config.firstPromptPreamble,
-      );
+    const initLatch = makeInitLatch();
+    const terminalManager = new TerminalManager();
 
-      const builtConfig = agent._buildClientConfig(baseClientConfig);
-      const client = yield* AcpClient.create(builtConfig);
-      agent.client = client;
-      agent._subscribeSessionUpdates();
-      agent._subscribeEventLog();
+    const baseClientConfig: AcpClientConfig = {
+      ...config.clientConfig,
+    };
 
-      yield* Effect.forkDaemon(agent._initSession());
+    const agent = new Agent(
+      id,
+      socketPath,
+      initLatch,
+      null as any,
+      baseClientConfig,
+      config.db,
+      config.cwd,
+      mcpServers,
+      terminalManager,
+      config.onStateChange,
+      config.onSessionUpdate,
+      config.firstPromptPreamble,
+    );
 
-      return agent;
-    });
+    const builtConfig = agent._buildClientConfig(baseClientConfig);
+    agent.client = await AcpClient.create(builtConfig);
+    agent._subscribeSessionUpdates();
+    agent._subscribeEventLog();
+
+    // Fire-and-forget the init; callers await `send()` which awaits initLatch.
+    void agent._initSession();
+
+    return agent;
+  }
 
   getId = () => this.id;
 
@@ -888,8 +839,9 @@ export class Agent {
 
   getTerminalManager = () => this._terminalManager;
 
-  setInitialContext = (content: acp.ContentBlock[]) =>
-    Ref.set(this.initialContextRef, content);
+  setInitialContext(content: acp.ContentBlock[]): void {
+    this.initialContext = content;
+  }
 
   private _applyHandoff(content: acp.ContentBlock[]): acp.ContentBlock[] {
     if (!this.pendingHandoffContext) return content;
@@ -907,340 +859,254 @@ export class Agent {
    * provider once, and marks the latch even on failure/empty-result to
    * avoid retrying on every send.
    */
-  private _computePreamble = () => {
-    const agent = this;
-    return Effect.gen(function* () {
-      if (!agent.firstPromptPreamble) return [] as acp.ContentBlock[];
+  private async _computePreamble(): Promise<acp.ContentBlock[]> {
+    if (!this.firstPromptPreamble) return [];
+    if (this._firstPromptHasFired()) return [];
 
-      if (agent._firstPromptHasFired()) return [] as acp.ContentBlock[];
+    let blocks: acp.ContentBlock[];
+    try {
+      blocks = await this.firstPromptPreamble();
+    } catch (err) {
+      console.warn("[agent] firstPromptPreamble failed:", err);
+      blocks = [];
+    }
 
-      const blocks = yield* agent.firstPromptPreamble().pipe(
-        Effect.catchAll((err) => {
-          console.warn("[agent] firstPromptPreamble failed:", err);
-          return Effect.succeed([] as acp.ContentBlock[]);
-        }),
-      );
+    await this._firstPromptMarkFired();
+    return blocks;
+  }
 
-      yield* agent._firstPromptMarkFired();
-      return blocks;
-    });
-  };
+  private async _sendPrompt(
+    sessionId: string,
+    content: acp.ContentBlock[],
+  ): Promise<void> {
+    await this._setState({ kind: "prompting", sessionId });
 
-  send = (content: acp.ContentBlock[]) => {
-    const agent = this;
-    const { stateRef, queueRef, initDeferred, client, initialContextRef } =
-      this;
-    return Effect.gen(function* () {
-      const state = yield* Ref.get(stateRef);
+    let prompt = content;
+    if (this.initialContext) {
+      prompt = [...this.initialContext, ...content];
+      this.initialContext = null;
+    }
 
-      const userText = content
-        .filter((b) => b.type === "text")
-        .map((b) => b.text)
-        .join("\n");
-      if (userText) {
-        agent.eventBuffer.push({
-          timestamp: Date.now(),
-          data: { kind: "user_prompt", text: userText },
-        });
-      }
+    const preamble = await this._computePreamble().catch(() => [] as acp.ContentBlock[]);
+    if (preamble.length > 0) {
+      prompt = [...preamble, ...prompt];
+    }
 
-      if (state.kind === "closed") {
-        return yield* Effect.fail({
-          code: "AGENT_CLOSED" as const,
-          message: "Agent is closed",
-        });
-      }
+    await this.client.prompt({ sessionId, prompt });
 
+    await this._setState({ kind: "ready", sessionId });
+  }
+
+  private async _flushQueue(): Promise<void> {
+    if (this.queue.length === 0) return;
+    if (this.state.kind !== "ready") return;
+
+    const queued = this.queue;
+    this.queue = [];
+    await this._sendPrompt(this.state.sessionId, queued);
+  }
+
+  async send(content: acp.ContentBlock[]): Promise<void> {
+    const userText = content
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+    if (userText) {
+      this.eventBuffer.push({
+        timestamp: Date.now(),
+        data: { kind: "user_prompt", text: userText },
+      });
+    }
+
+    if (this.state.kind === "closed") {
+      throw Object.assign(new Error("Agent is closed"), {
+        code: "AGENT_CLOSED" as const,
+      });
+    }
+
+    if (this.state.kind === "error") {
+      throw Object.assign(new Error("Agent failed to initialize"), {
+        code: "AGENT_ERROR" as const,
+        cause: this.state.error,
+      });
+    }
+
+    if (this.state.kind === "initializing") {
+      await this.initLatch.promise;
+      // `await` may have mutated this.state. Force a fresh read with an
+      // explicit widening cast since TS still trusts the narrowed type from
+      // before the await.
+      const state = this.state as AgentState;
       if (state.kind === "error") {
-        return yield* Effect.fail({
+        throw Object.assign(new Error("Agent failed to initialize"), {
           code: "AGENT_ERROR" as const,
-          message: "Agent failed to initialize",
           cause: state.error,
         });
       }
-
-      if (state.kind === "initializing") {
-        yield* Deferred.await(initDeferred);
-        const newState = yield* Ref.get(stateRef);
-        if (newState.kind === "error") {
-          return yield* Effect.fail({
-            code: "AGENT_ERROR" as const,
-            message: "Agent failed to initialize",
-            cause: newState.error,
-          });
-        }
-        if (newState.kind === "closed") {
-          return yield* Effect.fail({
-            message: "Agent is closed",
-          });
-        }
-        if (newState.kind === "ready") {
-          yield* sendPrompt({
-            stateRef,
-            client,
-            initialContextRef,
-            sessionId: newState.sessionId,
-            content: agent._applyHandoff(content),
-            setState: agent._setState,
-            preamble: agent._computePreamble(),
-          });
-        }
-        return;
+      if (state.kind === "closed") {
+        throw new Error("Agent is closed");
       }
-
-      if (state.kind === "prompting") {
-        yield* Ref.update(queueRef, (q) => [
-          ...q,
-          ...agent._applyHandoff(content),
-        ]);
-        return;
+      if (state.kind === "ready") {
+        await this._sendPrompt(
+          state.sessionId,
+          this._applyHandoff(content),
+        );
       }
+      return;
+    }
 
-      yield* sendPrompt({
-        stateRef,
-        client,
-        initialContextRef,
-        sessionId: state.sessionId,
-        content: agent._applyHandoff(content),
-        setState: agent._setState,
-        preamble: agent._computePreamble(),
-      });
-      yield* flushQueue({
-        stateRef,
-        queueRef,
-        client,
-        initialContextRef,
-        setState: agent._setState,
-        preamble: agent._computePreamble(),
-      });
-    });
-  };
+    if (this.state.kind === "prompting") {
+      this.queue = [...this.queue, ...this._applyHandoff(content)];
+      return;
+    }
 
-  getState = () => Ref.get(this.stateRef);
+    const readyState = this.state;
+    if (readyState.kind !== "ready") return;
+    await this._sendPrompt(
+      readyState.sessionId,
+      this._applyHandoff(content),
+    );
+    await this._flushQueue();
+  }
 
-  getDebugState = () => {
-    const agent = this;
-    return Effect.gen(function* () {
-      const state = yield* Ref.get(agent.stateRef);
-      return {
-        id: agent.id,
-        state: state.kind,
-        sessionId:
-          state.kind === "ready" || state.kind === "prompting"
-            ? state.sessionId
-            : null,
-        command: agent.clientConfig.command,
-        args: agent.clientConfig.args,
-        cwd: agent.cwd,
-        supportsLoadSession: agent.supportsLoadSession,
-        hasPendingHandoff: agent.pendingHandoffContext !== null,
-        eventBufferSize: agent.eventBuffer.length,
-      };
-    });
-  };
+  getState(): AgentState {
+    return this.state;
+  }
 
-  changeCwd = (newCwd: string) => {
-    const agent = this;
-    return Effect.gen(function* () {
-      agent.cwd = newCwd;
-      agent.clientConfig = { ...agent.clientConfig, cwd: newCwd };
-      yield* agent._restart();
-    });
-  };
-
-  changeStartCommand = (command: string, args: string[]) => {
-    const agent = this;
-    return Effect.gen(function* () {
-      yield* agent._generateHandoff();
-      yield* agent._setSessionId(null);
-      agent.clientConfig = { ...agent.clientConfig, command, args };
-      yield* agent._restart({ freshSession: true });
-    });
-  };
-
-  setSessionConfigOption = (
-    configId: string,
-    value: string,
-  ): Effect.Effect<void, unknown> => {
-    const agent = this;
-    const { stateRef, initDeferred, client } = this;
-    return Effect.gen(function* () {
-      yield* Deferred.await(initDeferred);
-      const state = yield* Ref.get(stateRef);
-      if (state.kind === "error" || state.kind === "closed") return;
-      const sessionId =
+  getDebugState(): {
+    id: string;
+    state: AgentState["kind"];
+    sessionId: string | null;
+    command: string;
+    args: string[];
+    cwd: string;
+    supportsLoadSession: boolean;
+    hasPendingHandoff: boolean;
+    eventBufferSize: number;
+  } {
+    const state = this.state;
+    return {
+      id: this.id,
+      state: state.kind,
+      sessionId:
         state.kind === "ready" || state.kind === "prompting"
           ? state.sessionId
-          : null;
-      if (!sessionId) return;
-      const result = yield* client.setSessionConfigOption({
-        sessionId,
-        configId,
-        value,
-      });
+          : null,
+      command: this.clientConfig.command,
+      args: this.clientConfig.args,
+      cwd: this.cwd,
+      supportsLoadSession: this.supportsLoadSession,
+      hasPendingHandoff: this.pendingHandoffContext !== null,
+      eventBufferSize: this.eventBuffer.length,
+    };
+  }
 
-      // Mirror the user's selection onto the live instance state
-      // (`agents[i].{model|thinkingLevel|mode}`).
-      //
-      // For model/thinkingLevel we also write the template default so a
-      // freshly-spawned agent of the same kind starts with the user's most
-      // recent pick. Mode is deliberately excluded: selecting a mode for
-      // one agent must not silently change what every new agent defaults
-      // to. The mode default is seeded once from ACP on first handshake
-      // (see `_reconcileConfigOptions`) and otherwise only changes via an
-      // explicit "set as default" action in the UI.
-      //
-      // ACP configId -> record field mapping:
-      //   "model" -> model
-      //   "reasoning_effort" -> thinkingLevel
-      //   "mode" -> mode
-      if (agent.db) {
-        yield* agent.db
-          .update((root) => {
-            const a = root.agents.find((x) => x.id === agent.id);
-            if (!a) return;
-            if (configId === "model") a.model = value;
-            else if (configId === "reasoning_effort") a.thinkingLevel = value;
-            else if (configId === "mode") a.mode = value;
+  async changeCwd(newCwd: string): Promise<void> {
+    this.cwd = newCwd;
+    this.clientConfig = { ...this.clientConfig, cwd: newCwd };
+    await this._restart();
+  }
 
-            const template = root.agentConfigs.find((c) => c.id === a.configId);
-            if (template) {
-              if (!template.defaultConfiguration) {
-                template.defaultConfiguration = {};
-              }
-              if (configId === "model") {
-                template.defaultConfiguration.model = value;
-              } else if (configId === "reasoning_effort") {
-                template.defaultConfiguration.thinkingLevel = value;
-              }
-            }
-          })
-          .pipe(Effect.catchAll(() => Effect.void));
-      }
+  async changeStartCommand(command: string, args: string[]): Promise<void> {
+    this._generateHandoff();
+    await this._setSessionId(null);
+    this.clientConfig = { ...this.clientConfig, command, args };
+    await this._restart({ freshSession: true });
+  }
 
-      // ACP may return refreshed configOptions in the response — reconcile
-      // them the same way we do for the initial newSession.configOptions.
-      if (result.configOptions && result.configOptions.length > 0) {
-        yield* agent._reconcileConfigOptions(result.configOptions, sessionId);
-      }
-    });
-  };
-
-  interrupt = () => {
-    const { stateRef, initDeferred, client } = this;
-    return Effect.gen(function* () {
-      yield* Deferred.await(initDeferred);
-      const state = yield* Ref.get(stateRef);
-      if (state.kind !== "prompting") return;
-      yield* client.cancel(state.sessionId);
-    });
-  };
-
-  close = () => {
-    const agent = this;
-    const { initDeferred, client, id, socketPath, _terminalManager } = this;
-    return Effect.gen(function* () {
-      _terminalManager.releaseAll();
-      agent._unsubSessionUpdate?.();
-      agent._unsubSessionUpdate = null;
-      agent._unsubEventLog?.();
-      agent._unsubEventLog = null;
-      // Any permission requests still waiting for a response will never
-      // resolve; reject them so upstream awaiters unwind instead of
-      // hanging. (Hanging would leak memory + fiber resources.)
-      for (const [, resolve] of agent._pendingPermissions) {
-        resolve({ outcome: "cancelled" });
-      }
-      agent._pendingPermissions.clear();
-      yield* client.close();
-      yield* agent._setState({ kind: "closed" });
-      yield* Deferred.succeed(initDeferred, void 0);
-      if (existsSync(socketPath)) {
-        try {
-          unlinkSync(socketPath);
-        } catch {}
-      }
-      for (const listener of Agent.destroyListeners) {
-        listener(id, socketPath);
-      }
-    });
-  };
-}
-
-type SetState = (state: AgentState) => Effect.Effect<void, never>;
-
-const sendPrompt = (ctx: {
-  stateRef: Ref.Ref<AgentState>;
-  client: AcpClient;
-  initialContextRef: Ref.Ref<acp.ContentBlock[] | null>;
-  sessionId: string;
-  content: acp.ContentBlock[];
-  setState: SetState;
-  preamble?: Effect.Effect<acp.ContentBlock[], unknown>;
-}) =>
-  Effect.gen(function* () {
-    const {
-      client,
-      initialContextRef,
+  async setSessionConfigOption(
+    configId: string,
+    value: string,
+  ): Promise<void> {
+    await this.initLatch.promise;
+    const state = this.state;
+    if (state.kind === "error" || state.kind === "closed") return;
+    const sessionId =
+      state.kind === "ready" || state.kind === "prompting"
+        ? state.sessionId
+        : null;
+    if (!sessionId) return;
+    const result = await this.client.setSessionConfigOption({
       sessionId,
-      content,
-      setState,
-      preamble,
-    } = ctx;
-    yield* setState({ kind: "prompting", sessionId });
-
-    const initialContext = yield* Ref.get(initialContextRef);
-    let prompt = content;
-    if (initialContext) {
-      prompt = [...initialContext, ...content];
-      yield* Ref.set(initialContextRef, null);
-    }
-    if (preamble) {
-      const blocks = yield* preamble.pipe(
-        Effect.catchAll(() => Effect.succeed([] as acp.ContentBlock[])),
-      );
-      if (blocks.length > 0) {
-        prompt = [...blocks, ...prompt];
-      }
-    }
-
-    yield* client.prompt({ sessionId, prompt });
-
-    yield* setState({ kind: "ready", sessionId });
-  });
-
-const flushQueue = (ctx: {
-  stateRef: Ref.Ref<AgentState>;
-  queueRef: Ref.Ref<acp.ContentBlock[]>;
-  client: AcpClient;
-  initialContextRef: Ref.Ref<acp.ContentBlock[] | null>;
-  setState: SetState;
-  preamble?: Effect.Effect<acp.ContentBlock[], unknown>;
-}) =>
-  Effect.gen(function* () {
-    const {
-      stateRef,
-      queueRef,
-      client,
-      initialContextRef,
-      setState,
-      preamble,
-    } = ctx;
-    const queued = yield* Ref.get(queueRef);
-
-    if (queued.length === 0) return;
-
-    const state = yield* Ref.get(stateRef);
-    if (state.kind !== "ready") return;
-
-    yield* Ref.set(queueRef, []);
-    yield* sendPrompt({
-      stateRef,
-      client,
-      initialContextRef,
-      sessionId: state.sessionId,
-      content: queued,
-      setState,
-      preamble,
+      configId,
+      value,
     });
-  });
+
+    // Mirror the user's selection onto the live instance state
+    // (`agents[i].{model|thinkingLevel|mode}`).
+    //
+    // For model/thinkingLevel we also write the template default so a
+    // freshly-spawned agent of the same kind starts with the user's most
+    // recent pick. Mode is deliberately excluded: selecting a mode for
+    // one agent must not silently change what every new agent defaults
+    // to. The mode default is seeded once from ACP on first handshake
+    // (see `_reconcileConfigOptions`) and otherwise only changes via an
+    // explicit "set as default" action in the UI.
+    //
+    // ACP configId -> record field mapping:
+    //   "model" -> model
+    //   "reasoning_effort" -> thinkingLevel
+    //   "mode" -> mode
+    if (this.db) {
+      await this.db
+        .update((root) => {
+          const a = root.agents.find((x) => x.id === this.id);
+          if (!a) return;
+          if (configId === "model") a.model = value;
+          else if (configId === "reasoning_effort") a.thinkingLevel = value;
+          else if (configId === "mode") a.mode = value;
+
+          const template = root.agentConfigs.find((c) => c.id === a.configId);
+          if (template) {
+            if (!template.defaultConfiguration) {
+              template.defaultConfiguration = {};
+            }
+            if (configId === "model") {
+              template.defaultConfiguration.model = value;
+            } else if (configId === "reasoning_effort") {
+              template.defaultConfiguration.thinkingLevel = value;
+            }
+          }
+        })
+        .catch(() => {});
+    }
+
+    // ACP may return refreshed configOptions in the response — reconcile
+    // them the same way we do for the initial newSession.configOptions.
+    if (result.configOptions && result.configOptions.length > 0) {
+      await this._reconcileConfigOptions(result.configOptions, sessionId);
+    }
+  }
+
+  async interrupt(): Promise<void> {
+    await this.initLatch.promise;
+    if (this.state.kind !== "prompting") return;
+    await this.client.cancel(this.state.sessionId);
+  }
+
+  async close(): Promise<void> {
+    this._terminalManager.releaseAll();
+    this._unsubSessionUpdate?.();
+    this._unsubSessionUpdate = null;
+    this._unsubEventLog?.();
+    this._unsubEventLog = null;
+    // Any permission requests still waiting for a response will never
+    // resolve; reject them so upstream awaiters unwind instead of
+    // hanging. (Hanging would leak memory + pending-promise resources.)
+    for (const [, resolve] of this._pendingPermissions) {
+      resolve({ outcome: "cancelled" });
+    }
+    this._pendingPermissions.clear();
+    await this.client.close();
+    await this._setState({ kind: "closed" });
+    this.initLatch.resolve();
+    if (existsSync(this.socketPath)) {
+      try {
+        unlinkSync(this.socketPath);
+      } catch {}
+    }
+    for (const listener of Agent.destroyListeners) {
+      listener(this.id, this.socketPath);
+    }
+  }
+}

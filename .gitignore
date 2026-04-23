@@ -162,3 +162,6 @@ packages/init/.zenbu/db/
 
 # prep-flat-deploy.sh backup dir (CI build artifact)
 apps/kernel/.node_modules.dev/
+
+# Perf experiment output
+**/perf-experiment-out/

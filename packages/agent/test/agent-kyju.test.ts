@@ -70,7 +70,7 @@ async function setupAgentDb(dbPath?: string) {
     db,
     replica,
     dbPath: p,
-    client: db.effectClient as unknown as AgentDb,
+    client: db.client as unknown as AgentDb,
     cleanup: () => fs.rmSync(p, { recursive: true, force: true }),
   };
 }
@@ -85,8 +85,7 @@ async function seedAgentRow(
   id: string,
   overrides: Partial<AgentRecord> = {},
 ): Promise<void> {
-  await Effect.runPromise(
-    client.update((root) => {
+  await client.update((root) => {
       root.agents = [
         ...root.agents,
         {
@@ -104,13 +103,11 @@ async function seedAgentRow(
           ...overrides,
         },
       ];
-    }),
-  );
+    });
 }
 
 function createAgent(client: AgentDb, id: string) {
-  return Effect.runPromise(
-    Agent.create({
+  return Agent.create({
       id,
       clientConfig: {
         command: "npx",
@@ -124,8 +121,7 @@ function createAgent(client: AgentDb, id: string) {
       },
       cwd: process.cwd(),
       db: client,
-    }),
-  );
+    });
 }
 
 describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
@@ -134,7 +130,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
 
   afterEach(async () => {
     if (agent) {
-      await Effect.runPromise(agent.close()).catch(() => {});
+      await agent.close().catch(() => {});
       agent = undefined;
     }
     cleanup?.();
@@ -147,7 +143,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
     await seedAgentRow(kyju.client, "persist-sess");
 
     agent = await createAgent(kyju.client, "persist-sess");
-    await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
+    await agent.send([{ type: "text", text: "hello" }]);
 
     const row = kyju.client.readRoot().agents.find((a) => a.id === "persist-sess");
     expect(row?.sessionId).toBeTruthy();
@@ -162,8 +158,8 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
     await seedAgentRow(kyju1.client, "persist-agent");
 
     agent = await createAgent(kyju1.client, "persist-agent");
-    await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
-    await Effect.runPromise(agent.close());
+    await agent.send([{ type: "text", text: "hello" }]);
+    await agent.close();
     agent = undefined;
 
     const savedSessionId = kyju1.client
@@ -186,8 +182,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
     await seedAgentRow(kyju.client, "latch-agent");
 
     let preambleCalls = 0;
-    agent = await Effect.runPromise(
-      Agent.create({
+    agent = await Agent.create({
         id: "latch-agent",
         clientConfig: {
           command: "npx",
@@ -201,15 +196,13 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
         },
         cwd: process.cwd(),
         db: kyju.client,
-        firstPromptPreamble: () =>
-          Effect.sync(() => {
-            preambleCalls++;
-            return [{ type: "text", text: "PREAMBLE" } as const];
-          }),
-      }),
-    );
+        firstPromptPreamble: async () => {
+          preambleCalls++;
+          return [{ type: "text", text: "PREAMBLE" } as const];
+        },
+      });
 
-    await Effect.runPromise(agent.send([{ type: "text", text: "first" }]));
+    await agent.send([{ type: "text", text: "first" }]);
     expect(preambleCalls).toBe(1);
 
     const firstStamp = kyju.client
@@ -218,7 +211,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
     expect(firstStamp).toBeTruthy();
     expect(typeof firstStamp).toBe("number");
 
-    await Effect.runPromise(agent.send([{ type: "text", text: "second" }]));
+    await agent.send([{ type: "text", text: "second" }]);
     expect(preambleCalls).toBe(1);
 
     const secondStamp = kyju.client
@@ -233,7 +226,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
     await seedAgentRow(kyju.client, "events-agent");
 
     agent = await createAgent(kyju.client, "events-agent");
-    await Effect.runPromise(agent.send([{ type: "text", text: "Say hello" }]));
+    await agent.send([{ type: "text", text: "Say hello" }]);
 
     const rowNode = kyju.client.agents.find((a) => a.id === "events-agent");
     expect(rowNode).toBeTruthy();
@@ -245,7 +238,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
     const unsub = rowNode!.eventLog.subscribeData((data) => {
       received.push(...data.newItems);
     });
-    await Effect.runPromise(rowNode!.eventLog.read()).catch(() => {});
+    await rowNode!.eventLog.read().catch(() => {});
 
     const deadline = Date.now() + 5_000;
     while (received.length === 0 && Date.now() < deadline) {
@@ -284,7 +277,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
       }
     })();
 
-    await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
+    await agent.send([{ type: "text", text: "hello" }]);
 
     // The final `_setState({kind: "ready"})` fires inside the Effect chain
     // but its DB write is async; wait for the row to settle.
@@ -314,8 +307,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
     cleanup = kyju.cleanup;
 
     // Seed the config template and a matching agent.
-    await Effect.runPromise(
-      kyju.client.update((root) => {
+    await kyju.client.update((root) => {
         root.agentConfigs = [
           {
             id: "codex",
@@ -326,12 +318,11 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
             availableModes: [],
           },
         ];
-      }),
-    );
+      });
     await seedAgentRow(kyju.client, "cfg-agent", { configId: "codex" });
 
     agent = await createAgent(kyju.client, "cfg-agent");
-    await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
+    await agent.send([{ type: "text", text: "hello" }]);
 
     const template = kyju.client
       .readRoot()
@@ -347,8 +338,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
 
     const events: SessionUpdate[] = [];
     // Note: NO `db` field passed.
-    agent = await Effect.runPromise(
-      Agent.create({
+    agent = await Agent.create({
         id: "ghost-agent",
         clientConfig: {
           command: "npx",
@@ -364,10 +354,9 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
         onSessionUpdate: (u) => {
           events.push(u);
         },
-      }),
-    );
+      });
 
-    await Effect.runPromise(agent.send([{ type: "text", text: "hello" }]));
+    await agent.send([{ type: "text", text: "hello" }]);
 
     // Even though a row with this id exists in the DB, the Agent never
     // touched it (ran ephemeral).
@@ -379,7 +368,7 @@ describe.skipIf(!codexAvailable)("Agent × kyju integration", () => {
     expect(row?.status).toBe("idle");
 
     // But the agent's internal state machine has the session.
-    const state = await Effect.runPromise(agent.getState());
+    const state = await agent.getState();
     expect(state.kind).toBe("ready");
     if (state.kind === "ready") {
       expect(state.sessionId).toBeTruthy();

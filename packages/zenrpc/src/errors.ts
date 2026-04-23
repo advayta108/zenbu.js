@@ -1,5 +1,4 @@
-import { Data } from "effect";
-
+import * as Data from "effect/Data";
 export class VersionMismatchError extends Data.TaggedError("VersionMismatch")<{
   expected: string;
   received: string;

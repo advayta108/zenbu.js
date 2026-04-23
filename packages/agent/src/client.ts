@@ -1,8 +1,8 @@
-import { Effect, Ref } from "effect";
 import * as acp from "@agentclientprotocol/sdk";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { Readable, Writable } from "node:stream";
+import { applyUserShellPath } from "./user-shell-env";
 
 export type AcpClientState =
   | "disconnected"
@@ -54,199 +54,191 @@ export { acp };
 export const PROTOCOL_VERSION = acp.PROTOCOL_VERSION;
 
 export class AcpClient {
-  private stateRef: Ref.Ref<AcpClientState>;
-  private sessionIdRef: Ref.Ref<string | null>;
+  private state: AcpClientState = "disconnected";
+  private sessionId: string | null = null;
   private connection: acp.ClientSideConnection;
   private updateHandlers: Set<SessionUpdateHandler>;
   private proc: ChildProcess;
 
   private constructor(
-    stateRef: Ref.Ref<AcpClientState>,
-    sessionIdRef: Ref.Ref<string | null>,
     connection: acp.ClientSideConnection,
     updateHandlers: Set<SessionUpdateHandler>,
     proc: ChildProcess,
   ) {
-    this.stateRef = stateRef;
-    this.sessionIdRef = sessionIdRef;
     this.connection = connection;
     this.updateHandlers = updateHandlers;
     this.proc = proc;
   }
 
-  static create = (config: AcpClientConfig) =>
-    Effect.gen(function* () {
-      const stateRef = yield* Ref.make<AcpClientState>("disconnected");
-      const sessionIdRef = yield* Ref.make<string | null>(null);
-      const updateHandlers = new Set<SessionUpdateHandler>();
+  static async create(config: AcpClientConfig): Promise<AcpClient> {
+    const updateHandlers = new Set<SessionUpdateHandler>();
 
-      const env = { ...process.env, ...config.env };
-      delete env.NODE_OPTIONS;
+    const baseEnv = { ...process.env, ...config.env };
+    delete baseEnv.NODE_OPTIONS;
+    // Prepend the user's login-shell PATH so we can find Claude / codex /
+    // other user-installed binaries. The shell probe runs as the `kernel`
+    // preload concurrently with boot, so this await is typically free
+    // (Promise already resolved) and only waits on first-paint-timing
+    // edge cases.
+    const env = await applyUserShellPath(baseEnv);
 
-      const proc = spawn(config.command, config.args, {
-        cwd: config.cwd ?? process.cwd(),
-        stdio: ["pipe", "pipe", "inherit"],
-        env,
-      });
-      yield* Effect.tryPromise(() => once(proc as any, "spawn"));
-
-      const input = Writable.toWeb(proc.stdin!) as WritableStream<Uint8Array>;
-      const output = Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>;
-      const stream = acp.ndJsonStream(input, output);
-
-      const connection = new acp.ClientSideConnection(
-        () => ({
-          sessionUpdate: async (params: acp.SessionNotification) => {
-            for (const h of updateHandlers) h(params);
-          },
-          requestPermission: async (params: acp.RequestPermissionRequest) => {
-            if (config.handlers?.requestPermission) {
-              return config.handlers.requestPermission(params);
-            }
-            const option =
-              params.options.find((o) => o.kind === "allow_always") ??
-              params.options.find((o) => o.kind === "allow_once");
-            if (option) {
-              return {
-                outcome: {
-                  outcome: "selected" as const,
-                  optionId: option.optionId,
-                },
-              };
-            }
-            return { outcome: { outcome: "cancelled" as const } };
-          },
-          readTextFile: async (params: acp.ReadTextFileRequest) => {
-            if (config.handlers?.readTextFile) {
-              return config.handlers.readTextFile(params);
-            }
-            return { content: "" };
-          },
-          writeTextFile: async (params: acp.WriteTextFileRequest) => {
-            if (config.handlers?.writeTextFile) {
-              return config.handlers.writeTextFile(params);
-            }
-            return {};
-          },
-          createTerminal: config.handlers?.createTerminal
-            ? async (params: acp.CreateTerminalRequest) =>
-                config.handlers!.createTerminal!(params)
-            : undefined,
-          terminalOutput: config.handlers?.terminalOutput
-            ? async (params: acp.TerminalOutputRequest) =>
-                config.handlers!.terminalOutput!(params)
-            : undefined,
-          releaseTerminal: config.handlers?.releaseTerminal
-            ? async (params: acp.ReleaseTerminalRequest) =>
-                config.handlers!.releaseTerminal!(params)
-            : undefined,
-          waitForTerminalExit: config.handlers?.waitForTerminalExit
-            ? async (params: acp.WaitForTerminalExitRequest) =>
-                config.handlers!.waitForTerminalExit!(params)
-            : undefined,
-          killTerminal: config.handlers?.killTerminal
-            ? async (params: acp.KillTerminalRequest) =>
-                config.handlers!.killTerminal!(params)
-            : undefined,
-        }),
-        stream,
-      );
-
-      return new AcpClient(
-        stateRef,
-        sessionIdRef,
-        connection,
-        updateHandlers,
-        proc,
-      );
+    const proc = spawn(config.command, config.args, {
+      cwd: config.cwd ?? process.cwd(),
+      stdio: ["pipe", "pipe", "inherit"],
+      env,
     });
+    await once(proc as any, "spawn");
 
-  getState = () => Ref.get(this.stateRef);
+    const input = Writable.toWeb(proc.stdin!) as WritableStream<Uint8Array>;
+    const output = Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>;
+    const stream = acp.ndJsonStream(input, output);
 
-  getSessionId = () => Ref.get(this.sessionIdRef);
+    const connection = new acp.ClientSideConnection(
+      () => ({
+        sessionUpdate: async (params: acp.SessionNotification) => {
+          for (const h of updateHandlers) h(params);
+        },
+        requestPermission: async (params: acp.RequestPermissionRequest) => {
+          if (config.handlers?.requestPermission) {
+            return config.handlers.requestPermission(params);
+          }
+          const option =
+            params.options.find((o) => o.kind === "allow_always") ??
+            params.options.find((o) => o.kind === "allow_once");
+          if (option) {
+            return {
+              outcome: {
+                outcome: "selected" as const,
+                optionId: option.optionId,
+              },
+            };
+          }
+          return { outcome: { outcome: "cancelled" as const } };
+        },
+        readTextFile: async (params: acp.ReadTextFileRequest) => {
+          if (config.handlers?.readTextFile) {
+            return config.handlers.readTextFile(params);
+          }
+          return { content: "" };
+        },
+        writeTextFile: async (params: acp.WriteTextFileRequest) => {
+          if (config.handlers?.writeTextFile) {
+            return config.handlers.writeTextFile(params);
+          }
+          return {};
+        },
+        createTerminal: config.handlers?.createTerminal
+          ? async (params: acp.CreateTerminalRequest) =>
+              config.handlers!.createTerminal!(params)
+          : undefined,
+        terminalOutput: config.handlers?.terminalOutput
+          ? async (params: acp.TerminalOutputRequest) =>
+              config.handlers!.terminalOutput!(params)
+          : undefined,
+        releaseTerminal: config.handlers?.releaseTerminal
+          ? async (params: acp.ReleaseTerminalRequest) =>
+              config.handlers!.releaseTerminal!(params)
+          : undefined,
+        waitForTerminalExit: config.handlers?.waitForTerminalExit
+          ? async (params: acp.WaitForTerminalExitRequest) =>
+              config.handlers!.waitForTerminalExit!(params)
+          : undefined,
+        killTerminal: config.handlers?.killTerminal
+          ? async (params: acp.KillTerminalRequest) =>
+              config.handlers!.killTerminal!(params)
+          : undefined,
+      }),
+      stream,
+    );
 
-  initialize = (params: acp.InitializeRequest) => {
-    const { stateRef, connection } = this;
-    return Effect.gen(function* () {
-      yield* Ref.set(stateRef, "initializing");
+    return new AcpClient(connection, updateHandlers, proc);
+  }
 
-      const result = yield* Effect.tryPromise(() =>
-        connection.initialize(params),
-      );
+  getState(): AcpClientState {
+    return this.state;
+  }
 
-      return result;
-    });
-  };
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
 
-  newSession = (params: acp.NewSessionRequest) => {
-    const { stateRef, sessionIdRef, connection } = this;
-    return Effect.gen(function* () {
-      const result = yield* Effect.tryPromise(() =>
-        connection.newSession(params),
-      );
-      yield* Ref.set(sessionIdRef, result.sessionId);
-      yield* Ref.set(stateRef, "ready");
-      return result;
-    });
-  };
+  async initialize(
+    params: acp.InitializeRequest,
+  ): Promise<acp.InitializeResponse> {
+    this.state = "initializing";
+    return this.connection.initialize(params);
+  }
 
-  loadSession = (params: acp.LoadSessionRequest) => {
-    const { stateRef, sessionIdRef, connection } = this;
-    return Effect.gen(function* () {
-      yield* Effect.tryPromise(() => connection.loadSession(params));
-      yield* Ref.set(sessionIdRef, params.sessionId);
-      yield* Ref.set(stateRef, "ready");
-    });
-  };
+  async newSession(
+    params: acp.NewSessionRequest,
+  ): Promise<acp.NewSessionResponse> {
+    const result = await this.connection.newSession(params);
+    this.sessionId = result.sessionId;
+    this.state = "ready";
+    return result;
+  }
 
-  resumeSession = (params: { sessionId: string; cwd: string; mcpServers?: acp.McpServer[] }) => {
-    const { stateRef, sessionIdRef, connection } = this;
-    return Effect.gen(function* () {
-      // Return the ACP response so the caller can reconcile configOptions —
-      // resume, like newSession, carries the agent's current mode / model /
-      // thinking defaults that we need to override with the user's persisted
-      // selections.
-      const response = (yield* Effect.tryPromise(() =>
-        (connection as any).unstable_resumeSession(params),
-      )) as acp.ResumeSessionResponse;
-      yield* Ref.set(sessionIdRef, params.sessionId);
-      yield* Ref.set(stateRef, "ready");
-      return response;
-    });
-  };
+  async loadSession(params: acp.LoadSessionRequest): Promise<void> {
+    await this.connection.loadSession(params);
+    this.sessionId = params.sessionId;
+    this.state = "ready";
+  }
 
-  prompt = (params: acp.PromptRequest) => {
-    const { stateRef, connection } = this;
-    return Effect.gen(function* () {
-      yield* Ref.set(stateRef, "prompting");
-      const result = yield* Effect.tryPromise(() => connection.prompt(params));
-      yield* Ref.set(stateRef, "ready");
-      return result;
-    });
-  };
+  async resumeSession(params: {
+    sessionId: string;
+    cwd: string;
+    mcpServers?: acp.McpServer[];
+  }): Promise<acp.ResumeSessionResponse> {
+    // Return the ACP response so the caller can reconcile configOptions —
+    // resume, like newSession, carries the agent's current mode / model /
+    // thinking defaults that we need to override with the user's persisted
+    // selections.
+    const response = (await (this.connection as any).unstable_resumeSession(
+      params,
+    )) as acp.ResumeSessionResponse;
+    this.sessionId = params.sessionId;
+    this.state = "ready";
+    return response;
+  }
 
-  cancel = (sessionId: string) =>
-    Effect.tryPromise(() => this.connection.cancel({ sessionId }));
+  async prompt(params: acp.PromptRequest): Promise<acp.PromptResponse> {
+    this.state = "prompting";
+    const result = await this.connection.prompt(params);
+    this.state = "ready";
+    return result;
+  }
 
-  setSessionMode = (params: acp.SetSessionModeRequest) =>
-    Effect.tryPromise(() => this.connection.setSessionMode(params));
+  async cancel(sessionId: string): Promise<void> {
+    await this.connection.cancel({ sessionId });
+  }
 
-  setSessionModel = (params: acp.SetSessionModelRequest) =>
-    Effect.tryPromise(() => this.connection.unstable_setSessionModel(params));
+  async setSessionMode(
+    params: acp.SetSessionModeRequest,
+  ): Promise<acp.SetSessionModeResponse> {
+    return this.connection.setSessionMode(params);
+  }
 
-  setSessionConfigOption = (params: acp.SetSessionConfigOptionRequest) =>
-    Effect.tryPromise(() => this.connection.setSessionConfigOption(params));
+  async setSessionModel(
+    params: acp.SetSessionModelRequest,
+  ): Promise<acp.SetSessionModelResponse> {
+    return (this.connection as any).unstable_setSessionModel(params);
+  }
+
+  async setSessionConfigOption(
+    params: acp.SetSessionConfigOptionRequest,
+  ): Promise<acp.SetSessionConfigOptionResponse> {
+    return this.connection.setSessionConfigOption(params);
+  }
 
   onSessionUpdate(handler: SessionUpdateHandler): () => void {
     this.updateHandlers.add(handler);
-    return () => this.updateHandlers.delete(handler);
+    return () => {
+      this.updateHandlers.delete(handler);
+    };
   }
 
-  close = () => {
-    const { stateRef, proc } = this;
-    return Effect.gen(function* () {
-      yield* Ref.set(stateRef, "disconnected");
-      proc.kill();
-    });
-  };
+  async close(): Promise<void> {
+    this.state = "disconnected";
+    this.proc.kill();
+  }
 }

@@ -1,6 +1,6 @@
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import type { PlatformError } from "@effect/platform/Error";
-import { FileSystem } from "@effect/platform";
+import * as FileSystem from "@effect/platform/FileSystem";
 import { paths, readJsonFile, writeJsonFile, type DbConfig } from "./helpers";
 import type { KyjuJSON } from "../shared";
 import { traceKyju } from "../trace";
@@ -87,7 +87,7 @@ export const makeRootCache = (
         rootMutex.withPermits(1)(
           traceKyju(
             "kyju:db.root.flush",
-            writeJsonFile({ fs, path: paths.root({ config }), data: cached }),
+            writeJsonFile({ fs, config, path: paths.root({ config }), data: cached }),
           ),
         ).pipe(
           Effect.catchAll((err) => {

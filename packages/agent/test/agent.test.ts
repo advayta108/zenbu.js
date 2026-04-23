@@ -33,8 +33,7 @@ try {
  */
 function createEphemeralAgent(id?: string) {
   const events: SessionUpdate[] = [];
-  return Effect.runPromise(
-    Agent.create({
+  return Agent.create({
       id,
       clientConfig: {
         command: "npx",
@@ -50,8 +49,7 @@ function createEphemeralAgent(id?: string) {
       onSessionUpdate: (u) => {
         events.push(u);
       },
-    }),
-  ).then((agent) => ({ agent, events }));
+    }).then((agent) => ({ agent, events }));
 }
 
 describe.skipIf(!codexAvailable)("Agent (ephemeral mode)", () => {
@@ -59,7 +57,7 @@ describe.skipIf(!codexAvailable)("Agent (ephemeral mode)", () => {
 
   afterEach(async () => {
     if (agent) {
-      await Effect.runPromise(agent.close()).catch(() => {});
+      await agent.close().catch(() => {});
     }
   });
 
@@ -81,29 +79,25 @@ describe.skipIf(!codexAvailable)("Agent (ephemeral mode)", () => {
   it("starts in initializing state", async () => {
     ({ agent } = await createEphemeralAgent());
 
-    const state = await Effect.runPromise(agent.getState());
+    const state = await agent.getState();
     expect(state.kind).toBe("initializing");
   });
 
   it("transitions to ready after first send", async () => {
     ({ agent } = await createEphemeralAgent());
 
-    await Effect.runPromise(
-      agent.send([{ type: "text", text: "hello" }]),
-    );
+    await agent.send([{ type: "text", text: "hello" }]);
 
-    const state = await Effect.runPromise(agent.getState());
+    const state = await agent.getState();
     expect(state.kind).toBe("ready");
   });
 
   it("acquires a session id after init (visible on state)", async () => {
     ({ agent } = await createEphemeralAgent("test-agent"));
 
-    await Effect.runPromise(
-      agent.send([{ type: "text", text: "hello" }]),
-    );
+    await agent.send([{ type: "text", text: "hello" }]);
 
-    const state = await Effect.runPromise(agent.getState());
+    const state = await agent.getState();
     expect(state.kind).toBe("ready");
     if (state.kind === "ready") {
       expect(state.sessionId).toBeTruthy();
@@ -115,9 +109,7 @@ describe.skipIf(!codexAvailable)("Agent (ephemeral mode)", () => {
     result = await createEphemeralAgent();
     agent = result.agent;
 
-    await Effect.runPromise(
-      agent.send([{ type: "text", text: "Say hello" }]),
-    );
+    await agent.send([{ type: "text", text: "Say hello" }]);
 
     expect(result.events.length).toBeGreaterThan(0);
 
@@ -130,21 +122,23 @@ describe.skipIf(!codexAvailable)("Agent (ephemeral mode)", () => {
   it("closes and transitions to closed state", async () => {
     ({ agent } = await createEphemeralAgent());
 
-    await Effect.runPromise(agent.close());
+    await agent.close();
 
-    const state = await Effect.runPromise(agent.getState());
+    const state = await agent.getState();
     expect(state.kind).toBe("closed");
   });
 
   it("fails to send when closed", async () => {
     ({ agent } = await createEphemeralAgent());
 
-    await Effect.runPromise(agent.close());
+    await agent.close();
 
-    const result = await Effect.runPromiseExit(
-      agent.send([{ type: "text", text: "Should fail" }]),
-    );
-
-    expect(result._tag).toBe("Failure");
+    let threw = false;
+    try {
+      await agent.send([{ type: "text", text: "Should fail" }]);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
   });
 });

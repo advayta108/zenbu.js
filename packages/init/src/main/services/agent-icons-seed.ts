@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 
@@ -21,7 +21,7 @@ export class AgentIconsSeedService extends Service {
     if (this._seeded) return;
     this._seeded = true;
 
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     const kernel = client.readRoot().plugin.kernel;
     const configs = kernel.agentConfigs ?? [];
 

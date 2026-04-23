@@ -1,5 +1,5 @@
 import { app } from "electron"
-import { Effect } from "effect"
+import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid"
 import { Service, runtime } from "../runtime"
 import { DbService } from "./db"
@@ -55,7 +55,7 @@ export class KernelUpdaterService extends Service {
   private lastProgressWriteAt = 0
 
   evaluate() {
-    this.effect("bus-subscriptions", () => {
+    this.setup("bus-subscriptions", () => {
       const offs = [
         kernelUpdaterBus.on("updater.checking", () => {
           this.write({ status: "checking", error: null })
@@ -135,7 +135,7 @@ export class KernelUpdaterService extends Service {
   }
 
   async dismissAvailable(): Promise<void> {
-    const v = this.ctx.db.client.readRoot().plugin.kernel.updateState
+    const v = this.ctx.db.effect.client.readRoot().plugin.kernel.updateState
       .availableVersion as string | null
     if (!v) return
     await this.write({ dismissedVersion: v, status: "idle" })
@@ -180,7 +180,7 @@ export class KernelUpdaterService extends Service {
   }
 
   private write(patch: UpdateStatePatch): void {
-    const client = this.ctx.db.client
+    const client = this.ctx.db.effect.client
     Effect.runPromise(
       client.update((root) => {
         const s = root.plugin.kernel.updateState

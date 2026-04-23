@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid";
 import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
@@ -44,7 +44,7 @@ export class InsertService extends Service {
     sessionId: string;
     payload: TokenPayload;
   }): Promise<InsertTokenResult> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     const kernel = client.readRoot().plugin.kernel;
 
     const live = findLiveSessionTab(kernel, args.sessionId);
@@ -121,7 +121,7 @@ export class InsertService extends Service {
     agentId: string;
     payload: TokenPayload;
   }): Promise<{ ok: boolean }> {
-    const client = this.ctx.db.client;
+    const client = this.ctx.db.effect.client;
     await Effect.runPromise(
       client.update((root) => {
         const drafts = root.plugin.kernel.composerDrafts ?? {};

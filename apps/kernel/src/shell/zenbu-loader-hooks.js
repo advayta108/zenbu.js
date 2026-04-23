@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { subscribe } from "@parcel/watcher"
@@ -254,6 +255,7 @@ function loadImpl(url, context, nextLoad) {
 
 export function load(url, context, nextLoad) {
   const start = Date.now()
+  try { fs.appendFileSync(path.join(os.tmpdir(), "zenbu-loaded-urls.txt"), url + "\n") } catch {}
   try {
     return loadImpl(url, context, nextLoad)
   } finally {

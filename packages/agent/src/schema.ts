@@ -1,10 +1,8 @@
 import zod from "zod";
-import type { Effect } from "effect";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type {
-  EffectCollectionNode,
-  EffectArrayFieldNode,
-  KyjuError,
+  CollectionNode,
+  ArrayFieldNode,
 } from "@zenbu/kyju";
 import {
   createSchema,
@@ -217,13 +215,13 @@ export type AgentRoot = InferRoot<AgentSchema>;
  * kernel schema is a superset of `agentSchemaFragment`. No adapter needed —
  * the client is passed directly.
  *
- * Shape mirrors the relevant slice of `EffectClientProxy<typeof
- * agentSchemaFragment>`: readRoot/update + per-field effect nodes for the
- * collections we append to.
+ * Shape mirrors the relevant slice of `ClientProxy<typeof
+ * agentSchemaFragment>`: readRoot/update + per-field promise-returning
+ * nodes for the collections we append to.
  */
 export type AgentDb = {
   readRoot(): AgentRoot;
-  update(fn: (root: AgentRoot) => void): Effect.Effect<void, KyjuError>;
-  agents: EffectArrayFieldNode<AgentRecord[], AgentRecord>;
-  archivedAgents: EffectCollectionNode<ArchivedAgentRecord>;
+  update(fn: (root: AgentRoot) => void): Promise<void>;
+  agents: ArrayFieldNode<AgentRecord[], AgentRecord>;
+  archivedAgents: CollectionNode<ArchivedAgentRecord>;
 };

@@ -1,4 +1,5 @@
-import { Effect, Ref } from "effect";
+import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import type { ServerEvent } from "../../shared";
 import { makeAck, makeErrorAck, sendAck } from "../helpers";
 import type { DbHandlerContext } from "../helpers";

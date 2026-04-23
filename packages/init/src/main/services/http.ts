@@ -46,7 +46,7 @@ export class HttpService extends Service {
 
     const startTime = performance.now()
 
-    this.effect("proxy", () => {
+    this.setup("proxy", () => {
       const viteAgent = new http.Agent({ keepAlive: true, maxSockets: 20 })
 
       const handler = (req: http.IncomingMessage, res: http.ServerResponse) => {
@@ -89,7 +89,7 @@ export class HttpService extends Service {
       }
     })
 
-    this.effect("vite-hmr-proxy", () => {
+    this.setup("vite-hmr-proxy", () => {
       const removeHandler = server.addUpgradeHandler((req, socket, head) => {
         const protocols = req.headers["sec-websocket-protocol"]
         if (!protocols || !protocols.includes("vite-hmr")) return false
@@ -125,7 +125,7 @@ export class HttpService extends Service {
       return removeHandler
     })
 
-    this.effect("ws-dispatch", () => {
+    this.setup("ws-dispatch", () => {
       const onConnection = (ws: WebSocket) => {
         const id = nanoid()
         const elapsed = (performance.now() - startTime).toFixed(1)

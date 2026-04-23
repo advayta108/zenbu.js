@@ -7,7 +7,7 @@ export class ChatShortcutsService extends Service {
   declare ctx: { shortcut: ShortcutService };
 
   evaluate() {
-    this.effect("register:interrupt", () =>
+    this.setup("register:interrupt", () =>
       this.ctx.shortcut.register({
         id: "chat.interrupt",
         defaultBinding: "ctrl+c",
@@ -16,7 +16,7 @@ export class ChatShortcutsService extends Service {
       }),
     );
 
-    this.effect("register:openMode", () =>
+    this.setup("register:openMode", () =>
       this.ctx.shortcut.register({
         id: "chat.openMode",
         defaultBinding: "cmd+/",

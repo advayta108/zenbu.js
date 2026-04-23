@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import readline from "node:readline";
 import { z } from "zod";
+import { applyUserShellPath } from "@zenbu/agent/src/user-shell-env";
 
 const RpcResponse = z.object({
   id: z.number(),
@@ -45,9 +46,13 @@ export interface CodexTransport {
   readonly proc: ChildProcess;
 }
 
-export function createCodexTransport(cwd?: string): CodexTransport {
-  const env = { ...process.env };
-  delete env.NODE_OPTIONS;
+export async function createCodexTransport(cwd?: string): Promise<CodexTransport> {
+  const baseEnv = { ...process.env };
+  delete baseEnv.NODE_OPTIONS;
+  // See `packages/agent/src/user-shell-env.ts`: augments PATH with the
+  // user's login-shell entries so we can spawn `codex`. Runs as the
+  // `kernel` preload concurrently with boot; typically instant here.
+  const env = await applyUserShellPath(baseEnv);
 
   const proc = spawn("codex", ["app-server"], {
     cwd: cwd ?? process.cwd(),

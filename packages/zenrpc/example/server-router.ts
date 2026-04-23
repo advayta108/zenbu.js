@@ -1,4 +1,5 @@
-import { Data, Effect } from "effect";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
 import type { RpcContext } from "../src/types";
 
 export class NotFoundError extends Data.TaggedError("NotFoundError")<{

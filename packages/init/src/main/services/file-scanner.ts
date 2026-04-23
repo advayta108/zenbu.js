@@ -65,7 +65,7 @@ export class FileScannerService extends Service {
   private caches = new Map<string, CwdCache>()
 
   evaluate() {
-    this.effect("cleanup", () => {
+    this.setup("cleanup", () => {
       return () => {
         for (const entry of this.caches.values()) {
           if (entry.debounceTimer) clearTimeout(entry.debounceTimer)

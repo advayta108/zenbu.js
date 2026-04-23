@@ -1,7 +1,10 @@
 import { Args, Command, Options } from "@effect/cli";
-import { NodeContext, NodeRuntime } from "@effect/platform-node";
-import { FileSystem } from "@effect/platform";
-import { Console, Effect, Option, Ref } from "effect";
+import * as NodeContext from "@effect/platform-node/NodeContext"; import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as FileSystem from "@effect/platform/FileSystem";
+import * as Console from "effect/Console";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import nodePath from "node:path";
 import {
   paths,
@@ -19,7 +22,7 @@ import type { KyjuJSON, WriteOp } from "../v2/shared";
 
 const DEFAULT_CONFIG: Omit<
   DbConfig,
-  "dbPath" | "maxPageSize" | "checkReferences"
+  "dbPath" | "tmpDir" | "maxPageSize" | "checkReferences"
 > = {
   rootName: "root",
   collectionsDirName: "collections",
@@ -32,12 +35,16 @@ const DEFAULT_CONFIG: Omit<
   blobDataName: "data",
 };
 
-const makeConfig = (dbPath: string): DbConfig => ({
-  ...DEFAULT_CONFIG,
-  dbPath: nodePath.resolve(dbPath),
-  maxPageSize: 1024 * 1024,
-  checkReferences: false,
-});
+const makeConfig = (dbPath: string): DbConfig => {
+  const resolved = nodePath.resolve(dbPath);
+  return {
+    ...DEFAULT_CONFIG,
+    dbPath: resolved,
+    tmpDir: nodePath.join(resolved, ".tmp"),
+    maxPageSize: 1024 * 1024,
+    checkReferences: false,
+  };
+};
 
 const readRoot = (fs: FileSystem.FileSystem, config: DbConfig) =>
   readJsonFile({ fs, path: paths.root({ config }) }) as Effect.Effect<
@@ -315,6 +322,9 @@ const opCmd = Command.make(
           responses.push(event);
         },
       };
+
+      // Ensure tmpDir exists — atomic writes stage there before renaming.
+      yield* fs.makeDirectory(config.tmpDir, { recursive: true });
 
       const rootMutex = yield* Effect.makeSemaphore(1);
       const ctx: DbHandlerContext = {

@@ -29,7 +29,7 @@ export class RpcService extends Service {
   evaluate() {
     const { http } = this.ctx;
 
-    this.effect("rpc-wiring", () => {
+    this.setup("rpc-wiring", () => {
       const rpcRouter = createRpcRouter();
 
       const rpcServer = createServer<ZenbuEvents>({

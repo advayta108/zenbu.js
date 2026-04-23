@@ -5,6 +5,7 @@
   ],
   "schema": "./shared/schema/index.ts",
   "migrations": "./kyju/index.ts",
+  "preload": "./src/main/preload.ts",
   "setup": {
     "script": "./setup.ts",
     "version": 1

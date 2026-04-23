@@ -26,7 +26,7 @@ export class {{PascalName}}AdviceService extends Service {
   static deps = {}
 
   evaluate() {
-    this.effect("register-advice", () =>
+    this.setup("register-advice", () =>
       registerAdvice("orchestrator", {
         moduleId: "views/orchestrator/components/TitleBar.tsx",
         name: "TitleBar",

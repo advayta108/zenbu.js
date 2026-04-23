@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import nodePath from "node:path";
 import type { ServerEvent } from "../../shared";
 import {
