@@ -1,3 +1,6 @@
+import { bootBus } from "../../shared/boot-bus"
+import { trace as traceSpan, traceSync as traceSpanSync, type SpanOptions } from "../../shared/tracer"
+
 export type CleanupReason = "reload" | "shutdown"
 type EffectCleanup = ((reason: CleanupReason) => void | Promise<void>) | void
 type EffectSetup = () => EffectCleanup
@@ -50,12 +53,44 @@ export abstract class Service {
     if (existing) {
       try { existing("reload") } catch (e) { console.error(`[hot] effect cleanup "${key}" failed:`, e) }
     }
-    const cleanup = setup()
+    const serviceKey = (this.constructor as typeof Service).key
+    const cleanup = traceSpanSync(`effect:${key}`, () => setup(), {
+      parentKey: serviceKey,
+    })
     if (cleanup) {
       this.__effectCleanups.set(key, cleanup)
     } else {
       this.__effectCleanups.delete(key)
     }
+  }
+
+  /**
+   * Report a named span inside this service's boot-trace row. Use for any
+   * non-trivial async work in `evaluate()` (opening a db, starting a server,
+   * awaiting a process) so we can see where time goes.
+   *
+   *     await this.trace("migrations", () => runMigrations())
+   */
+  protected trace<T>(
+    name: string,
+    fn: () => T | Promise<T>,
+    meta?: Record<string, unknown>,
+  ): Promise<T> {
+    const key = (this.constructor as typeof Service).key
+    const opts: SpanOptions = { parentKey: key }
+    if (meta) opts.meta = meta
+    return traceSpan(name, fn, opts)
+  }
+
+  protected traceSync<T>(
+    name: string,
+    fn: () => T,
+    meta?: Record<string, unknown>,
+  ): T {
+    const key = (this.constructor as typeof Service).key
+    const opts: SpanOptions = { parentKey: key }
+    if (meta) opts.meta = meta
+    return traceSpanSync(name, fn, opts)
   }
 
   /** @internal */
@@ -379,15 +414,40 @@ export class ServiceRuntime {
     slot.status = "evaluating"
     slot.error = null
 
+    const startedAt = Date.now()
     try {
       await instance.__cleanupAllEffects("reload")
       this.injectCtx(instance, ServiceClass)
+      // Announce the service being evaluated so the kernel loading view can
+      // surface it. Only on cold boot — hot reloads are fast and the UI
+      // flicker isn't useful. `wasReady=true` means we're re-evaluating.
+      if (!wasReady) {
+        bootBus.emit("status", { message: "Starting services…", detail: key })
+        bootBus.emit("service:start", { key, at: startedAt })
+      }
       await instance.evaluate()
       slot.status = "ready"
+      if (!wasReady) {
+        const endedAt = Date.now()
+        bootBus.emit("service:end", {
+          key,
+          at: endedAt,
+          durationMs: endedAt - startedAt,
+        })
+      }
       console.log(`[hot] ${key} ${wasReady ? "re-evaluated" : "started"}`)
     } catch (e) {
       slot.status = "failed"
       slot.error = e
+      if (!wasReady) {
+        const endedAt = Date.now()
+        bootBus.emit("service:end", {
+          key,
+          at: endedAt,
+          durationMs: endedAt - startedAt,
+          error: e instanceof Error ? e.message : String(e),
+        })
+      }
       console.error(`[hot] ${key} failed to evaluate:`, e)
     }
   }

@@ -398,6 +398,7 @@ export type DbHandlerContext = {
   collectionMutex: Effect.Semaphore;
   blobMutex: Effect.Semaphore;
   dbSend: (event: DbSendEvent) => void;
+  rootCache: import("./root-cache").RootCache;
 };
 
 export const validateSession = (

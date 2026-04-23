@@ -5,6 +5,7 @@ import { MAIN_WINDOW_ID } from "../../../shared/schema"
 
 type WindowBounds = { x: number; y: number; width: number; height: number }
 type SavedWindow = { windowId: string; bounds: WindowBounds }
+type BootWindow = { windowId: string; win: BaseWindow }
 
 export class BaseWindowService extends Service {
   static key = "base-window"
@@ -13,6 +14,12 @@ export class BaseWindowService extends Service {
   windows = new Map<string, BaseWindow>()
   private get savedWindows(): SavedWindow[] { return (globalThis as any).__zenbu_saved_windows__ ??= [] }
   private set savedWindows(v: SavedWindow[]) { (globalThis as any).__zenbu_saved_windows__ = v }
+  // The kernel shell spawns a BaseWindow with a loading view before plugin
+  // evaluation starts, then publishes it here. On first `evaluate` we adopt
+  // it instead of creating a new window, so the launch feels instantaneous
+  // and the loading view can be swapped for the orchestrator view in-place.
+  private get bootWindows(): BootWindow[] { return (globalThis as any).__zenbu_boot_windows__ ?? [] }
+  private set bootWindows(v: BootWindow[]) { (globalThis as any).__zenbu_boot_windows__ = v }
 
   private getZenWidth(): number | undefined {
     const flag = process.argv.find((a) => a.startsWith("--zen-width="))
@@ -51,7 +58,13 @@ export class BaseWindowService extends Service {
 
   evaluate() {
     if (this.windows.size === 0) {
-      if (this.savedWindows.length > 0) {
+      if (this.bootWindows.length > 0) {
+        for (const boot of this.bootWindows) {
+          this.windows.set(boot.windowId, boot.win)
+          boot.win.on("closed", () => this.windows.delete(boot.windowId))
+        }
+        this.bootWindows = []
+      } else if (this.savedWindows.length > 0) {
         for (const saved of this.savedWindows) {
           this.createWindow({ windowId: saved.windowId, ...saved.bounds })
         }

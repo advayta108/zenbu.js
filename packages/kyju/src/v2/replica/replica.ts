@@ -31,6 +31,7 @@ import {
   requireConnected,
   setAtPath,
 } from "./helpers";
+import { traceKyju } from "../trace";
 
 const concatToCollection = ({
   col,
@@ -411,18 +412,26 @@ const createReplicaEffect = (
 
           case "write": {
             const state = yield* requireConnected({ ref: stateRef });
-            yield* applyWrite({ stateRef, op: event.op, maxPageSizeBytes });
+            yield* traceKyju(
+              "kyju:replica.applyWrite",
+              applyWrite({ stateRef, op: event.op, maxPageSizeBytes }),
+              { op: event.op.type },
+            );
             yield* notifyConcatCallbacks(event.op);
             const writeRequestId = nanoid();
-            const writeAck = yield* sendToServer<Ack>(
-              {
-                kind: "write",
-                op: event.op,
-                sessionId: state.sessionId,
-                requestId: writeRequestId,
-                replicaId,
-              },
-              writeRequestId,
+            const writeAck = yield* traceKyju(
+              "kyju:replica.sendToServer",
+              sendToServer<Ack>(
+                {
+                  kind: "write",
+                  op: event.op,
+                  sessionId: state.sessionId,
+                  requestId: writeRequestId,
+                  replicaId,
+                },
+                writeRequestId,
+              ),
+              { op: event.op.type },
             );
             if (writeAck.error) return yield* Effect.fail(writeAck.error);
             return;

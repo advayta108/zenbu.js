@@ -1,6 +1,6 @@
 import { Effect, Ref } from "effect";
 import { nanoid } from "nanoid";
-import type { KyjuJSON, ServerEvent } from "../../shared";
+import type { ServerEvent } from "../../shared";
 import {
   type CollectionIndex,
   type PageIndex,
@@ -14,39 +14,44 @@ import {
   makeAck,
   makeErrorAck,
   paths,
-  readJsonFile,
   sendAck,
   setAtPath,
   writeJsonFile,
 } from "../helpers";
 import { type DbHandlerContext, validateSession } from "../helpers";
+import { traceKyju, traceKyjuSync } from "../../trace";
 
 type WriteEvent = Extract<ServerEvent, { kind: "write" }>;
 
 export const handleWrite = (ctx: DbHandlerContext, event: WriteEvent) =>
+  traceKyju(
+    `kyju:db.handleWrite`,
+    handleWriteImpl(ctx, event),
+    { op: event.op.type },
+  );
+
+const handleWriteImpl = (ctx: DbHandlerContext, event: WriteEvent) =>
   Effect.gen(function* () {
     const session = yield* validateSession(ctx, event.sessionId, event.requestId, event.replicaId);
 
     switch (event.op.type) {
       case "root.set": {
         const typedOp = event.op;
-        yield* ctx.rootMutex.withPermits(1)(
-          Effect.gen(function* () {
-            const root = yield* readJsonFile({
-              fs: ctx.fs,
-              path: paths.root({ config: ctx.config }),
-            });
-            const updated = setAtPath({
-              root,
-              path: typedOp.path,
-              value: typedOp.value,
-            });
-            yield* writeJsonFile({
-              fs: ctx.fs,
-              path: paths.root({ config: ctx.config }),
-              data: updated,
-            });
-          }),
+        yield* traceKyju(
+          "kyju:db.root.mutex+cache",
+          ctx.rootMutex.withPermits(1)(
+            Effect.gen(function* () {
+              const root = yield* ctx.rootCache.read();
+              const updated = traceKyjuSync("kyju:db.root.setAtPath", () =>
+                setAtPath({
+                  root,
+                  path: typedOp.path,
+                  value: typedOp.value,
+                }),
+              );
+              yield* ctx.rootCache.set(updated);
+            }),
+          ),
         );
         sendAck({
           session,
@@ -57,11 +62,13 @@ export const handleWrite = (ctx: DbHandlerContext, event: WriteEvent) =>
         });
 
         const sessions = yield* Ref.get(ctx.sessionsRef);
-        broadcastWrite({
-          sessions,
-          excludeSessionId: event.sessionId,
-          op: event.op,
-        });
+        traceKyjuSync("kyju:db.root.broadcast", () =>
+          broadcastWrite({
+            sessions,
+            excludeSessionId: event.sessionId,
+            op: event.op,
+          }),
+        );
         return;
       }
 
@@ -258,10 +265,9 @@ export const handleWrite = (ctx: DbHandlerContext, event: WriteEvent) =>
             }
 
             if (ctx.config.checkReferences) {
-              const root = yield* readJsonFile({
-                fs: ctx.fs,
-                path: paths.root({ config: ctx.config }),
-              });
+              // Read from the in-memory cache, not disk: any in-flight writes
+              // that haven't flushed yet must still count as live references.
+              const root = yield* ctx.rootCache.read();
               const hasRef = JSON.stringify(root).includes(typedOp.collectionId);
               if (hasRef) {
                 sendAck({
@@ -416,10 +422,8 @@ export const handleWrite = (ctx: DbHandlerContext, event: WriteEvent) =>
             }
 
             if (ctx.config.checkReferences) {
-              const root = yield* readJsonFile({
-                fs: ctx.fs,
-                path: paths.root({ config: ctx.config }),
-              });
+              // Read from the in-memory cache, not disk: see collection.delete.
+              const root = yield* ctx.rootCache.read();
               const hasRef = JSON.stringify(root).includes(typedOp.blobId);
               if (hasRef) {
                 sendAck({

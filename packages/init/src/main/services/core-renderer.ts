@@ -3,6 +3,7 @@ import fs from "node:fs"
 import { fileURLToPath } from "node:url"
 import { Service, runtime } from "../runtime"
 import { ReloaderService } from "./reloader"
+import { mark } from "../../../shared/tracer"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -19,13 +20,16 @@ export class CoreRendererService extends Service {
   port = 0
 
   async evaluate() {
-    const entry = await this.ctx.reloader.create(
-      "core",
-      rendererRoot,
-      fs.existsSync(viteConfigPath) ? viteConfigPath : false,
+    const entry = await this.trace("reloader-create", () =>
+      this.ctx.reloader.create(
+        "core",
+        rendererRoot,
+        fs.existsSync(viteConfigPath) ? viteConfigPath : false,
+      ),
     )
     this.url = entry.url
     this.port = entry.port
+    mark("vite-ready", { url: this.url })
     console.log(`[core-renderer] ready at ${this.url}`)
   }
 }

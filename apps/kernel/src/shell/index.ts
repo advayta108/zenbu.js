@@ -3,12 +3,30 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { register as registerLoader } from "node:module";
-import { app, BaseWindow, BrowserWindow, ipcMain } from "electron";
+import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { app, BaseWindow, BrowserWindow, WebContentsView, ipcMain } from "electron";
 import { closeAllWatchers } from "dynohot/pause";
 import { readConfig, addPlugin, CONFIG_PATH } from "./config";
 import { initUpdater } from "./updater";
 import { bootstrapEnv } from "./env-bootstrap";
 import { detectPreflight, triggerXcodeCliInstall } from "./preflight";
+import { bootBus } from "../../../../packages/init/shared/boot-bus";
+import {
+  trace as traceSpan,
+  traceSync as traceSpanSync,
+  mark as traceMark,
+} from "../../../../packages/init/shared/tracer";
+import {
+  renderFlameGraph,
+  type ServiceSpan,
+  type TraceSpan,
+  type TraceMark,
+} from "./boot-trace";
+
+// Keep in sync with `packages/init/shared/schema/index.ts::MAIN_WINDOW_ID`.
+// Hard-coded to avoid the schema's zod/kyju/agent transitive deps in the
+// kernel esbuild bundle.
+const MAIN_WINDOW_ID = "main";
 
 const PLUGINS_DIR = path.join(os.homedir(), ".zenbu", "plugins");
 const KERNEL_MANIFEST = "packages/init/zenbu.plugin.json";
@@ -124,15 +142,87 @@ function needsBootstrapper(): boolean {
 
 app.whenReady().then(async () => {
   try {
+    // Anchor the boot timeline the moment Electron is ready — everything we do
+    // from here forward is attributable. Wire the trace collectors before any
+    // `traceSpan`/`mark` so the first events aren't dropped.
+    const bootStartedAt = Date.now();
+    const pendingStarts = new Map<string, number>();
+    const serviceSpans: ServiceSpan[] = [];
+    const serviceByKey = new Map<string, ServiceSpan>();
+    const rootSpans: TraceSpan[] = [];
+    const marks: TraceMark[] = [];
+
+    const unsubSvcStart = bootBus.on("service:start", ({ key, at }) => {
+      pendingStarts.set(key, at);
+      // Register the span placeholder now so effects that fire DURING
+      // `evaluate()` (before `service:end`) can nest under this service.
+      if (!serviceByKey.has(key)) {
+        const placeholder: ServiceSpan = {
+          key,
+          startedAt: at,
+          endedAt: at,
+          durationMs: 0,
+          children: [],
+        };
+        serviceByKey.set(key, placeholder);
+        serviceSpans.push(placeholder);
+      }
+    });
+    const unsubSvcEnd = bootBus.on(
+      "service:end",
+      ({ key, at, durationMs, error }) => {
+        pendingStarts.delete(key);
+        const existing = serviceByKey.get(key);
+        if (existing) {
+          existing.endedAt = at;
+          existing.durationMs = durationMs;
+          if (error) existing.error = error;
+        } else {
+          const span: ServiceSpan = {
+            key,
+            startedAt: at - durationMs,
+            endedAt: at,
+            durationMs,
+            error,
+            children: [],
+          };
+          serviceSpans.push(span);
+          serviceByKey.set(key, span);
+        }
+      },
+    );
+    const unsubTrace = bootBus.on(
+      "trace:span",
+      ({ parentKey, name, startedAt, durationMs, error, meta }) => {
+        const span: TraceSpan = {
+          parentKey,
+          name,
+          startedAt,
+          endedAt: startedAt + durationMs,
+          durationMs,
+          error,
+          meta,
+        };
+        if (parentKey && serviceByKey.has(parentKey)) {
+          serviceByKey.get(parentKey)!.children.push(span);
+        } else {
+          rootSpans.push(span);
+        }
+      },
+    );
+    const unsubMark = bootBus.on("trace:mark", ({ name, at, meta }) => {
+      marks.push({ name, at, meta });
+    });
+
     console.log("[shell] app ready");
 
-    const bootstrap = bootstrapEnv();
+    const bootstrap = traceSpanSync("env-bootstrap", () => bootstrapEnv());
     console.log("[shell] env bootstrapped", {
       cacheRoot: bootstrap.paths.cacheRoot,
       needsToolchainDownload: bootstrap.needsToolchainDownload,
     });
 
-    const preflight = detectPreflight();
+    const preflight = traceSpanSync("preflight", () => detectPreflight());
     console.log("[shell] preflight:", preflight);
 
     const setupWindowOpts = {
@@ -197,7 +287,153 @@ app.whenReady().then(async () => {
       return;
     }
 
-    initUpdater();
+    // ----- Boot window -----
+    //
+    // Spawn a BaseWindow immediately with a loading WebContentsView so the
+    // launch is visible instantly — Vite + services take multiple seconds
+    // before the orchestrator is ready. The init-script announces progress
+    // via `bootBus`; we forward every status to the loading view over IPC.
+    //
+    // Once services evaluate, `BaseWindowService` adopts this window from
+    // `globalThis.__zenbu_boot_windows__` (so it doesn't spawn a duplicate),
+    // and `WindowService` attaches the orchestrator `WebContentsView` beneath
+    // the loading view. On the orchestrator's `did-finish-load`, the loading
+    // view is removed → window seamlessly becomes the orchestrator.
+    const { bootWindow, loadingView } = traceSpanSync(
+      "boot-window-create",
+      () => {
+        const bootWindow = new BaseWindow({
+          width: 800,
+          height: 900,
+          show: true,
+          titleBarStyle: "hidden",
+          trafficLightPosition: { x: 12, y: 10 },
+          backgroundColor: "#F4F4F4",
+        });
+        const loadingView = new WebContentsView({
+          webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false,
+          },
+        });
+        loadingView.setBackgroundColor("#F4F4F4");
+        bootWindow.contentView.addChildView(loadingView);
+        const layoutLoadingView = () => {
+          const { width, height } = bootWindow.getContentBounds();
+          loadingView.setBounds({ x: 0, y: 0, width, height });
+        };
+        layoutLoadingView();
+        bootWindow.on("resize", layoutLoadingView);
+        loadingView.webContents.loadFile(
+          path.join(app.getAppPath(), "src/boot/index.html"),
+        );
+        return { bootWindow, loadingView };
+      },
+    );
+
+    // Tag the window so `WindowService.attachView` knows to insert the
+    // orchestrator beneath the loading view and swap on did-finish-load.
+    (bootWindow as any).__zenbu_loading_view__ = loadingView;
+
+    // Publish for `BaseWindowService` to claim on first evaluate.
+    (globalThis as any).__zenbu_boot_windows__ = [
+      { windowId: MAIN_WINDOW_ID, win: bootWindow },
+    ];
+
+    // Buffer boot messages until the loading view's HTML finishes loading —
+    // webContents.send() before did-finish-load silently drops the message.
+    type QueuedMsg = { channel: string; payload: unknown };
+    let loadingReady = false;
+    const pending: QueuedMsg[] = [];
+    const send = (channel: string, payload: unknown) => {
+      if (loadingView.webContents.isDestroyed()) return;
+      if (loadingReady) {
+        loadingView.webContents.send(channel, payload);
+      } else {
+        pending.push({ channel, payload });
+      }
+    };
+    loadingView.webContents.once("did-finish-load", () => {
+      traceMark("window-visible");
+      loadingReady = true;
+      for (const msg of pending) {
+        if (loadingView.webContents.isDestroyed()) break;
+        loadingView.webContents.send(msg.channel, msg.payload);
+      }
+      pending.length = 0;
+    });
+
+    const unsubStatus = bootBus.on("status", (payload) => {
+      send("zenbu:boot-status", payload);
+    });
+    const unsubError = bootBus.on("error", (payload) => {
+      send("zenbu:boot-error", payload);
+    });
+
+    const unsubReady = bootBus.on("ready", () => {
+      unsubStatus();
+      unsubError();
+      unsubSvcStart();
+      unsubSvcEnd();
+      unsubTrace();
+      unsubMark();
+      unsubReady();
+
+      void (async () => {
+        try {
+          const loaderStatsArr = await flushLoaders().catch(
+            () => [] as LoaderStats[],
+          );
+          const readyAt = Date.now();
+          const totalMs = readyAt - bootStartedAt;
+          const trace = {
+            bootStartedAt,
+            readyAt,
+            totalMs,
+            serviceSpans,
+            rootSpans,
+            marks,
+            loaderStats: loaderStatsArr,
+          };
+          const report = renderFlameGraph(trace);
+          console.log("\n" + report + "\n");
+
+          const internalDir = path.join(os.homedir(), ".zenbu", ".internal");
+          fs.mkdirSync(internalDir, { recursive: true });
+          const tracePath = path.join(internalDir, "boot-trace.log");
+          const body =
+            `===== boot trace pid=${process.pid} ${new Date(readyAt).toISOString()} =====\n` +
+            report +
+            "\n\n" +
+            JSON.stringify(trace, null, 2) +
+            "\n";
+          fs.writeFileSync(tracePath, body);
+
+          // JSON-only sibling for the perf harness (`scripts/perf-boot.mjs`).
+          // The .log file mixes a human-readable report + JSON; the .json file
+          // is just the structured payload, easier to parse programmatically.
+          const traceJsonPath = path.join(internalDir, "boot-trace.json");
+          fs.writeFileSync(traceJsonPath, JSON.stringify(trace, null, 2));
+
+          console.log(`[boot-trace] wrote ${tracePath}`);
+
+          // Perf harness mode: exit cleanly after writing the trace so a
+          // wrapper script can spawn-measure-spawn-measure in a loop.
+          if (process.env.ZENBU_PERF_EXIT_ON_READY === "1") {
+            console.log("[boot-trace] ZENBU_PERF_EXIT_ON_READY=1 — quitting");
+            // setImmediate so the trace write fully flushes + this log lands
+            // before Electron's quit cycle yanks the process out from under us.
+            setImmediate(() => app.quit());
+          }
+        } catch (err) {
+          console.error("[boot-trace] render/write failed:", err);
+        }
+      })();
+    });
+
+    bootBus.emit("status", { message: "Starting Zenbu…" });
+
+    await traceSpan("init-updater", async () => initUpdater());
 
     let config = readConfig();
     console.log("[shell] config:", JSON.stringify(config));
@@ -229,34 +465,74 @@ app.whenReady().then(async () => {
     console.log("[shell] project root:", projectRoot);
     console.log("[shell] tsconfig:", tsconfig);
 
-    // Register zenbu virtual barrel loader (must be before dynohot)
-    const loaderHooksPath = pathToFileURL(
-      path.join(app.getAppPath(), "src/shell/zenbu-loader-hooks.js"),
-    ).href;
-    console.log("[shell] registering zenbu loader from", loaderHooksPath);
-    registerLoader(loaderHooksPath);
-    console.log("[shell] zenbu loader registered");
+    bootBus.emit("status", { message: "Preparing runtime…" });
 
-    // Register @testbu alias loader
-    const aliasLoaderPath = pathToFileURL(
-      path.join(app.getAppPath(), "src/shell/alias-loader-hooks.js"),
-    ).href;
-    registerLoader(aliasLoaderPath);
-    console.log("[shell] alias loader registered");
+    // Loader telemetry: each loader gets a `MessagePort` and accumulates
+    // per-hook timing stats. We flush at `bootBus.ready` and render a summary.
+    type LoaderStats = {
+      name: string;
+      resolveCount: number;
+      resolveMs: number;
+      loadCount: number;
+      loadMs: number;
+    };
+    const loaderPorts: MessagePort[] = [];
+    const registerTelemetryLoader = (hooksPath: string) => {
+      const { port1, port2 } = new MessageChannel();
+      loaderPorts.push(port2);
+      port2.unref();
+      registerLoader(hooksPath, {
+        data: { tracePort: port1 },
+        transferList: [port1],
+      });
+    };
+    const flushLoaders = async (timeoutMs = 1000): Promise<LoaderStats[]> => {
+      const results = await Promise.all(
+        loaderPorts.map(
+          (port) =>
+            new Promise<LoaderStats | null>((resolve) => {
+              const timer = setTimeout(() => resolve(null), timeoutMs);
+              port.once("message", (msg: LoaderStats) => {
+                clearTimeout(timer);
+                resolve(msg);
+              });
+              port.postMessage("flush");
+            }),
+        ),
+      );
+      return results.filter((r): r is LoaderStats => r !== null);
+    };
 
-    const { register: registerTsx } = await import("tsx/esm/api");
-    registerTsx({ tsconfig });
-    console.log("[shell] tsx registered");
+    await traceSpan("loader-register", async () => {
+      // Register zenbu virtual barrel loader (must be before dynohot)
+      const loaderHooksPath = pathToFileURL(
+        path.join(app.getAppPath(), "src/shell/zenbu-loader-hooks.js"),
+      ).href;
+      registerTelemetryLoader(loaderHooksPath);
+      const aliasLoaderPath = pathToFileURL(
+        path.join(app.getAppPath(), "src/shell/alias-loader-hooks.js"),
+      ).href;
+      registerTelemetryLoader(aliasLoaderPath);
+    });
 
-    await import("@zenbu/advice/node");
-    console.log("[shell] advice registered");
+    await traceSpan("tsx-register", async () => {
+      const { register: registerTsx } = await import("tsx/esm/api");
+      registerTsx({ tsconfig });
+    });
 
-    const { register: registerDynohot } = await import("dynohot/register");
-    registerDynohot({ ignore: /[/\\]node_modules[/\\]/ });
-    console.log("[shell] dynohot registered");
+    await traceSpan("advice-register", async () => {
+      await import("@zenbu/advice/node");
+    });
+
+    await traceSpan("dynohot-register", async () => {
+      const { register: registerDynohot } = await import("dynohot/register");
+      registerDynohot({ ignore: /[/\\]node_modules[/\\]/ });
+    });
 
     process.chdir(projectRoot);
     console.log("[shell] cwd:", process.cwd());
+
+    bootBus.emit("status", { message: "Loading plugins…" });
 
     const url = `zenbu:plugins?config=${encodeURIComponent(CONFIG_PATH)}`;
     console.log("[shell] loading plugins from config:", CONFIG_PATH);
@@ -264,15 +540,15 @@ app.whenReady().then(async () => {
       // dynohot wraps hot-imported modules in a controller that defers execution.
       // The module body won't run until we call controller.main().
       // See: packages/dynohot/loader/loader.ts "Main entrypoint shim"
-      const mod = await import(url, { with: { hot: "import" } });
+      const mod = await traceSpan("plugin-import", () =>
+        import(url, { with: { hot: "import" } }),
+      );
       if (typeof mod.default === "function") {
         const controller = mod.default();
         if (controller && typeof controller.main === "function") {
-          console.log("[shell] evaluating plugin root via controller.main()");
-          await controller.main();
+          await traceSpan("plugin-main", () => controller.main());
         }
       }
-      console.log("[shell] plugins loaded from config");
     } catch (err) {
       console.error(
         "[shell] failed to load plugins from config:",
@@ -283,9 +559,8 @@ app.whenReady().then(async () => {
 
     const runtime = (globalThis as any).__zenbu_service_runtime__;
     if (runtime) {
-      console.log("[shell] waiting for runtime...");
-      await runtime.whenIdle();
-      console.log("[shell] runtime settled");
+      bootBus.emit("status", { message: "Starting services…" });
+      await traceSpan("runtime-drain", () => runtime.whenIdle());
     } else {
       console.log("[shell] warning: no runtime found after loading services");
     }

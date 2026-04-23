@@ -54,6 +54,7 @@ import {
   type PendingUpdate,
 } from "./components/PluginUpdateModal";
 import { CliRelaunchModal } from "./components/CliRelaunchModal";
+import { KernelBinaryUpdateBanner } from "./components/KernelBinaryUpdateBanner";
 import { ShortcutForwarderProvider } from "./providers/shortcut-forwarder";
 import { useFocusOnRequest } from "../../lib/focus-request";
 import {
@@ -931,6 +932,7 @@ function OrchestratorContent() {
           onLoadAgent={handleLoadAgent}
         />
       </ErrorBoundary>
+      <KernelBinaryUpdateBanner />
       <div className="relative flex-1 min-h-0">
         <ErrorBoundary
           scope="tabs"

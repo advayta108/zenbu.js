@@ -4,6 +4,38 @@ import { pathToFileURL } from "node:url"
 import { subscribe } from "@parcel/watcher"
 import { registerWatcherClosable } from "dynohot/pause"
 
+// ----- Telemetry -----
+//
+// The kernel passes a `MessagePort` via `register()`'s data so we can report
+// how much time is spent in this loader's hooks. Accumulate locally; the
+// kernel sends a `"flush"` message at the end of boot and we respond with
+// totals. Everything is best-effort — if no port was provided (e.g. the
+// loader is used from a non-kernel context) the wrappers are no-ops.
+const LOADER_NAME = "zenbu-loader"
+let tracePort = null
+const stats = {
+  resolveCount: 0,
+  resolveMs: 0,
+  loadCount: 0,
+  loadMs: 0,
+}
+export function initialize(data) {
+  if (!data || !data.tracePort) return
+  tracePort = data.tracePort
+  tracePort.on("message", (msg) => {
+    if (msg === "flush") {
+      try {
+        tracePort.postMessage({ name: LOADER_NAME, ...stats })
+      } catch {}
+      stats.resolveCount = 0
+      stats.resolveMs = 0
+      stats.loadCount = 0
+      stats.loadMs = 0
+    }
+  })
+  tracePort.unref?.()
+}
+
 function parseJsonc(str) {
   let result = ""
   let i = 0
@@ -173,13 +205,19 @@ function buildBarrel(manifestPath) {
 }
 
 export function resolve(specifier, context, nextResolve) {
-  if (specifier.startsWith("zenbu:")) {
-    return { url: specifier, shortCircuit: true }
+  const start = Date.now()
+  try {
+    if (specifier.startsWith("zenbu:")) {
+      return { url: specifier, shortCircuit: true }
+    }
+    return nextResolve(specifier, context)
+  } finally {
+    stats.resolveCount++
+    stats.resolveMs += Date.now() - start
   }
-  return nextResolve(specifier, context)
 }
 
-export function load(url, context, nextLoad) {
+function loadImpl(url, context, nextLoad) {
   if (url.startsWith("zenbu:plugins?")) {
     const params = new URL(url).searchParams
     const configPath = decodeURIComponent(params.get("config"))
@@ -212,4 +250,14 @@ export function load(url, context, nextLoad) {
     return { format: "module", source, shortCircuit: true }
   }
   return nextLoad(url, context)
+}
+
+export function load(url, context, nextLoad) {
+  const start = Date.now()
+  try {
+    return loadImpl(url, context, nextLoad)
+  } finally {
+    stats.loadCount++
+    stats.loadMs += Date.now() - start
+  }
 }

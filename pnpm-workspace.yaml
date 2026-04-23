@@ -6,4 +6,4 @@ packages:
   - 'explorations/*'
 
 catalog:
-  effect: "3.20.0"
+  effect: "3.21.1"

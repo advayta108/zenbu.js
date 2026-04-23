@@ -18,6 +18,7 @@ import type {
   InferFieldType,
 } from "../db/schema";
 import { createRecordingProxy } from "./proxy";
+import { traceKyju } from "../trace";
 
 type ConnectedState = Extract<ClientState, { kind: "connected" }>;
 
@@ -571,25 +572,29 @@ function createClientCore<TShape extends SchemaShape>(
   const readRootFn = () => getRoot();
 
   const updateFn = (fn: (root: any) => any) =>
-    Effect.gen(function* () {
-      const root = getRoot();
-      const { proxy, getOperations } = createRecordingProxy(root);
-      const result = fn(proxy);
+    traceKyju(
+      "kyju:client.update",
+      Effect.gen(function* () {
+        const root = getRoot();
+        const { proxy, getOperations } = createRecordingProxy(root);
+        const result = fn(proxy);
 
-      if (result !== undefined) {
-        yield* send({
-          kind: "write",
-          op: { type: "root.set", path: [], value: result },
-        });
-      } else {
-        for (const op of getOperations()) {
+        if (result !== undefined) {
           yield* send({
             kind: "write",
-            op: { type: "root.set", path: op.path, value: op.value },
+            op: { type: "root.set", path: [], value: result },
           });
+        } else {
+          const ops = getOperations();
+          for (const op of ops) {
+            yield* send({
+              kind: "write",
+              op: { type: "root.set", path: op.path, value: op.value },
+            });
+          }
         }
-      }
-    });
+      }),
+    );
 
   const createBlobFn = (data: Uint8Array, hot?: boolean) =>
     Effect.gen(function* () {

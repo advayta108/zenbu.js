@@ -63,7 +63,15 @@ export async function setup(opts?: {
 
   const client = createClient<TestSchema>(replica);
 
-  const cleanup = () => {
+  // Drain any pending lagged-persistence writes before nuking the dir,
+  // otherwise setImmediate-scheduled disk writes fire post-cleanup and
+  // surface as unhandled ENOENT rejections.
+  const cleanup = async () => {
+    try {
+      await db.flush();
+    } catch {
+      // best-effort
+    }
     fs.rmSync(dbPath, { recursive: true, force: true });
   };
 
@@ -116,7 +124,14 @@ export async function setupMultiClient(
     replicas,
     clients,
     dbPath,
-    cleanup: () => fs.rmSync(dbPath, { recursive: true, force: true }),
+    cleanup: async () => {
+      try {
+        await db.flush();
+      } catch {
+        // best-effort
+      }
+      fs.rmSync(dbPath, { recursive: true, force: true });
+    },
   };
 }
 

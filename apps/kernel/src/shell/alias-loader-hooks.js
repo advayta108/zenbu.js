@@ -9,6 +9,31 @@ const PACKAGES = path.join(MONOREPO, "packages")
 const TESTBU_ALIAS = "@testbu/"
 const ZENBU_ALIAS = "@zenbu/"
 
+const LOADER_NAME = "alias-loader"
+let tracePort = null
+const stats = {
+  resolveCount: 0,
+  resolveMs: 0,
+  loadCount: 0,
+  loadMs: 0,
+}
+export function initialize(data) {
+  if (!data || !data.tracePort) return
+  tracePort = data.tracePort
+  tracePort.on("message", (msg) => {
+    if (msg === "flush") {
+      try {
+        tracePort.postMessage({ name: LOADER_NAME, ...stats })
+      } catch {}
+      stats.resolveCount = 0
+      stats.resolveMs = 0
+      stats.loadCount = 0
+      stats.loadMs = 0
+    }
+  })
+  tracePort.unref?.()
+}
+
 function resolveToFile(resolved) {
   if (path.extname(resolved)) return resolved
   if (fs.existsSync(resolved + ".ts")) return resolved + ".ts"
@@ -16,7 +41,7 @@ function resolveToFile(resolved) {
   return resolved + ".ts"
 }
 
-export function resolve(specifier, context, nextResolve) {
+function resolveImpl(specifier, context, nextResolve) {
   if (specifier.startsWith(TESTBU_ALIAS)) {
     const rest = specifier.slice(TESTBU_ALIAS.length)
     const filePath = resolveToFile(path.resolve(PACKAGES, rest))
@@ -53,4 +78,14 @@ export function resolve(specifier, context, nextResolve) {
   }
 
   return nextResolve(specifier, context)
+}
+
+export function resolve(specifier, context, nextResolve) {
+  const start = Date.now()
+  try {
+    return resolveImpl(specifier, context, nextResolve)
+  } finally {
+    stats.resolveCount++
+    stats.resolveMs += Date.now() - start
+  }
 }

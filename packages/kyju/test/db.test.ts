@@ -16,6 +16,8 @@ describe("root.set", () => {
     await ctx.client.title.set("hello");
     expect(ctx.client.title.read()).toBe("hello");
 
+    // Lagged persistence: flush before asserting on disk state.
+    await ctx.db.flush();
     const rootJson = JSON.parse(
       fs.readFileSync(path.join(ctx.dbPath, "root.json"), "utf-8"),
     );

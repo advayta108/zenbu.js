@@ -208,6 +208,20 @@ export class DbService extends Service {
     return this.db!.effectClient as unknown as SectionedEffectClient;
   }
 
+  /**
+   * Drain kyju's lagged-persistence queue. Safe to call anytime; idempotent
+   * when nothing is pending. Used by service teardown (effect cleanup) so
+   * shutdown / hot-reload don't lose in-memory writes.
+   */
+  async flush(): Promise<void> {
+    if (!this.db) return;
+    try {
+      await this.db.flush();
+    } catch (err) {
+      console.error("[db] flush failed:", err);
+    }
+  }
+
   async getAgentDebugPaths(agentId: string): Promise<{
     agentId: string;
     collectionId: string | null;
@@ -249,7 +263,9 @@ export class DbService extends Service {
   }
 
   async evaluate() {
-    const sections = await discoverSections();
+    const sections = await this.trace("discover-sections", () =>
+      discoverSections(),
+    );
     const sectionsHash = JSON.stringify(
       sections.map((s) => ({ name: s.name, v: s.migrations.length })),
     );
@@ -261,11 +277,13 @@ export class DbService extends Service {
     ) {
       fsSync.mkdirSync(path.dirname(DB_PATH), { recursive: true });
       this.dbRouter = createRouter();
-      this.db = await createDb({
-        sections,
-        path: DB_PATH,
-        send: (event) => this.dbRouter!.send(event),
-      });
+      this.db = await this.trace("create-db", () =>
+        createDb({
+          sections,
+          path: DB_PATH,
+          send: (event) => this.dbRouter!.send(event),
+        }),
+      );
       this.sectionsHash = sectionsHash;
       this.dbPath = DB_PATH;
       console.log(
@@ -281,6 +299,13 @@ export class DbService extends Service {
       string,
       { receive: (event: any) => Promise<void>; close: () => void }
     >();
+
+    // Flush lagged kyju writes on any teardown (hot-reload OR shutdown).
+    // Without this, in-memory writes that haven't yet hit setImmediate's
+    // disk write would vanish when the Db instance is replaced/destroyed.
+    this.effect("kyju-flush-on-cleanup", () => async () => {
+      await this.flush();
+    });
 
     this.effect("ws-transport", () => {
       const onConnected = (id: string, ws: WebSocket) => {

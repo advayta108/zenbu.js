@@ -13,6 +13,7 @@ import {
   paths,
   writeJsonFile,
 } from "./helpers";
+import { makeRootCache } from "./root-cache";
 import type { Schema, SchemaShape } from "./schema";
 import type { KyjuMigration, SectionConfig } from "../migrations";
 import type { DbHandlerContext } from "./helpers";
@@ -54,6 +55,13 @@ export type CreateDbConfig<TShape extends SchemaShape = SchemaShape> = {
 export type Db<TShape extends SchemaShape = SchemaShape> = {
   postMessage: (event: ServerEvent) => Promise<void>;
   reconnectClients: () => Promise<void>;
+  /**
+   * Drain the lagged-persistence queue: writes that were applied to the
+   * in-memory root cache but not yet committed to disk. Idempotent and
+   * cheap when nothing is pending. Call before clean shutdown to ensure
+   * durability of any writes that completed during this process's lifetime.
+   */
+  flush: () => Promise<void>;
   client: ClientProxy<TShape>;
   effectClient: EffectClientProxy<TShape>;
 };
@@ -216,6 +224,13 @@ const createDbEffect = <TShape extends SchemaShape>(
     const blobMutex = yield* Effect.makeSemaphore(1);
     const latch = yield* Effect.makeLatch(false);
 
+    // Hydrate the in-memory root cache from disk. Must run AFTER
+    // `initializeDbIfNeeded` (which writes the initial root if missing) so
+    // there's something to read; runs BEFORE `runPlugins` (which executes
+    // migrations via client.update → handleWrite, which now reads/writes
+    // through the cache).
+    const rootCache = yield* makeRootCache(fs, config, rootMutex);
+
     const ctx: DbHandlerContext = {
       fs,
       config,
@@ -224,6 +239,7 @@ const createDbEffect = <TShape extends SchemaShape>(
       collectionMutex,
       blobMutex,
       dbSend: userConfig.send,
+      rootCache,
     };
 
     const postMessageEffect = (event: ServerEvent) =>
@@ -271,6 +287,12 @@ const createDbEffect = <TShape extends SchemaShape>(
     const localReplica = yield* runPlugins(ctx, postMessageEffect, plugins);
     yield* latch.open;
 
+    // Migrations may have written to the root cache; drain to disk before
+    // returning so the on-disk state reflects all pre-start work. If we
+    // crashed between createDb resolving and the next flush, the next boot
+    // would otherwise re-run migrations (since their effects live in cache).
+    yield* rootCache.flush();
+
     const client = createClient<TShape>(localReplica);
     const effectClient = createEffectClient<TShape>(localReplica);
 
@@ -279,6 +301,7 @@ const createDbEffect = <TShape extends SchemaShape>(
         Effect.runPromise(postMessageEffect(event)),
       reconnectClients: (): Promise<void> =>
         Effect.runPromise(reconnectClientsEffect),
+      flush: (): Promise<void> => Effect.runPromise(rootCache.flush()),
       client,
       effectClient,
     };

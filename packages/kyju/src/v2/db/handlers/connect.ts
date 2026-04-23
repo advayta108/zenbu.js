@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 import type { ServerEvent } from "../../shared";
 import { VERSION } from "../../shared";
 import type { Session } from "../helpers";
-import { makeAck, makeErrorAck, paths, readJsonFile, sendAck } from "../helpers";
+import { makeAck, makeErrorAck, sendAck } from "../helpers";
 import type { DbHandlerContext } from "../helpers";
 
 type ConnectEvent = Extract<ServerEvent, { kind: "connect" }>;
@@ -32,10 +32,9 @@ export const handleConnect = (
       }
 
       const sessionId = nanoid();
-      const root = yield* readJsonFile({
-        fs: ctx.fs,
-        path: paths.root({ config: ctx.config }),
-      });
+      // Read from the in-memory cache, not disk: a connecting/reconnecting
+      // replica must observe in-flight writes that haven't flushed yet.
+      const root = yield* ctx.rootCache.read();
 
       const session: Session = {
         sessionId,

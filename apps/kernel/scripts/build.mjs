@@ -41,4 +41,13 @@ for (const file of fs.readdirSync(loaderSrc)) {
   }
 }
 
+const bootSrc = path.join(root, "src/boot");
+const bootDest = path.join(root, "dist/main/src/boot");
+fs.cpSync(bootSrc, bootDest, { recursive: true });
+
+const setupGifSrc = path.join(root, "src/setup/loading.gif");
+const setupGifDest = path.join(root, "dist/main/src/setup/loading.gif");
+fs.mkdirSync(path.dirname(setupGifDest), { recursive: true });
+fs.copyFileSync(setupGifSrc, setupGifDest);
+
 console.log("\nBuild complete -> dist/main/");

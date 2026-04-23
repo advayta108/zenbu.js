@@ -14,6 +14,7 @@ import {
   type BlobIndex,
 } from "../v2/db/helpers";
 import { handleWrite } from "../v2/db/handlers/write";
+import { makeRootCache } from "../v2/db/root-cache";
 import type { KyjuJSON, WriteOp } from "../v2/shared";
 
 const DEFAULT_CONFIG: Omit<
@@ -315,14 +316,16 @@ const opCmd = Command.make(
         },
       };
 
+      const rootMutex = yield* Effect.makeSemaphore(1);
       const ctx: DbHandlerContext = {
         fs,
         config,
         sessionsRef: yield* Ref.make(new Map([["cli", fakeSession]])),
-        rootMutex: yield* Effect.makeSemaphore(1),
+        rootMutex,
         collectionMutex: yield* Effect.makeSemaphore(1),
         blobMutex: yield* Effect.makeSemaphore(1),
         dbSend: () => {},
+        rootCache: yield* makeRootCache(fs, config, rootMutex),
       };
 
       yield* handleWrite(ctx, {
@@ -332,6 +335,10 @@ const opCmd = Command.make(
         requestId: "cli-op",
         replicaId: "cli",
       });
+
+      // CLI op runs a single write then exits — flush so the change lands
+      // on disk before the process terminates.
+      yield* ctx.rootCache.flush();
 
       const ack = responses.find(
         (r) =>

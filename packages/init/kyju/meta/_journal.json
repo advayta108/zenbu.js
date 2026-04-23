@@ -150,6 +150,11 @@
       "idx": 29,
       "tag": "window_persisted_flag",
       "when": 1776657697352
+    },
+    {
+      "idx": 30,
+      "tag": "kernel_update_state",
+      "when": 1776831798978
     }
   ]
 }

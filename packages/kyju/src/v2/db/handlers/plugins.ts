@@ -4,7 +4,6 @@ import type { ServerEvent } from "../../shared";
 import type { ClientProxy } from "../../client/client";
 import type { SchemaShape } from "../schema";
 import type { Session } from "../helpers";
-import { paths, readJsonFile } from "../helpers";
 import { createReplica } from "../../replica/replica";
 import { createClient } from "../../client/client";
 import type { DbHandlerContext } from "../helpers";
@@ -26,10 +25,7 @@ export const runPlugins = (
 ) =>
   Effect.gen(function* () {
     const sessionId = nanoid();
-    const root = yield* readJsonFile({
-      fs: ctx.fs,
-      path: paths.root({ config: ctx.config }),
-    });
+    const root = yield* ctx.rootCache.read();
 
     const replica = createReplica({
       send: (event) => {

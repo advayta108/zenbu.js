@@ -751,6 +751,8 @@ function UpdatesSection({
         </Button>
       </div>
 
+      <KernelAppVersionCard />
+
       <div className="flex items-center gap-0.5 border-b border-border -mx-5 px-5">
         <TabButton active={tab === "overview"} onClick={() => setTab("overview")}>
           Overview
@@ -791,6 +793,199 @@ function UpdatesSection({
       </div>
     </div>
   );
+}
+
+/**
+ * Summary card for the Electron binary (kernel) auto-update flow.
+ *
+ * Reads transient state from `root.plugin.kernel.updateState`, which
+ * `KernelUpdaterService` mirrors off the `kernel-updater` event bus.
+ * Exposes the same check/download/install triggers as the orchestrator
+ * chrome banner — this is the place a user looks on purpose, the
+ * banner is the place that pulls them in.
+ */
+function KernelAppVersionCard() {
+  const rpc = useRpc();
+  const state = useDb((root) => root.plugin.kernel.updateState);
+  const [currentVersion, setCurrentVersion] = useState<string | null>(null);
+  const [busy, setBusy] = useState<
+    null | "check" | "download" | "install" | "dismiss"
+  >(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const v: string = await (rpc as any).kernelUpdater.getCurrentVersion();
+        setCurrentVersion(v);
+      } catch {}
+    })();
+  }, [rpc]);
+
+  const check = useCallback(async () => {
+    setBusy("check");
+    try {
+      await (rpc as any).kernelUpdater.checkForUpdates();
+    } finally {
+      setBusy(null);
+    }
+  }, [rpc]);
+
+  const download = useCallback(async () => {
+    setBusy("download");
+    try {
+      await (rpc as any).kernelUpdater.downloadUpdate();
+    } finally {
+      setBusy(null);
+    }
+  }, [rpc]);
+
+  const install = useCallback(async () => {
+    setBusy("install");
+    try {
+      await (rpc as any).kernelUpdater.quitAndInstall();
+    } catch {
+      // Transport dies during quit.
+    } finally {
+      setBusy(null);
+    }
+  }, [rpc]);
+
+  const dismiss = useCallback(async () => {
+    setBusy("dismiss");
+    try {
+      await (rpc as any).kernelUpdater.dismissAvailable();
+    } finally {
+      setBusy(null);
+    }
+  }, [rpc]);
+
+  const status = state?.status ?? "idle";
+  const availableVersion = state?.availableVersion ?? null;
+  const lastCheckedAt = state?.lastCheckedAt ?? null;
+  const error = state?.error ?? null;
+  const downloadPercent = state?.downloadPercent ?? null;
+
+  const statusLabel = (() => {
+    switch (status) {
+      case "checking":
+        return "Checking…";
+      case "available":
+        return availableVersion
+          ? `Update available (${availableVersion})`
+          : "Update available";
+      case "not-available":
+        return "Up to date";
+      case "downloading":
+        return `Downloading… ${Math.floor(downloadPercent ?? 0)}%`;
+      case "downloaded":
+        return "Ready to install";
+      case "error":
+        return "Couldn't check for updates";
+      default:
+        return "Idle";
+    }
+  })();
+
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Zenbu</div>
+          <div className="text-xs text-muted-foreground">
+            {currentVersion ? `Version ${currentVersion}` : "Version …"}
+            {lastCheckedAt && (
+              <>
+                {" · checked "}
+                <RelativeTime ts={lastCheckedAt} />
+              </>
+            )}
+          </div>
+        </div>
+        <div className="shrink-0 text-xs text-muted-foreground">
+          {statusLabel}
+        </div>
+      </div>
+
+      {status === "downloading" && (
+        <div className="relative h-1.5 rounded-full bg-blue-100 overflow-hidden">
+          <div
+            className="absolute inset-y-0 left-0 bg-blue-500 transition-[width] duration-200"
+            style={{ width: `${Math.max(0, Math.min(100, downloadPercent ?? 0))}%` }}
+          />
+        </div>
+      )}
+
+      {status === "error" && error && (
+        <pre className="whitespace-pre-wrap break-words rounded bg-background p-2 text-[11px] text-destructive">
+          {error}
+        </pre>
+      )}
+
+      <div className="flex flex-wrap gap-2 pt-1">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={check}
+          disabled={busy !== null || status === "checking" || status === "downloading"}
+          className="text-xs"
+        >
+          {busy === "check" || status === "checking"
+            ? "Checking…"
+            : "Check for updates"}
+        </Button>
+        {status === "available" && (
+          <>
+            <Button
+              size="sm"
+              onClick={download}
+              disabled={busy !== null}
+              className="text-xs"
+            >
+              {busy === "download" ? "Starting…" : "Download"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={dismiss}
+              disabled={busy !== null}
+              className="text-xs"
+            >
+              Dismiss
+            </Button>
+          </>
+        )}
+        {status === "downloaded" && (
+          <Button
+            size="sm"
+            onClick={install}
+            disabled={busy !== null}
+            className="text-xs"
+          >
+            {busy === "install" ? "Restarting…" : "Restart to install"}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RelativeTime({ ts }: { ts: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const delta = Date.now() - ts;
+  const label = (() => {
+    if (delta < 60_000) return "just now";
+    const mins = Math.floor(delta / 60_000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  })();
+  return <span>{label}</span>;
 }
 
 function TabButton({

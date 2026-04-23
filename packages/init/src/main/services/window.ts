@@ -28,6 +28,8 @@ import {
   activateAgentTab,
   type ArchivedAgent,
 } from "../../../shared/agent-ops";
+import { bootBus } from "../../../shared/boot-bus";
+import { mark } from "../../../shared/tracer";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -653,7 +655,19 @@ export class WindowService extends Service {
         });
 
         view.setBackgroundColor("#F4F4F4");
-        win.contentView.addChildView(view);
+
+        // If the kernel pre-populated this window with a loading view, keep it
+        // on top and add the orchestrator beneath (index 0 = bottom of stack).
+        // When the orchestrator finishes loading we remove the loading view so
+        // there's no flash of blank content during Vite's boot.
+        const loadingView = (win as any).__zenbu_loading_view__ as
+          | WebContentsView
+          | undefined;
+        if (loadingView) {
+          win.contentView.addChildView(view, 0);
+        } else {
+          win.contentView.addChildView(view);
+        }
 
         const layout = () => {
           const { width, height } = win.getContentBounds();
@@ -661,6 +675,34 @@ export class WindowService extends Service {
         };
         layout();
         win.on("resize", layout);
+
+        if (loadingView) {
+          view.webContents.once("dom-ready", () => {
+            mark("orchestrator-dom-ready", { windowId });
+          });
+          const swap = () => {
+            mark("content-rendered", { windowId });
+            try {
+              if (!win.isDestroyed()) {
+                win.contentView.removeChildView(loadingView);
+              }
+              if (!loadingView.webContents.isDestroyed()) {
+                loadingView.webContents.close();
+              }
+            } catch (err) {
+              console.warn("[window] loading view swap failed:", err);
+            }
+            (win as any).__zenbu_loading_view__ = null;
+            bootBus.emit("ready", { windowId });
+          };
+          view.webContents.once("did-finish-load", swap);
+          // Failsafe: if the orchestrator errors out, still swap so the user
+          // isn't stuck staring at the loading spinner forever.
+          view.webContents.once("did-fail-load", (_e, code, desc) => {
+            console.error(`[window] orchestrator failed to load (${code}): ${desc}`);
+            swap();
+          });
+        }
 
         const emitScrollTouch = (phase: "begin" | "end") => {
           rpc.emit.orchestrator.scrollTouch({
@@ -696,6 +738,7 @@ export class WindowService extends Service {
           const base = coreEntry.url.replace(/\/$/, "");
           url = `${base}${viewPath}?${qs}`;
         }
+        mark("orchestrator-load-start", { windowId });
         view.webContents.loadURL(url);
 
         viewEntries.set(windowId, { win, view });

@@ -156,7 +156,7 @@ function buildManifest(name: string, recipes: Recipe[]): Manifest {
 
 function buildPackageJson(name: string, recipes: Recipe[]): object {
   const deps: Record<string, string> = {
-    effect: "^3.20.0",
+    effect: "^3.21.0",
     nanoid: "^5.1.9",
     zod: "^4",
   }

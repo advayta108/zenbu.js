@@ -69,6 +69,7 @@
     "files": [
       "dist/main/**",
       "src/setup/**",
+      "src/boot/**",
       "src/shell/*-hooks.js"
     ],
     "extraMetadata": {

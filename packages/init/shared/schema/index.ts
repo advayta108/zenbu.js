@@ -215,6 +215,37 @@ export const appSchema = createSchema({
   focusRequestTarget: f.string().nullable().default(null),
   focusRequestWindowId: f.string().nullable().default(null),
   focusRequestNonce: f.string().default(""), // empty string fixme
+  updateState: f
+    .object({
+      status: zod
+        .enum([
+          "idle",
+          "checking",
+          "available",
+          "not-available",
+          "downloading",
+          "downloaded",
+          "error",
+        ])
+        .default("idle"),
+      availableVersion: zod.string().nullable().default(null),
+      releaseNotes: zod.string().nullable().default(null),
+      downloadPercent: zod.number().nullable().default(null),
+      downloadBytesPerSecond: zod.number().nullable().default(null),
+      error: zod.string().nullable().default(null),
+      lastCheckedAt: zod.number().nullable().default(null),
+      dismissedVersion: zod.string().nullable().default(null),
+    })
+    .default({
+      status: "idle",
+      availableVersion: null,
+      releaseNotes: null,
+      downloadPercent: null,
+      downloadBytesPerSecond: null,
+      error: null,
+      lastCheckedAt: null,
+      dismissedVersion: null,
+    }),
 });
 
 export const schema = appSchema;
