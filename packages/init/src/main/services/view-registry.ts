@@ -1,4 +1,4 @@
-import fsSync from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import * as Effect from "effect/Effect";
@@ -100,7 +100,9 @@ export class ViewRegistryService extends Service {
   }
 
   evaluate() {
-    this.loadManifestIcons();
+    this.loadManifestIcons().catch((err) => {
+      console.error("[view-registry] failed to load manifest icons:", err);
+    });
 
     this.setup("view-registry-cleanup", () => {
       return async () => {
@@ -115,16 +117,20 @@ export class ViewRegistryService extends Service {
     });
   }
 
-  private loadManifestIcons(): void {
+  private async loadManifestIcons(): Promise<void> {
     this.manifestIcons.clear();
     try {
-      const configPath = resolveConfigPath();
-      if (!fsSync.existsSync(configPath)) return;
-      const raw = fsSync.readFileSync(configPath, "utf8");
+      const configPath = await resolveConfigPath();
+      let raw: string;
+      try {
+        raw = await fsp.readFile(configPath, "utf8");
+      } catch {
+        return;
+      }
       const config = parseJsonc(raw) as { plugins?: string[] };
       for (const manifestPath of config.plugins ?? []) {
         try {
-          const manifestRaw = fsSync.readFileSync(manifestPath, "utf8");
+          const manifestRaw = await fsp.readFile(manifestPath, "utf8");
           const manifest = JSON.parse(manifestRaw);
           const icons: Record<string, string> = manifest.icons ?? {};
           for (const [scope, svg] of Object.entries(icons)) {
@@ -158,10 +164,14 @@ export class ViewRegistryService extends Service {
   }
 }
 
-function resolveConfigPath(): string {
+async function resolveConfigPath(): Promise<string> {
   const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc");
-  if (fsSync.existsSync(jsonc)) return jsonc;
-  return path.join(os.homedir(), ".zenbu", "config.json");
+  try {
+    await fsp.access(jsonc);
+    return jsonc;
+  } catch {
+    return path.join(os.homedir(), ".zenbu", "config.json");
+  }
 }
 
 function parseJsonc(str: string): unknown {

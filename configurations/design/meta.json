@@ -1,0 +1,7 @@
+{
+  "id": "design",
+  "name": "Design",
+  "description": "Visual canvas, component library, export tools",
+  "tags": ["canvas", "components", "export"],
+  "thumbnail": "thumbnail.png"
+}

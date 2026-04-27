@@ -1,42 +1,23 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 import { app } from "electron";
 import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid";
-import { makeCollection } from "@zenbu/kyju/schema";
 import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { HttpService } from "./http";
 import { RpcService } from "./rpc";
+import { WorkspaceService } from "./workspace";
 import { INTERNAL_DIR, RUNTIME_JSON } from "../../../shared/paths";
-import {
-  insertHotAgent,
-  validSelectionFromTemplate,
-  findExistingAgentTab,
-  activateAgentTab,
-  type ArchivedAgent,
-} from "../../../shared/agent-ops";
+import { MAIN_WINDOW_ID } from "../../../shared/schema";
 
 const DB_PATH = path.join(process.cwd(), ".zenbu", "db");
-const DEFAULT_CWD = path.join(os.homedir(), ".zenbu");
 
-function matchAgentConfig(
-  configs: Array<{ id: string; name: string; startCommand: string }>,
-  query: string,
-): { id: string; name: string; startCommand: string } | undefined {
-  const q = query.toLowerCase();
-  return (
-    configs.find((c) => c.id.toLowerCase() === q) ??
-    configs.find((c) => c.name.toLowerCase() === q) ??
-    configs.find((c) => c.id.toLowerCase().startsWith(q))
-  );
-}
+export type WindowMode = "default" | "reuse" | "new";
 
-export type CliCreateWindowArgs = {
-  agent?: string;
-  agentId?: string;
-  cwd?: string;
+export type CliOpenWorkspaceArgs = {
+  cwd: string;
+  mode?: WindowMode;
 };
 
 export type RelaunchDecision = "accept" | "reject";
@@ -47,6 +28,7 @@ export class CliService extends Service {
     db: DbService,
     http: HttpService,
     rpc: RpcService,
+    workspace: WorkspaceService,
     baseWindow: "base-window",
     window: "window",
   };
@@ -54,6 +36,7 @@ export class CliService extends Service {
     db: DbService;
     http: HttpService;
     rpc: RpcService;
+    workspace: WorkspaceService;
     baseWindow: any;
     window: any;
   };
@@ -69,6 +52,7 @@ export class CliService extends Service {
     };
   }
 
+  /** Read-only listing for `zen exec` scripts that introspect agent state. */
   listAgents() {
     const kernel = this.ctx.db.effectClient.readRoot().plugin.kernel;
     return {
@@ -82,120 +66,53 @@ export class CliService extends Service {
     };
   }
 
-  async createWindow(args: CliCreateWindowArgs = {}): Promise<{
+  /**
+   * `zen [path]` entrypoint. Resolves `cwd` to a workspace (creating one if
+   * needed) and applies VS Code-style window semantics:
+   *   - default: focus an existing window already showing this workspace,
+   *     otherwise open a new window.
+   *   - reuse:   swap the active workspace on the last focused window.
+   *   - new:     always open a new window.
+   */
+  async openWorkspace(args: CliOpenWorkspaceArgs): Promise<{
     windowId: string;
-    agentId: string | null;
+    workspaceId: string;
+    created: boolean;
   }> {
+    const mode: WindowMode = args.mode ?? "default";
+    const { id: workspaceId, created } =
+      await this.ctx.workspace.findOrCreateWorkspaceForCwd(args.cwd);
+
     const client = this.ctx.db.effectClient;
-    const kernel = client.readRoot().plugin.kernel;
-    const windowId = nanoid();
+    const root = client.readRoot();
+    const kernel = root.plugin.kernel;
+    const active = kernel.activeWorkspaceByWindow ?? {};
 
-    let agentId = args.agentId ?? null;
+    let targetWindowId: string | null = null;
 
-    if (!agentId && args.agent) {
-      const matched = matchAgentConfig(kernel.agentConfigs, args.agent);
-      if (!matched) {
-        throw new Error(`No agent config matching "${args.agent}"`);
+    if (mode === "default") {
+      for (const [wid, wsId] of Object.entries(active)) {
+        if (wsId === workspaceId && this.ctx.baseWindow.windows.has(wid)) {
+          targetWindowId = wid;
+          break;
+        }
       }
-
-      const newAgentId = nanoid();
-      const sessionId = nanoid();
-      let evicted: ArchivedAgent[] = [];
-
-      await Effect.runPromise(
-        client.update((root) => {
-          const k = root.plugin.kernel;
-          const template = k.agentConfigs.find((c) => c.id === matched.id);
-          const seeded = template ? validSelectionFromTemplate(template) : {};
-
-          evicted = insertHotAgent(k, {
-            id: newAgentId,
-            name: matched.name,
-            startCommand: matched.startCommand,
-            configId: matched.id,
-            status: "idle",
-            metadata: { cwd: args.cwd ?? DEFAULT_CWD },
-            eventLog: makeCollection({
-              collectionId: nanoid(),
-              debugName: "eventLog",
-            }),
-            ...seeded,
-            title: { kind: "not-available" },
-            reloadMode: "keep-alive",
-            sessionId: null,
-            firstPromptSentAt: null,
-            createdAt: Date.now(),
-          });
-
-          k.windowStates = [
-            ...k.windowStates,
-            {
-              id: windowId,
-              sessions: [
-                { id: sessionId, agentId: newAgentId, lastViewedAt: null },
-              ],
-              panes: [],
-              rootPaneId: null,
-              focusedPaneId: null,
-              sidebarOpen: false,
-              tabSidebarOpen: true,
-              sidebarPanel: "overview",
-
-              /**
-               * come back to this
-               */
-              persisted: false,
-            },
-          ];
-        }),
-      );
-
-      if (evicted.length > 0) {
-        await Effect.runPromise(
-          client.plugin.kernel.archivedAgents.concat(evicted),
-        ).catch(() => {});
+    } else if (mode === "reuse") {
+      const focused = kernel.focusedWindowId ?? null;
+      if (focused && this.ctx.baseWindow.windows.has(focused)) {
+        targetWindowId = focused;
+      } else if (this.ctx.baseWindow.windows.has(MAIN_WINDOW_ID)) {
+        targetWindowId = MAIN_WINDOW_ID;
+      } else {
+        const first = this.ctx.baseWindow.windows.keys().next().value as
+          | string
+          | undefined;
+        targetWindowId = first ?? null;
       }
+    }
 
-      agentId = newAgentId;
-    } else if (agentId) {
-      const existing = findExistingAgentTab(kernel.windowStates, agentId);
-      if (existing) {
-        await Effect.runPromise(
-          client.update((root) => {
-            activateAgentTab(root.plugin.kernel, existing);
-          }),
-        );
-        const win = this.ctx.baseWindow.windows.get(existing.windowId);
-        if (win && !win.isDestroyed()) win.focus();
-        return { windowId: existing.windowId, agentId };
-      }
-
-      const sessionId = nanoid();
-      await Effect.runPromise(
-        client.update((root) => {
-          root.plugin.kernel.windowStates = [
-            ...root.plugin.kernel.windowStates,
-            {
-              id: windowId,
-              sessions: [
-                { id: sessionId, agentId: agentId!, lastViewedAt: null },
-              ],
-              panes: [],
-              rootPaneId: null,
-              focusedPaneId: null,
-              sidebarOpen: false,
-              tabSidebarOpen: true,
-              sidebarPanel: "overview",
-
-              /**
-               * come back to this
-               */
-              persisted: false,
-            },
-          ];
-        }),
-      );
-    } else {
+    if (!targetWindowId) {
+      const windowId = nanoid();
       await Effect.runPromise(
         client.update((root) => {
           root.plugin.kernel.windowStates = [
@@ -209,34 +126,24 @@ export class CliService extends Service {
               sidebarOpen: false,
               tabSidebarOpen: true,
               sidebarPanel: "overview",
-
-              /**
-               * come back to this
-               */
               persisted: false,
             },
           ];
         }),
       );
-    }
-
-    this.ctx.baseWindow.createWindow({ windowId });
-
-    setTimeout(() => {
-      this.ctx.window.evaluate();
-    }, 50);
-
-    if (agentId) {
-      const agentIdToInit = agentId;
+      this.ctx.baseWindow.createWindow({ windowId });
+      targetWindowId = windowId;
       setTimeout(() => {
-        try {
-          const router = runtime.buildRouter() as any;
-          router.agent?.init?.(agentIdToInit).catch(() => {});
-        } catch {}
-      }, 200);
+        this.ctx.window.evaluate();
+      }, 50);
     }
 
-    return { windowId, agentId };
+    await this.ctx.workspace.activateWorkspace(targetWindowId, workspaceId);
+
+    const win = this.ctx.baseWindow.windows.get(targetWindowId);
+    if (win && !win.isDestroyed()) win.focus();
+
+    return { windowId: targetWindowId, workspaceId, created };
   }
 
   /**
@@ -284,9 +191,9 @@ export class CliService extends Service {
    * the renderer uses. Because `HttpService` is a declared dep, any port
    * change re-evaluates this service and rewrites the file.
    */
-  private writeRuntimeJson() {
-    fs.mkdirSync(INTERNAL_DIR, { recursive: true });
-    fs.writeFileSync(
+  private async writeRuntimeJson(): Promise<void> {
+    await fsp.mkdir(INTERNAL_DIR, { recursive: true });
+    await fsp.writeFile(
       RUNTIME_JSON,
       JSON.stringify({
         wsPort: this.ctx.http.port,
@@ -298,11 +205,13 @@ export class CliService extends Service {
   }
 
   evaluate() {
-    this.writeRuntimeJson();
+    this.writeRuntimeJson().catch((err) => {
+      console.error("[cli] writeRuntimeJson failed:", err);
+    });
     this.setup("runtime-json-cleanup", () => {
-      return () => {
+      return async () => {
         try {
-          fs.unlinkSync(RUNTIME_JSON);
+          await fsp.unlink(RUNTIME_JSON);
         } catch {}
       };
     });

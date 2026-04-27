@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -88,10 +87,14 @@ async function importFreshModule(modulePath: string): Promise<any> {
   return import(pathToFileURL(modulePath).href);
 }
 
-function resolveConfigPath(): string {
+async function resolveConfigPath(): Promise<string> {
   const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc");
-  if (fsSync.existsSync(jsonc)) return jsonc;
-  return path.join(os.homedir(), ".zenbu", "config.json");
+  try {
+    await fs.access(jsonc);
+    return jsonc;
+  } catch {
+    return path.join(os.homedir(), ".zenbu", "config.json");
+  }
 }
 
 function parseJsonc(str: string): unknown {
@@ -128,15 +131,16 @@ function parseJsonc(str: string): unknown {
 }
 
 export async function discoverSections(
-  configPath = resolveConfigPath(),
+  configPath?: string,
 ): Promise<SectionConfig[]> {
+  const resolvedConfigPath = configPath ?? (await resolveConfigPath());
   let config: { plugins: string[] } = { plugins: [] };
   try {
-    const raw = await fs.readFile(configPath, "utf8");
+    const raw = await fs.readFile(resolvedConfigPath, "utf8");
     config = parseJsonc(raw) as { plugins: string[] };
   } catch (error) {
     console.error(
-      `[db] failed to read plugin config at ${configPath}: ${
+      `[db] failed to read plugin config at ${resolvedConfigPath}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -440,7 +444,7 @@ export class DbService extends Service {
       this.sectionsHash !== sectionsHash ||
       this.dbPath !== DB_PATH
     ) {
-      fsSync.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+      await fs.mkdir(path.dirname(DB_PATH), { recursive: true });
       this.dbRouter = createRouter();
       this.db = await this.trace("create-db", () =>
         createDb({

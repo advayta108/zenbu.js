@@ -29,7 +29,7 @@ import {
   type WorkingTreeStatus,
   type Worktree,
 } from "@zenbu/git"
-import fs from "node:fs"
+import fsp from "node:fs/promises"
 import { spawn } from "node:child_process"
 import { app } from "electron"
 import { pauseWatcherPath } from "dynohot/pause"
@@ -56,10 +56,23 @@ const BUN_BIN = path.join(
  * Prefer `~/.zenbu/config.jsonc` if present (supports comments + trailing
  * commas), fall back to `config.json`. Mirrors `installer.ts`'s lookup.
  */
-function resolveConfigPath(): string {
+async function resolveConfigPath(): Promise<string> {
   const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc")
-  if (fs.existsSync(jsonc)) return jsonc
-  return path.join(os.homedir(), ".zenbu", "config.json")
+  try {
+    await fsp.access(jsonc)
+    return jsonc
+  } catch {
+    return path.join(os.homedir(), ".zenbu", "config.json")
+  }
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fsp.access(p)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -189,7 +202,7 @@ export type PullAndInstallResult =
  * config (JSONC-aware). The kernel is special-cased to its canonical path
  * since the kernel manifest lives at a fixed location regardless of config.
  */
-function resolvePluginManifest(pluginName: string): string | null {
+async function resolvePluginManifest(pluginName: string): Promise<string | null> {
   if (pluginName === "kernel") {
     return path.join(
       CORE_REPO_ROOT,
@@ -199,14 +212,18 @@ function resolvePluginManifest(pluginName: string): string | null {
     )
   }
   try {
-    const configPath = resolveConfigPath()
-    if (!fs.existsSync(configPath)) return null
-    const raw = fs.readFileSync(configPath, "utf8")
+    const configPath = await resolveConfigPath()
+    let raw: string
+    try {
+      raw = await fsp.readFile(configPath, "utf8")
+    } catch {
+      return null
+    }
     const cfg = parseJsonc(raw) as { plugins?: unknown }
     if (!Array.isArray(cfg.plugins)) return null
     for (const manifestPath of cfg.plugins) {
       if (typeof manifestPath !== "string") continue
-      const name = readManifestName(manifestPath)
+      const name = await readManifestName(manifestPath)
       if (name === pluginName) return manifestPath
     }
   } catch {}
@@ -273,12 +290,12 @@ export class GitUpdatesService extends Service {
           if (p in out) continue
           try {
             const abs = path.join(cwd, p)
-            const stat = await fs.promises.stat(abs)
+            const stat = await fsp.stat(abs)
             if (stat.size > MAX_DIFF_BYTES) {
               out[p] = { additions: 0, deletions: 0, binary: false }
               continue
             }
-            const text = await fs.promises.readFile(abs, "utf8")
+            const text = await fsp.readFile(abs, "utf8")
             if (looksBinary(text)) {
               out[p] = { additions: 0, deletions: 0, binary: true }
             } else {
@@ -515,8 +532,8 @@ export class GitUpdatesService extends Service {
   ): Promise<PullAndInstallResult> {
     const pluginName = opts.plugin ?? "kernel"
 
-    const manifestPath = resolvePluginManifest(pluginName)
-    if (!manifestPath || !fs.existsSync(manifestPath)) {
+    const manifestPath = await resolvePluginManifest(pluginName)
+    if (!manifestPath || !(await pathExists(manifestPath))) {
       return {
         ok: false,
         error: `No manifest found for plugin "${pluginName}"`,
@@ -571,8 +588,8 @@ export class GitUpdatesService extends Service {
 
     // --- Gate: declared setup.version vs stored ---
 
-    const setup = readManifestSetup(manifestPath)
-    const stored = getStoredSetupVersion(pluginName)
+    const setup = await readManifestSetup(manifestPath)
+    const stored = await getStoredSetupVersion(pluginName)
 
     if (!setup || setup.version <= stored) {
       // No setup needed — release the pause so dynohot can re-evaluate
@@ -589,7 +606,7 @@ export class GitUpdatesService extends Service {
       }
     }
 
-    if (!fs.existsSync(setup.scriptAbs)) {
+    if (!(await pathExists(setup.scriptAbs))) {
       await this._maybeRollback(repoDir, headBefore)
       pauseRelease()
       return {
@@ -683,7 +700,7 @@ export class GitUpdatesService extends Service {
       } as never
     }
 
-    if (!fs.existsSync(BUN_BIN)) {
+    if (!(await pathExists(BUN_BIN))) {
       await this._maybeRollback(pending.repoDir, pending.headBefore)
       this._releasePending(opts.plugin)
       return {
@@ -706,7 +723,7 @@ export class GitUpdatesService extends Service {
     }
 
     try {
-      recordSetupVersion(opts.plugin, opts.version)
+      await recordSetupVersion(opts.plugin, opts.version)
     } catch (err) {
       // State-write failure is bad but we've already installed deps on
       // disk. Keep going with the relaunch — worst case, the gate re-fires
@@ -951,11 +968,11 @@ async function readFromHead(cwd: string, relPath: string): Promise<string> {
 async function readFromWorktree(cwd: string, relPath: string): Promise<string> {
   const abs = path.join(cwd, relPath)
   try {
-    const stat = await fs.promises.stat(abs)
+    const stat = await fsp.stat(abs)
     if (stat.size > MAX_DIFF_BYTES) {
       throw new Error(`File too large to diff (${stat.size} bytes)`)
     }
-    return await fs.promises.readFile(abs, "utf8")
+    return await fsp.readFile(abs, "utf8")
   } catch (err: any) {
     if (err?.code === "ENOENT") return ""
     throw err

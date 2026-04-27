@@ -1,15 +1,15 @@
 import { nanoid } from "nanoid";
 import { unlinkSync, existsSync } from "node:fs";
 import type * as acp from "@agentclientprotocol/sdk";
-import { AcpClient, type AcpClientConfig, PROTOCOL_VERSION } from "./client.ts";
-import type { AgentDb, AgentEvent, ConfigOption } from "./schema.ts";
-import { getMcpSocketPath } from "./mcp/socket-path.ts";
-import { writeProxyScript } from "./mcp/proxy-template.ts";
-import { TerminalManager } from "./terminal.ts";
+import { AcpClient, type AcpClientConfig, PROTOCOL_VERSION } from "./client";
+import type { AgentDb, AgentEvent, ConfigOption } from "./schema";
+import { getMcpSocketPath } from "./mcp/socket-path";
+import { writeProxyScript } from "./mcp/proxy-template";
+import { TerminalManager } from "./terminal";
 import {
   serializeEventLog,
   truncateToTokenBudget,
-} from "./serialize-event-log.ts";
+} from "./serialize-event-log";
 
 export type AgentState =
   | { kind: "initializing" }
@@ -17,6 +17,35 @@ export type AgentState =
   | { kind: "prompting"; sessionId: string }
   | { kind: "error"; error: unknown }
   | { kind: "closed" };
+
+const LIVE_ONLY_PROCESS_STATES = new Set(["initializing", "prompting"]);
+
+export async function reconcileAgentDbProcessState(
+  db: AgentDb,
+  activeAgentIds: Iterable<string>,
+): Promise<void> {
+  const active = new Set(activeAgentIds);
+  await db.update((root) => {
+    for (const agent of root.agents) {
+      if (active.has(agent.id)) continue;
+
+      const staleLiveState =
+        agent.status === "streaming" ||
+        (agent.processState
+          ? LIVE_ONLY_PROCESS_STATES.has(agent.processState)
+          : false);
+
+      if (!staleLiveState) continue;
+
+      const wasStreaming = agent.status === "streaming";
+      agent.status = "idle";
+      agent.processState = "ready";
+      if (wasStreaming) {
+        agent.lastFinishedAt = Date.now();
+      }
+    }
+  });
+}
 
 export type BeforeCreateListener = (
   agentId: string,
@@ -177,7 +206,6 @@ export class Agent {
   private id: string;
   private socketPath: string;
   private state: AgentState = { kind: "initializing" };
-  private queue: acp.ContentBlock[] = [];
   private initLatch: InitLatch;
   private client: AcpClient;
   private clientConfig: AcpClientConfig;
@@ -207,7 +235,7 @@ export class Agent {
    */
   private _pendingPermissions = new Map<
     string,
-    (outcome: import("./schema.ts").PermissionOutcome) => void
+    (outcome: import("./schema").PermissionOutcome) => void
   >();
 
   private constructor(
@@ -723,7 +751,6 @@ export class Agent {
       }
 
       await this._setState({ kind: "ready", sessionId });
-      await this._flushQueue();
     } catch (err) {
       if (this.state.kind !== "closed") {
         await this._setState({ kind: "error", error: err });
@@ -897,15 +924,6 @@ export class Agent {
     await this._setState({ kind: "ready", sessionId });
   }
 
-  private async _flushQueue(): Promise<void> {
-    if (this.queue.length === 0) return;
-    if (this.state.kind !== "ready") return;
-
-    const queued = this.queue;
-    this.queue = [];
-    await this._sendPrompt(this.state.sessionId, queued);
-  }
-
   async send(content: acp.ContentBlock[]): Promise<void> {
     const userText = content
       .filter((b) => b.type === "text")
@@ -956,8 +974,9 @@ export class Agent {
     }
 
     if (this.state.kind === "prompting") {
-      this.queue = [...this.queue, ...this._applyHandoff(content)];
-      return;
+      throw Object.assign(new Error("Agent is busy (prompting)"), {
+        code: "AGENT_BUSY" as const,
+      });
     }
 
     const readyState = this.state;
@@ -966,7 +985,6 @@ export class Agent {
       readyState.sessionId,
       this._applyHandoff(content),
     );
-    await this._flushQueue();
   }
 
   getState(): AgentState {

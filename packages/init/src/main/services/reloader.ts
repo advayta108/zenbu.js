@@ -2,7 +2,7 @@ import { createServer, type ViteDevServer, type Plugin } from "vite"
 import { zenbuAdvicePlugin } from "@zenbu/advice/vite"
 import { createHash } from "node:crypto"
 import { dirname, join, resolve } from "node:path"
-import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs"
+import { access, mkdir, readFile, readdir } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { createRequire } from "node:module"
 import { createServer as createNetServer } from "node:net"
@@ -49,17 +49,17 @@ function resolveRendererCacheDir(options: RendererServerOptions): string {
   return resolve(INTERNAL_DIR, "vite-cache", `${safeCacheSegment(options.id)}-${hash}`)
 }
 
-function rendererWarmupUrls(root: string): string[] {
+async function rendererWarmupUrls(root: string): Promise<string[]> {
   const urls = new Set<string>()
-  if (existsSync(resolve(root, "main.tsx"))) {
+  if (await fileExists(resolve(root, "main.tsx"))) {
     urls.add("/main.tsx")
   }
 
   const viewsDir = resolve(root, "views")
   try {
-    for (const entry of readdirSync(viewsDir, { withFileTypes: true })) {
+    for (const entry of await readdir(viewsDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
-      if (existsSync(resolve(viewsDir, entry.name, "main.tsx"))) {
+      if (await fileExists(resolve(viewsDir, entry.name, "main.tsx"))) {
         urls.add(`/views/${entry.name}/main.tsx`)
       }
     }
@@ -70,7 +70,8 @@ function rendererWarmupUrls(root: string): string[] {
 
 async function warmupRendererEntrypoints(server: ViteDevServer, root: string): Promise<void> {
   try {
-    await Promise.all(rendererWarmupUrls(root).map((url) => server.warmupRequest(url)))
+    const urls = await rendererWarmupUrls(root)
+    await Promise.all(urls.map((url) => server.warmupRequest(url)))
     await server.waitForRequestsIdle()
   } catch (e) {
     console.warn("[reloader] renderer warmup failed:", e)
@@ -102,10 +103,10 @@ function reactGrabPlugin(root: string, configFile?: string | false): Plugin {
     name: "zenbu-react-grab",
     enforce: "pre",
     configureServer(server) {
-      server.middlewares.use((req, res, next) => {
+      server.middlewares.use(async (req, res, next) => {
         if (req.url !== SERVE_PATH || !pkgDir) return next()
         try {
-          cachedScript ??= readFileSync(resolve(pkgDir, "dist/index.global.js"), "utf-8")
+          cachedScript ??= await readFile(resolve(pkgDir, "dist/index.global.js"), "utf-8")
           res.setHeader("Content-Type", "application/javascript; charset=utf-8")
           res.setHeader("Cache-Control", "no-cache")
           res.end(cachedScript)
@@ -139,16 +140,13 @@ function resolveAdviceRuntime(): Plugin {
   return {
     name: "zenbu-resolve-advice-runtime",
     enforce: "pre",
-    resolveId(source, importer) {
+    async resolveId(source, importer) {
       if (source === "@zenbu/advice/runtime") {
         return adviceRuntimeEntry
       }
       if (importer && source.endsWith(".js")) {
         const tsPath = join(dirname(importer), source.replace(/\.js$/, ".ts"))
-        try {
-          const { statSync } = require("fs")
-          if (statSync(tsPath).isFile()) return tsPath
-        } catch {}
+        if (await fileExists(tsPath)) return tsPath
       }
       return null
     },
@@ -288,18 +286,27 @@ function advicePreludePlugin(): Plugin {
   }
 }
 
-function readCssFile(filePath: string | null): string {
+async function readCssFile(filePath: string | null): Promise<string> {
   if (!filePath) return ""
   try {
-    if (!existsSync(filePath)) return ""
-    return readFileSync(filePath, "utf-8")
-  } catch (err) {
+    return await readFile(filePath, "utf-8")
+  } catch (err: any) {
+    if (err?.code === "ENOENT") return ""
     console.error(`[theme] failed to read ${filePath}:`, err)
     return ""
   }
 }
 
-function resolveWorkspaceThemePath(workspaceId: string | undefined): string | null {
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function resolveWorkspaceThemePath(workspaceId: string | undefined): Promise<string | null> {
   if (!workspaceId) return null
   try {
     const db = runtime.get<DbService>({ key: "db" })
@@ -309,7 +316,7 @@ function resolveWorkspaceThemePath(workspaceId: string | undefined): string | nu
     )
     for (const cwd of workspace?.cwds ?? []) {
       const themePath = resolve(cwd, ".zenbu", "theme.css")
-      if (existsSync(themePath)) return themePath
+      if (await fileExists(themePath)) return themePath
     }
   } catch (err) {
     console.error("[theme] failed to resolve workspace theme:", err)
@@ -323,17 +330,17 @@ function themeStylesheetPlugin(): Plugin {
     enforce: "pre",
 
     configureServer(server) {
-      server.middlewares.use((req, res, next) => {
+      server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? ""
         if (!url.startsWith(THEME_PREFIX)) return next()
 
         const parsed = new URL(url, "http://localhost")
         let css = ""
         if (parsed.pathname === `${THEME_PREFIX}global.css`) {
-          css = readCssFile(GLOBAL_THEME_PATH)
+          css = await readCssFile(GLOBAL_THEME_PATH)
         } else if (parsed.pathname === `${THEME_PREFIX}workspace.css`) {
           const workspaceId = parsed.searchParams.get("workspaceId") ?? undefined
-          css = readCssFile(resolveWorkspaceThemePath(workspaceId))
+          css = await readCssFile(await resolveWorkspaceThemePath(workspaceId))
         } else {
           return next()
         }
@@ -398,7 +405,7 @@ async function startRendererServer(options: RendererServerOptions): Promise<Vite
 
   const port = options.port || await getEphemeralPort()
   const cacheDir = options.cacheDir ?? resolveRendererCacheDir(options)
-  mkdirSync(cacheDir, { recursive: true })
+  await mkdir(cacheDir, { recursive: true })
 
   const sharedConfig = {
     cacheDir,

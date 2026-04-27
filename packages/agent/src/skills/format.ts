@@ -1,4 +1,4 @@
-import type { Skill } from "./discover.ts";
+import type { Skill } from "./discover";
 
 export function formatSkillsPrompt(skills: Skill[]): string {
   if (skills.length === 0) return "";

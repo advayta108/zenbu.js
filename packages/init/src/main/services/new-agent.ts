@@ -11,7 +11,10 @@ import {
 
 /**
  * Backs `rpc.kernel.promoteNewAgentTab`: replaces a `new-agent:<nanoid>`
- * sentinel tab in a window's pane with a freshly-created agent + session.
+ * sentinel tab in a window's pane with a real agent + session. Prefers
+ * the head of the warm pool (`PooledAgentService`); if the pool is empty
+ * (e.g. cold start before the first refill, or the user opens new agents
+ * faster than the pool can refill) it falls back to creating one inline.
  *
  * The new-agent onboarding view (`views/new-agent`) is rendered into the
  * sentinel tab. When the user submits a message there, the renderer calls
@@ -24,6 +27,114 @@ export class NewAgentService extends Service {
   declare ctx: { db: DbService; agent: AgentService }
 
   async promoteNewAgentTab(args: {
+    windowId: string
+    sentinelTabId: string
+    cwd?: string
+    workspaceId?: string
+  }): Promise<{ agentId: string; sessionId: string }> {
+    const { windowId, sentinelTabId, cwd, workspaceId } = args
+    const client = this.ctx.db.client
+    const kernel = client.readRoot().plugin.kernel as any
+
+    const head = (kernel.pool ?? [])[0] as
+      | { agentId: string; sessionId: string }
+      | undefined
+
+    if (head) {
+      return await this.promoteFromPool({
+        head,
+        windowId,
+        sentinelTabId,
+        cwd,
+        workspaceId,
+      })
+    }
+
+    return await this.promoteInline({
+      windowId,
+      sentinelTabId,
+      cwd,
+      workspaceId,
+    })
+  }
+
+  /**
+   * Atomic update: pop pool head, swap sentinel tabId for sessionId in
+   * the pane, append the session row. If the user picked a cwd different
+   * from the pool agent's seed, write it through `agent.changeCwd` after
+   * the swap so the running process picks it up before the renderer's
+   * subsequent `rpc.agent.send` lands.
+   *
+   * The race guard inside the update transaction protects against another
+   * promote / pool prune landing between read and write.
+   */
+  private async promoteFromPool(args: {
+    head: { agentId: string; sessionId: string }
+    windowId: string
+    sentinelTabId: string
+    cwd?: string
+    workspaceId?: string
+  }): Promise<{ agentId: string; sessionId: string }> {
+    const { head, windowId, sentinelTabId, cwd, workspaceId } = args
+    const client = this.ctx.db.client
+    const { agentId, sessionId } = head
+
+    await client.update((root: any) => {
+      const k = root.plugin.kernel
+      if (k.pool[0]?.agentId !== agentId) {
+        throw new Error("[new-agent] pool head changed mid-promote")
+      }
+      k.pool = k.pool.slice(1)
+
+      // The pool agent was created without a workspace binding; apply
+      // the caller's workspaceId now so the sidebar groups it correctly.
+      if (workspaceId) {
+        const a = k.agents.find((x: any) => x.id === agentId)
+        if (a) a.workspaceId = workspaceId
+      }
+
+      const ws = k.windowStates.find((w: any) => w.id === windowId)
+      if (!ws) return
+      ws.sessions = [
+        ...ws.sessions,
+        { id: sessionId, agentId, lastViewedAt: null },
+      ]
+      const pane = ws.panes.find((p: any) =>
+        (p.tabIds ?? []).includes(sentinelTabId),
+      )
+      if (!pane) return
+      const idx = pane.tabIds.indexOf(sentinelTabId)
+      if (idx < 0) return
+      const next = [...pane.tabIds]
+      next[idx] = sessionId
+      pane.tabIds = next
+      if (pane.activeTabId === sentinelTabId) pane.activeTabId = sessionId
+    })
+
+    // If the user picked a cwd different from the pool seed, propagate
+    // it to the running process. `changeCwd` writes metadata.cwd and
+    // tells the live Agent to update its session cwd. Skip the write
+    // when they already match to avoid a no-op kyju update.
+    if (cwd) {
+      const current = (client.readRoot() as any).plugin.kernel.agents.find(
+        (a: any) => a.id === agentId,
+      )
+      if (current?.metadata?.cwd !== cwd) {
+        await this.ctx.agent.changeCwd(agentId, cwd).catch((err: unknown) => {
+          console.error("[new-agent] changeCwd failed:", err)
+        })
+      }
+    }
+
+    return { agentId, sessionId }
+  }
+
+  /**
+   * Fallback when the pool is empty. Creates a fresh agent + session and
+   * fires `agent.init` async — same shape as the pre-pool implementation,
+   * kept so an empty pool degrades to the old behavior instead of throwing.
+   */
+  private async promoteInline(args: {
     windowId: string
     sentinelTabId: string
     cwd?: string
@@ -65,10 +176,9 @@ export class NewAgentService extends Service {
         sessionId: null,
         firstPromptSentAt: null,
         createdAt: Date.now(),
+        queuedMessages: [],
       })
 
-      // Swap the sentinel tab id for the session id in the window's pane,
-      // and add the session to the window's session list.
       const ws = root.plugin.kernel.windowStates.find(
         (w: any) => w.id === windowId,
       )
@@ -95,9 +205,6 @@ export class NewAgentService extends Service {
         .catch(() => {})
     }
 
-    // Spawn the ACP process. Async fire-and-forget so the renderer's
-    // `rpc.agent.send` can eagerly enqueue without waiting on init — the
-    // agent service queues until the process is ready.
     void this.ctx.agent
       .init(agentId)
       .catch((err) =>

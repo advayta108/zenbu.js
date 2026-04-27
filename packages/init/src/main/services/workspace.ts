@@ -1,10 +1,16 @@
-import fs from "node:fs"
+import fsp from "node:fs/promises"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { spawn } from "node:child_process"
 import { nanoid } from "nanoid"
 import * as Effect from "effect/Effect"
+import { subscribe, type AsyncSubscription } from "@parcel/watcher"
 import { Service, runtime } from "../runtime"
 import { DbService } from "./db"
 import { WorkspaceContextService } from "./workspace-context"
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const CONFIGURATIONS_DIR = path.resolve(__dirname, "../../../../../configurations")
 
 function parseJsonc(str: string): unknown {
   let result = ""
@@ -34,15 +40,29 @@ function parseJsonc(str: string): unknown {
   return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"))
 }
 
-function resolveWorkspaceConfigPath(zenbuDir: string): string | null {
+async function isFile(p: string): Promise<boolean> {
+  try {
+    const stat = await fsp.stat(p)
+    return stat.isFile()
+  } catch {
+    return false
+  }
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fsp.access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function resolveWorkspaceConfigPath(zenbuDir: string): Promise<string | null> {
   const jsonc = path.join(zenbuDir, "config.jsonc")
-  try {
-    if (fs.statSync(jsonc).isFile()) return jsonc
-  } catch {}
+  if (await isFile(jsonc)) return jsonc
   const json = path.join(zenbuDir, "config.json")
-  try {
-    if (fs.statSync(json).isFile()) return json
-  } catch {}
+  if (await isFile(json)) return json
   return null
 }
 
@@ -53,9 +73,44 @@ export class WorkspaceService extends Service {
 
   private loadedWorkspacePlugins = new Map<string, string[]>()
 
+  /**
+   * Look up a workspace whose `cwds` already cover `absCwd`. Exact-match on
+   * any cwd wins outright; otherwise the workspace owning the longest
+   * ancestor of `absCwd` wins. If nothing matches, a new workspace is
+   * created with `name = basename(absCwd)`.
+   */
+  async findOrCreateWorkspaceForCwd(
+    absCwd: string,
+  ): Promise<{ id: string; created: boolean }> {
+    const root = this.ctx.db.client.readRoot()
+    const workspaces = root.plugin.kernel.workspaces ?? []
+
+    const exact = workspaces.find((w) => w.cwds.includes(absCwd))
+    if (exact) return { id: exact.id, created: false }
+
+    let bestId: string | undefined
+    let bestLen = -1
+    for (const ws of workspaces) {
+      for (const c of ws.cwds) {
+        if (absCwd === c || absCwd.startsWith(c + path.sep)) {
+          if (c.length > bestLen) {
+            bestLen = c.length
+            bestId = ws.id
+          }
+        }
+      }
+    }
+    if (bestId) return { id: bestId, created: false }
+
+    const name = path.basename(absCwd) || absCwd
+    const created = await this.createWorkspace(name, [absCwd])
+    return { id: created.id, created: true }
+  }
+
   async createWorkspace(
     name: string,
     cwds: string[],
+    configId?: string,
   ): Promise<{ id: string }> {
     const id = nanoid()
     const now = Date.now()
@@ -69,6 +124,11 @@ export class WorkspaceService extends Service {
       }),
     )
     console.log(`[workspace] created "${name}" (${id}) with ${cwds.length} cwd(s)`)
+    if (configId && configId !== "blank") {
+      for (const cwd of cwds) {
+        await this.applyConfiguration(configId, cwd)
+      }
+    }
     this.ensureWorkspaceIcon(id).catch(() => {})
     await this.loadWorkspacePlugins(id, cwds)
     return { id }
@@ -220,7 +280,7 @@ export class WorkspaceService extends Service {
     )
   }
 
-  scanWorkspacePlugins(cwds: string[]): string[] {
+  async scanWorkspacePlugins(cwds: string[]): Promise<string[]> {
     const manifests: string[] = []
     const seen = new Set<string>()
     const push = (p: string) => {
@@ -232,11 +292,11 @@ export class WorkspaceService extends Service {
     }
     for (const cwd of cwds) {
       const zenbuDir = path.join(cwd, ".zenbu")
-      const configPath = resolveWorkspaceConfigPath(zenbuDir)
+      const configPath = await resolveWorkspaceConfigPath(zenbuDir)
       if (!configPath) continue
 
       try {
-        const raw = fs.readFileSync(configPath, "utf8")
+        const raw = await fsp.readFile(configPath, "utf8")
         const config = parseJsonc(raw)
         if (!config || typeof config !== "object") continue
         const plugins = (config as any).plugins
@@ -256,7 +316,7 @@ export class WorkspaceService extends Service {
   ): Promise<void> {
     if (this.loadedWorkspacePlugins.has(workspaceId)) return
 
-    const manifests = this.scanWorkspacePlugins(cwds)
+    const manifests = await this.scanWorkspacePlugins(cwds)
 
     await runtime.scopedImport(workspaceId, async () => {
       runtime.register(WorkspaceContextService)
@@ -349,11 +409,11 @@ export class WorkspaceService extends Service {
     if (ws.icon?.blobId) return ws.icon.blobId
 
     for (const cwd of ws.cwds) {
-      const hit = scanIcon(cwd)
+      const hit = await scanIcon(cwd)
       if (!hit) continue
       let data: Uint8Array
       try {
-        data = new Uint8Array(fs.readFileSync(hit.path))
+        data = new Uint8Array(await fsp.readFile(hit.path))
       } catch {
         continue
       }
@@ -362,6 +422,79 @@ export class WorkspaceService extends Service {
       return blobId
     }
     return null
+  }
+
+  async listConfigurations(): Promise<
+    {
+      id: string
+      name: string
+      description: string
+      tags: string[]
+      thumbnailBase64: string | null
+    }[]
+  > {
+    const results: {
+      id: string
+      name: string
+      description: string
+      tags: string[]
+      thumbnailBase64: string | null
+    }[] = []
+    try {
+      const entries = await fsp.readdir(CONFIGURATIONS_DIR, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const metaPath = path.join(CONFIGURATIONS_DIR, entry.name, "meta.json")
+        try {
+          const raw = await fsp.readFile(metaPath, "utf8")
+          const meta = JSON.parse(raw)
+          let thumbnailBase64: string | null = null
+          if (meta.thumbnail) {
+            const thumbPath = path.join(CONFIGURATIONS_DIR, entry.name, meta.thumbnail)
+            try {
+              const data = await fsp.readFile(thumbPath)
+              thumbnailBase64 = `data:image/png;base64,${data.toString("base64")}`
+            } catch {}
+          }
+          results.push({
+            id: meta.id ?? entry.name,
+            name: meta.name ?? entry.name,
+            description: meta.description ?? "",
+            tags: meta.tags ?? [],
+            thumbnailBase64,
+          })
+        } catch {}
+      }
+    } catch (err) {
+      console.error("[workspace] failed to list configurations:", err)
+    }
+    return results
+  }
+
+  async applyConfiguration(configId: string, targetCwd: string): Promise<boolean> {
+    const srcZenbu = path.join(CONFIGURATIONS_DIR, configId, ".zenbu")
+    const destZenbu = path.join(targetCwd, ".zenbu")
+    try {
+      if (!(await pathExists(srcZenbu))) {
+        console.log(`[workspace] configuration "${configId}" has no .zenbu/ directory, skipping`)
+        return false
+      }
+      await fsp.cp(srcZenbu, destZenbu, { recursive: true })
+      console.log(`[workspace] applied configuration "${configId}" to ${targetCwd}`)
+      const destPkg = path.join(destZenbu, "package.json")
+      if (await pathExists(destPkg)) {
+        try {
+          await runPnpmInstall(destZenbu)
+          console.log(`[workspace] installed deps for configuration "${configId}"`)
+        } catch (installErr) {
+          console.error(`[workspace] dep install failed for "${configId}":`, installErr)
+        }
+      }
+      return true
+    } catch (err) {
+      console.error(`[workspace] failed to apply configuration "${configId}":`, err)
+      return false
+    }
   }
 
   evaluate() {
@@ -382,7 +515,78 @@ export class WorkspaceService extends Service {
         })
       }
     })
+
+    this.setup("workspace-watchers", () => {
+      const subscriptions: AsyncSubscription[] = []
+      const debouncers = new Map<string, ReturnType<typeof setTimeout>>()
+      const root = this.ctx.db.client.readRoot()
+      const workspaces = root.plugin.kernel.workspaces ?? []
+
+      const scheduleHotLoad = (workspaceId: string, cwds: string[]) => {
+        const existing = debouncers.get(workspaceId)
+        if (existing) clearTimeout(existing)
+        debouncers.set(
+          workspaceId,
+          setTimeout(() => {
+            debouncers.delete(workspaceId)
+            this.maybeHotLoadPlugins(workspaceId, cwds).catch((err) => {
+              console.error(`[workspace] hot-load failed for ${workspaceId}:`, err)
+            })
+          }, 100),
+        )
+      }
+
+      for (const ws of workspaces) {
+        for (const cwd of ws.cwds) {
+          const zenbuDir = path.join(cwd, ".zenbu")
+          subscribe(cwd, (err, events) => {
+            if (err) return
+            const touched = events.some(
+              (e) => e.path === zenbuDir || e.path.startsWith(zenbuDir + path.sep),
+            )
+            if (!touched) return
+            scheduleHotLoad(ws.id, ws.cwds)
+          })
+            .then((sub) => {
+              subscriptions.push(sub)
+            })
+            .catch((watchErr) => {
+              console.error(`[workspace] watcher setup failed for ${cwd}:`, watchErr)
+            })
+        }
+      }
+
+      return async () => {
+        for (const t of debouncers.values()) clearTimeout(t)
+        debouncers.clear()
+        await Promise.allSettled(subscriptions.map((s) => s.unsubscribe()))
+      }
+    })
   }
+
+  private async maybeHotLoadPlugins(workspaceId: string, cwds: string[]): Promise<void> {
+    const prev = this.loadedWorkspacePlugins.get(workspaceId)
+    if (prev && prev.length > 0) return
+    const manifests = await this.scanWorkspacePlugins(cwds)
+    if (manifests.length === 0) return
+    this.loadedWorkspacePlugins.delete(workspaceId)
+    await this.loadWorkspacePlugins(workspaceId, cwds)
+  }
+}
+
+function runPnpmInstall(cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("pnpm", ["install"], { cwd, stdio: "pipe", timeout: 30_000 })
+    let stderrBuf = ""
+    child.stderr?.on("data", (d: Buffer) => {
+      stderrBuf += d.toString()
+    })
+    child.on("error", reject)
+    child.on("close", (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`pnpm install exited ${code}${stderrBuf.trim() ? `: ${stderrBuf.trim()}` : ""}`))
+    })
+  })
 }
 
 const ICON_CANDIDATES = [
@@ -414,12 +618,10 @@ const ICON_CANDIDATES = [
   "favicon.ico",
 ]
 
-function scanIcon(cwd: string): { path: string } | null {
+async function scanIcon(cwd: string): Promise<{ path: string } | null> {
   for (const rel of ICON_CANDIDATES) {
     const abs = path.join(cwd, rel)
-    try {
-      if (fs.statSync(abs).isFile()) return { path: abs }
-    } catch {}
+    if (await isFile(abs)) return { path: abs }
   }
   return null
 }

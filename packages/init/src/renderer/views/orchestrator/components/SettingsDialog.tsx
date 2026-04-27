@@ -960,7 +960,6 @@ function KernelAppVersionCard() {
 
       {status === "error" && error && (
         <pre className="whitespace-pre-wrap break-words rounded bg-background p-2 text-[11px] text-destructive">
-          {/* @ts-expect-error */}
           {error}
         </pre>
       )}

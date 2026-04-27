@@ -12,6 +12,7 @@ import {
   $createParagraphNode,
 } from "lexical";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { nanoid } from "nanoid";
 import { FileReferenceNode } from "../lib/FileReferenceNode";
 import { ImageNode } from "../lib/ImageNode";
 import { TokenNode } from "../lib/TokenNode";
@@ -141,7 +142,14 @@ function SubmitPlugin({
       },
       COMMAND_PRIORITY_HIGH,
     );
-  }, [editor, onSubmit, menuOpenRef, slashMenuOpenRef, reloadMenuOpenRef, externalMenuOpenRef]);
+  }, [
+    editor,
+    onSubmit,
+    menuOpenRef,
+    slashMenuOpenRef,
+    reloadMenuOpenRef,
+    externalMenuOpenRef,
+  ]);
 
   return null;
 }
@@ -409,8 +417,8 @@ export function Composer({
         client.plugin.kernel.composerDrafts.set(next);
       }
 
-      console.log('sending', text);
-      
+      console.log("sending", text);
+
       // if (streaming) {
       //   // Interrupt with prompt — server handles event log ordering
       //   // (interrupted event, then user_prompt, then sends to agent)
@@ -436,6 +444,35 @@ export function Composer({
           await onSubmit(text, images, editorStateJson);
         } catch (err) {
           console.error("[composer] onSubmit override failed", err);
+        }
+        if (images.length > 0) {
+          client.plugin.kernel.chatBlobs.set([]).catch(() => {});
+        }
+        return;
+      }
+
+      // While the agent is mid-turn, route the message into the agent's
+      // kyju `queuedMessages` array. The agent main process drains the
+      // queue head on natural turn completion (interrupts skip the drain).
+      if (streaming) {
+        const queuedItem = {
+          id: nanoid(),
+          text,
+          images: images.map((img) => ({
+            blobId: img.blobId,
+            mimeType: img.mimeType,
+          })),
+          editorState: editorStateJson ?? null,
+          createdAt: Date.now(),
+        };
+        try {
+          await client.update((root) => {
+            const a = root.plugin.kernel.agents.find((x) => x.id === agentId);
+            if (!a) return;
+            a.queuedMessages = [...(a.queuedMessages ?? []), queuedItem];
+          });
+        } catch (err) {
+          console.error("[composer] queue append failed", err);
         }
         if (images.length > 0) {
           client.plugin.kernel.chatBlobs.set([]).catch(() => {});
@@ -475,9 +512,7 @@ export function Composer({
               imageCount: images.length,
             };
           }
-          agentNode.eventLog.concat([
-            { timestamp: now, data: eventData },
-          ]);
+          agentNode.eventLog.concat([{ timestamp: now, data: eventData }]);
           agentNode.status.set("streaming");
           agentNode.lastUserMessageAt?.set(now);
         });
@@ -528,7 +563,7 @@ export function Composer({
   );
 
   return (
-    <div className="mx-auto w-full max-w-[919px] px-4 pt-1 pb-3">
+    <div className="mx-auto w-full max-w-[919px] px-2 pt-1 pb-3">
       <div
         ref={composerWrapperRef}
         className="relative overflow-visible rounded-lg border bg-(--zenbu-composer) text-(--zenbu-composer-foreground) border-(--zenbu-composer-border)"

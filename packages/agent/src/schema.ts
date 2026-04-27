@@ -18,6 +18,15 @@ const userPromptImageSchema = zod.object({
   mimeType: zod.string(),
 });
 
+export const queuedMessageSchema = zod.object({
+  id: zod.string(),
+  text: zod.string(),
+  images: zod.array(userPromptImageSchema).default([]),
+  editorState: zod.any().nullable().default(null),
+  createdAt: zod.number(),
+});
+export type QueuedMessage = zod.infer<typeof queuedMessageSchema>;
+
 export const agentEventSchema = zod.object({
   timestamp: zod.number(),
   data: zod.union([
@@ -182,6 +191,7 @@ const agentRecordBase = {
   sessionId: zod.string().nullable().default(null),
   firstPromptSentAt: zod.number().nullable().default(null),
   eventLog: f.collection(agentEventSchema),
+  queuedMessages: zod.array(queuedMessageSchema).default([]),
 };
 
 export const agentRecordSchema = zod.object(agentRecordBase);

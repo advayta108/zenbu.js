@@ -1,0 +1,5 @@
+{
+  "plugins": [
+    "./browser-view/zenbu.plugin.json"
+  ]
+}

@@ -1,3 +1,4 @@
+import type * as React from "react"
 import type { EditorConfig, LexicalNode, NodeKey, SerializedLexicalNode, Spread } from "lexical"
 import { DecoratorNode } from "lexical"
 import { MentionPill } from "../components/MentionPill"
@@ -9,7 +10,7 @@ type SerializedMentionNode = Spread<
   SerializedLexicalNode
 >
 
-export class MentionNode extends DecoratorNode<JSX.Element> {
+export class MentionNode extends DecoratorNode<React.JSX.Element> {
   __mentionType: MentionType
   __label: string
 
@@ -37,7 +38,7 @@ export class MentionNode extends DecoratorNode<JSX.Element> {
     return false
   }
 
-  decorate(): JSX.Element {
+  decorate(): React.JSX.Element {
     return <MentionPill type={this.__mentionType} label={this.__label} />
   }
 

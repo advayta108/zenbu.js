@@ -1,4 +1,4 @@
-import type { AgentEvent } from "./schema.ts";
+import type { AgentEvent } from "./schema";
 
 export type DiffItem = { path: string; oldText?: string; newText: string };
 

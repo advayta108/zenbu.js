@@ -1,4 +1,4 @@
-import fs from "node:fs"
+import fsp from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
@@ -24,9 +24,18 @@ type FileNode = {
   children?: FileNode[]
 }
 
-function resolveConfigPath(): string {
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fsp.access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function resolveConfigPath(): Promise<string> {
   const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc")
-  if (fs.existsSync(jsonc)) return jsonc
+  if (await pathExists(jsonc)) return jsonc
   return path.join(os.homedir(), ".zenbu", "config.json")
 }
 
@@ -58,11 +67,15 @@ function parseJsonc(str: string): unknown {
   return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"))
 }
 
-function readZenbuConfig(): { plugins: string[] } {
-  const configPath = resolveConfigPath()
-  if (!fs.existsSync(configPath)) return { plugins: [] }
+async function readZenbuConfig(): Promise<{ plugins: string[] }> {
+  const configPath = await resolveConfigPath()
+  let raw: string
   try {
-    const raw = fs.readFileSync(configPath, "utf8")
+    raw = await fsp.readFile(configPath, "utf8")
+  } catch {
+    return { plugins: [] }
+  }
+  try {
     const parsed = parseJsonc(raw)
     if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as any).plugins)) {
       return { plugins: [] }
@@ -73,29 +86,38 @@ function readZenbuConfig(): { plugins: string[] } {
   }
 }
 
-function expandGlob(pattern: string): string[] {
+async function expandGlob(pattern: string): Promise<string[]> {
   const dir = path.dirname(pattern)
   const filePattern = path.basename(pattern)
   const regex = new RegExp(
     "^" + filePattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$",
   )
-  if (!fs.existsSync(dir)) return []
-  return fs
-    .readdirSync(dir)
+  let entries: string[]
+  try {
+    entries = await fsp.readdir(dir)
+  } catch {
+    return []
+  }
+  return entries
     .filter((f) => regex.test(f))
     .map((f) => path.resolve(dir, f))
 }
 
-function resolveManifestServices(
+async function resolveManifestServices(
   manifestPath: string,
   visited = new Set<string>(),
-): string[] {
+): Promise<string[]> {
   const resolved = path.resolve(manifestPath)
   if (visited.has(resolved)) return []
   visited.add(resolved)
 
+  let raw: string
   try {
-    const raw = fs.readFileSync(resolved, "utf8")
+    raw = await fsp.readFile(resolved, "utf8")
+  } catch {
+    return []
+  }
+  try {
     const manifest = JSON.parse(raw)
     const entries: string[] = manifest.services ?? []
     const baseDir = path.dirname(resolved)
@@ -104,11 +126,11 @@ function resolveManifestServices(
     for (const entry of entries) {
       const full = path.resolve(baseDir, entry)
       if (full.includes("*")) {
-        for (const file of expandGlob(full)) {
+        for (const file of await expandGlob(full)) {
           services.push(path.relative(baseDir, file))
         }
       } else if (full.endsWith(".json")) {
-        services.push(...resolveManifestServices(full, visited))
+        services.push(...(await resolveManifestServices(full, visited)))
       } else {
         services.push(path.relative(baseDir, full))
       }
@@ -119,9 +141,9 @@ function resolveManifestServices(
   }
 }
 
-function derivePluginName(manifestPath: string): string {
+async function derivePluginName(manifestPath: string): Promise<string> {
   try {
-    const raw = fs.readFileSync(manifestPath, "utf8")
+    const raw = await fsp.readFile(manifestPath, "utf8")
     const manifest = JSON.parse(raw)
     if (manifest.name) return manifest.name
   } catch {}
@@ -129,39 +151,43 @@ function derivePluginName(manifestPath: string): string {
   return path.basename(dir)
 }
 
-function readFileTree(dir: string, depth = 0, maxDepth = 4): FileNode[] {
+async function readFileTree(dir: string, depth = 0, maxDepth = 4): Promise<FileNode[]> {
   if (depth >= maxDepth) return []
+  let entries: import("node:fs").Dirent[]
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true })
-    return entries
-      .filter(
-        (e) =>
-          !e.name.startsWith(".") &&
-          e.name !== "node_modules" &&
-          e.name !== "dist" &&
-          e.name !== ".git",
-      )
-      .sort((a, b) => {
-        if (a.isDirectory() && !b.isDirectory()) return -1
-        if (!a.isDirectory() && b.isDirectory()) return 1
-        return a.name.localeCompare(b.name)
-      })
-      .map((entry): FileNode => {
-        const fullPath = path.join(dir, entry.name)
-        const relativePath = path.relative(process.cwd(), fullPath)
-        if (entry.isDirectory()) {
-          return {
-            name: entry.name,
-            path: relativePath,
-            type: "directory",
-            children: readFileTree(fullPath, depth + 1, maxDepth),
-          }
-        }
-        return { name: entry.name, path: relativePath, type: "file" }
-      })
+    entries = await fsp.readdir(dir, { withFileTypes: true })
   } catch {
     return []
   }
+  const filtered = entries
+    .filter(
+      (e) =>
+        !e.name.startsWith(".") &&
+        e.name !== "node_modules" &&
+        e.name !== "dist" &&
+        e.name !== ".git",
+    )
+    .sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1
+      if (!a.isDirectory() && b.isDirectory()) return 1
+      return a.name.localeCompare(b.name)
+    })
+  const out: FileNode[] = []
+  for (const entry of filtered) {
+    const fullPath = path.join(dir, entry.name)
+    const relativePath = path.relative(process.cwd(), fullPath)
+    if (entry.isDirectory()) {
+      out.push({
+        name: entry.name,
+        path: relativePath,
+        type: "directory",
+        children: await readFileTree(fullPath, depth + 1, maxDepth),
+      })
+    } else {
+      out.push({ name: entry.name, path: relativePath, type: "file" })
+    }
+  }
+  return out
 }
 
 export class InstallerService extends Service {
@@ -172,12 +198,18 @@ export class InstallerService extends Service {
   private pluginRoot = ""
 
   evaluate() {
+    this.initState().catch((err) => {
+      console.error("[installer] init failed:", err)
+    })
+  }
+
+  private async initState(): Promise<void> {
     const config = (globalThis as any).__zenbu_config__ ?? { plugins: [] }
     if (config.plugins.length > 0) {
       const firstPlugin = config.plugins[0]
       let dir = path.dirname(path.resolve(firstPlugin))
       while (dir !== path.dirname(dir)) {
-        if (fs.existsSync(path.join(dir, "package.json"))) {
+        if (await pathExists(path.join(dir, "package.json"))) {
           this.pluginRoot = dir
           break
         }
@@ -185,7 +217,9 @@ export class InstallerService extends Service {
       }
     }
 
-    this.needsSetup = this.pluginRoot !== "" && !fs.existsSync(path.join(this.pluginRoot, "node_modules"))
+    this.needsSetup =
+      this.pluginRoot !== "" &&
+      !(await pathExists(path.join(this.pluginRoot, "node_modules")))
     console.log(`[installer] service ready (needsSetup: ${this.needsSetup}, root: ${this.pluginRoot})`)
   }
 
@@ -193,19 +227,29 @@ export class InstallerService extends Service {
     return this.pluginRoot
   }
 
-  getInstalledPlugins(): InstalledPlugin[] {
-    const config = readZenbuConfig()
-    return config.plugins.map((manifestPath) => ({
-      manifestPath,
-      name: derivePluginName(manifestPath),
-      services: resolveManifestServices(manifestPath),
-    }))
+  async getInstalledPlugins(): Promise<InstalledPlugin[]> {
+    const config = await readZenbuConfig()
+    const out: InstalledPlugin[] = []
+    for (const manifestPath of config.plugins) {
+      out.push({
+        manifestPath,
+        name: await derivePluginName(manifestPath),
+        services: await resolveManifestServices(manifestPath),
+      })
+    }
+    return out
   }
 
-  listPluginsWithStatus(): { manifestPath: string; name: string; enabled: boolean }[] {
-    const configPath = resolveConfigPath()
-    if (!fs.existsSync(configPath)) return []
-    const raw = fs.readFileSync(configPath, "utf8")
+  async listPluginsWithStatus(): Promise<
+    { manifestPath: string; name: string; enabled: boolean }[]
+  > {
+    const configPath = await resolveConfigPath()
+    let raw: string
+    try {
+      raw = await fsp.readFile(configPath, "utf8")
+    } catch {
+      return []
+    }
     const results: { manifestPath: string; name: string; enabled: boolean }[] = []
     const pluginLineRe = /^\s*(\/\/)?\s*"([^"]+\.json)"/
 
@@ -216,21 +260,21 @@ export class InstallerService extends Service {
       const manifestPath = match[2]!
       results.push({
         manifestPath,
-        name: derivePluginName(manifestPath),
+        name: await derivePluginName(manifestPath),
         enabled: !commented,
       })
     }
     return results
   }
 
-  addPluginToConfig(manifestPath: string): void {
-    const configPath = resolveConfigPath()
-    if (!fs.existsSync(configPath)) {
+  async addPluginToConfig(manifestPath: string): Promise<void> {
+    const configPath = await resolveConfigPath()
+    if (!(await pathExists(configPath))) {
       const initial = `{\n  "plugins": [\n    "${manifestPath}",\n  ],\n}\n`
-      fs.writeFileSync(configPath, initial)
+      await fsp.writeFile(configPath, initial)
       return
     }
-    const raw = fs.readFileSync(configPath, "utf8")
+    const raw = await fsp.readFile(configPath, "utf8")
     const lines = raw.split("\n")
 
     const pluginLineRe = /^(\s*)(\/\/\s*)?"([^"]+\.json)"/
@@ -269,7 +313,7 @@ export class InstallerService extends Service {
     }
 
     lines.splice(insertAt, 0, newLine)
-    fs.writeFileSync(configPath, lines.join("\n"))
+    await fsp.writeFile(configPath, lines.join("\n"))
   }
 
   /**
@@ -278,23 +322,31 @@ export class InstallerService extends Service {
    * uninstall flows that also delete the plugin's files, so we don't
    * leave the config pointing at a missing manifest.
    */
-  removePluginFromConfig(manifestPath: string): void {
-    const configPath = resolveConfigPath()
-    if (!fs.existsSync(configPath)) return
-    const raw = fs.readFileSync(configPath, "utf8")
+  async removePluginFromConfig(manifestPath: string): Promise<void> {
+    const configPath = await resolveConfigPath()
+    let raw: string
+    try {
+      raw = await fsp.readFile(configPath, "utf8")
+    } catch {
+      return
+    }
     const lines = raw.split("\n")
     const escaped = manifestPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     const re = new RegExp(`^\\s*(//\\s*)?"${escaped}"`)
     for (let i = lines.length - 1; i >= 0; i--) {
       if (re.test(lines[i]!)) lines.splice(i, 1)
     }
-    fs.writeFileSync(configPath, lines.join("\n"))
+    await fsp.writeFile(configPath, lines.join("\n"))
   }
 
-  togglePlugin(manifestPath: string, enabled: boolean): void {
-    const configPath = resolveConfigPath()
-    if (!fs.existsSync(configPath)) return
-    const raw = fs.readFileSync(configPath, "utf8")
+  async togglePlugin(manifestPath: string, enabled: boolean): Promise<void> {
+    const configPath = await resolveConfigPath()
+    let raw: string
+    try {
+      raw = await fsp.readFile(configPath, "utf8")
+    } catch {
+      return
+    }
     const lines = raw.split("\n")
     const escaped = manifestPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     const re = new RegExp(`^(\\s*)(//\\s*)?("${escaped}")`)
@@ -310,14 +362,18 @@ export class InstallerService extends Service {
         : `${indent}// ${quoted}${rest}`
       break
     }
-    fs.writeFileSync(configPath, lines.join("\n"))
+    await fsp.writeFile(configPath, lines.join("\n"))
   }
 
-  getPluginRegistry(): RegistryEntry[] {
+  async getPluginRegistry(): Promise<RegistryEntry[]> {
     const registryPath = path.join(process.cwd(), "registry.jsonl")
-    if (!fs.existsSync(registryPath)) return []
+    let raw: string
     try {
-      const raw = fs.readFileSync(registryPath, "utf8")
+      raw = await fsp.readFile(registryPath, "utf8")
+    } catch {
+      return []
+    }
+    try {
       return raw
         .split("\n")
         .filter((line) => line.trim())
@@ -327,9 +383,9 @@ export class InstallerService extends Service {
     }
   }
 
-  getFileTree(): { cwd: string; tree: FileNode[] } {
+  async getFileTree(): Promise<{ cwd: string; tree: FileNode[] }> {
     const cwd = process.cwd()
-    return { cwd, tree: readFileTree(cwd) }
+    return { cwd, tree: await readFileTree(cwd) }
   }
 
   async runSetup(onProgress: (message: string) => void): Promise<boolean> {
@@ -349,10 +405,10 @@ export class InstallerService extends Service {
 
     let cmd: string
     let args: string[]
-    if (fs.existsSync(setupTs) && fs.existsSync(bunBin)) {
+    if ((await pathExists(setupTs)) && (await pathExists(bunBin))) {
       cmd = bunBin
       args = [setupTs]
-    } else if (fs.existsSync(setupSh)) {
+    } else if (await pathExists(setupSh)) {
       cmd = "bash"
       args = [setupSh]
     } else {

@@ -1,9 +1,12 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import { Agent } from "@zenbu/agent/src/agent";
+import {
+  Agent,
+  reconcileAgentDbProcessState,
+  type AgentState,
+} from "@zenbu/agent/src/agent";
 import type { AgentDb } from "@zenbu/agent/src/schema";
 import type { TerminalInfo } from "@zenbu/agent/src/terminal";
 import { discoverSkills, formatSkillsPrompt } from "@zenbu/agent/src/skills";
@@ -27,16 +30,16 @@ const PATHS_JSON = path.join(os.homedir(), ".zenbu", ".internal", "paths.json");
 
 type ZenbuPaths = { bunPath?: string; pnpmPath?: string };
 
-function readZenbuPaths(): ZenbuPaths {
+async function readZenbuPaths(): Promise<ZenbuPaths> {
   try {
-    return JSON.parse(fs.readFileSync(PATHS_JSON, "utf8")) as ZenbuPaths;
+    return JSON.parse(await fsp.readFile(PATHS_JSON, "utf8")) as ZenbuPaths;
   } catch {
     return {};
   }
 }
 
-function buildAcpEnv(): Record<string, string> {
-  const paths = readZenbuPaths();
+async function buildAcpEnv(): Promise<Record<string, string>> {
+  const paths = await readZenbuPaths();
   const env: Record<string, string> = {};
   if (paths.bunPath) env.ZENBU_BUN = paths.bunPath;
   if (paths.pnpmPath) env.ZENBU_PNPM = paths.pnpmPath;
@@ -98,6 +101,8 @@ export class AgentService extends Service {
 
   private processes = new Map<string, Agent>();
   private pendingContinues = new Set<string>();
+  private _agentPrevStateKind = new Map<string, AgentState["kind"]>();
+  private _interruptedAgents = new Set<string>();
 
   /**
    * Project the kernel-section client into the shape the Agent class
@@ -131,7 +136,7 @@ export class AgentService extends Service {
         `Agent "${agentId}" has no startCommand configured. Set one in Settings.`,
       );
     }
-    const extraEnv = buildAcpEnv();
+    const extraEnv = await buildAcpEnv();
     const { command, args } = parseStartCommand(
       agentConfig.startCommand,
       extraEnv,
@@ -162,12 +167,86 @@ export class AgentService extends Service {
       },
       cwd,
       db: this.agentDb(),
-      mcpProxyCommand: readZenbuPaths().bunPath,
+      mcpProxyCommand: (await readZenbuPaths()).bunPath,
       firstPromptPreamble,
+      onStateChange: (state) => this.handleAgentStateChange(agentId, state),
     });
 
     this.processes.set(agentId, agent);
     return agent;
+  }
+
+  /**
+   * Watch for the agent's prompting → ready transition and, when the turn
+   * completed naturally (not via interrupt), pop the head of its kyju
+   * `queuedMessages` array and send it. The next prompting → ready
+   * transition triggers the next pop, so a multi-item queue drains in order.
+   */
+  private handleAgentStateChange(agentId: string, state: AgentState) {
+    const prev = this._agentPrevStateKind.get(agentId);
+    this._agentPrevStateKind.set(agentId, state.kind);
+    if (prev === "prompting" && state.kind === "ready") {
+      const wasInterrupted = this._interruptedAgents.delete(agentId);
+      if (wasInterrupted) return;
+      queueMicrotask(() => {
+        this.drainQueueHead(agentId).catch((err) => {
+          console.warn(`[agent ${agentId}] drainQueueHead failed:`, err);
+        });
+      });
+    }
+  }
+
+  private async drainQueueHead(agentId: string) {
+    const client = this.ctx.db.client;
+    const kernel = client.readRoot().plugin.kernel;
+    const agent = kernel.agents.find((a) => a.id === agentId);
+    if (!agent) return;
+    const queue = agent.queuedMessages ?? [];
+    if (queue.length === 0) return;
+
+    const head = queue[0];
+
+    // Atomically pop the head; race-guard on the head's id so a stale
+    // observer doesn't pop the wrong item if someone reordered between
+    // read and write.
+    let popped = false;
+    await client.update((root) => {
+      const a = root.plugin.kernel.agents.find((x) => x.id === agentId);
+      if (!a || !a.queuedMessages || a.queuedMessages.length === 0) return;
+      if (a.queuedMessages[0].id !== head.id) return;
+      a.queuedMessages = a.queuedMessages.slice(1);
+      popped = true;
+    });
+    if (!popped) return;
+
+    // Write the user_prompt event so the chat history shows the message
+    // (the renderer skips this write when routing to the queue).
+    const agentNode = client.plugin.kernel.agents.find((a) => a.id === agentId);
+    if (agentNode) {
+      const now = Date.now();
+      const eventData: {
+        kind: "user_prompt";
+        text: string;
+        images?: { blobId: string; mimeType: string }[];
+        editorState?: unknown;
+      } = { kind: "user_prompt", text: head.text };
+      if (head.images && head.images.length > 0) {
+        eventData.images = head.images;
+      }
+      if (head.editorState) {
+        eventData.editorState = head.editorState;
+      }
+      await agentNode.eventLog
+        .concat([{ timestamp: now, data: eventData }])
+        .catch(() => {});
+      await agentNode.lastUserMessageAt?.set(now as never).catch(() => {});
+    }
+
+    await this.send(
+      agentId,
+      head.text,
+      head.images && head.images.length > 0 ? head.images : undefined,
+    );
   }
 
   async init(agentId: string) {
@@ -227,7 +306,7 @@ export class AgentService extends Service {
     await this.setAgentTitle(agentId, { kind: "generating" });
 
     try {
-      const extraEnv = buildAcpEnv();
+      const extraEnv = await buildAcpEnv();
       const { command, args } = parseStartCommand(
         template.startCommand,
         extraEnv,
@@ -264,7 +343,7 @@ export class AgentService extends Service {
             collectedText += u.content.text;
           }
         },
-        mcpProxyCommand: readZenbuPaths().bunPath,
+        mcpProxyCommand: (await readZenbuPaths()).bunPath,
       });
 
       const model = kernel.summarizationModel ?? agentNode?.model;
@@ -405,13 +484,28 @@ export class AgentService extends Service {
     if (agent) {
       await agent.close().catch(() => {});
       this.processes.delete(agentId);
+      this._agentPrevStateKind.delete(agentId);
+      this._interruptedAgents.delete(agentId);
     }
     await this.ensureProcess(agentId);
   }
 
   async interrupt(agentId: string, text?: string, images?: ImageRef[]) {
     const agent = this.processes.get(agentId);
-    if (!agent) return;
+    if (!agent) {
+      await reconcileAgentDbProcessState(this.agentDb(), this.processes.keys())
+        .catch((err) => {
+          console.warn("[agent] interrupt reconcile failed:", err);
+        });
+      if (text) {
+        await this.appendUserPrompt(agentId, text);
+        await this.send(agentId, text, images);
+      }
+      return;
+    }
+    // Mark this agent as interrupted so the upcoming prompting → ready
+    // transition skips the auto-flush of queuedMessages.
+    this._interruptedAgents.add(agentId);
     await agent.interrupt().catch(() => {});
 
     const client = this.ctx.db.client;
@@ -461,7 +555,7 @@ export class AgentService extends Service {
     if (process) {
       const { command, args } = parseStartCommand(
         newTemplate.startCommand,
-        buildAcpEnv(),
+        await buildAcpEnv(),
       );
       try {
         await process.changeStartCommand(command, args);
@@ -636,6 +730,13 @@ export class AgentService extends Service {
   }
 
   evaluate() {
+    reconcileAgentDbProcessState(
+      this.agentDb(),
+      this.processes.keys(),
+    ).catch((err) => {
+      console.warn("[agent] startup process-state reconcile failed:", err);
+    });
+
     this.setup("agent-cleanup", () => {
       return async (reason) => {
         if (reason === "shutdown") {
@@ -643,6 +744,8 @@ export class AgentService extends Service {
             await agent.close().catch(() => {});
           }
           this.processes.clear();
+          this._agentPrevStateKind.clear();
+          this._interruptedAgents.clear();
           return;
         }
 
@@ -667,6 +770,8 @@ export class AgentService extends Service {
           }
           await agent.close().catch(() => {});
           this.processes.delete(agentId);
+          this._agentPrevStateKind.delete(agentId);
+          this._interruptedAgents.delete(agentId);
         }
       };
     });

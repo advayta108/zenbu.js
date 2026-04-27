@@ -141,10 +141,9 @@ function WriteCard({ rawInput, status }: { rawInput: unknown; status: string }) 
   )
 }
 
-function BashCard({ title, rawInput, toolResponse, status }: {
-  title: string
+function BashCard({ rawInput, contentItems, status }: {
   rawInput: unknown
-  toolResponse: { stdout?: string; stderr?: string } | null
+  contentItems: ToolCallContentItem[]
   status: string
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -152,6 +151,10 @@ function BashCard({ title, rawInput, toolResponse, status }: {
   const command = typeof input?.command === "string" && input.command.length > 0 ? input.command : null
   const bashStatus = status === "failed" ? "completed" : status
   const loading = isLoading(bashStatus)
+  const output = contentItems
+    .filter((c): c is ToolCallContentItem & { type: "text" } => c.type === "text")
+    .map((c) => c.text)
+    .join("")
 
   const inner = command ? (
     <span className="text-neutral-700">{command}</span>
@@ -172,10 +175,9 @@ function BashCard({ title, rawInput, toolResponse, status }: {
         )}
         <Chevron expanded={expanded} />
       </button>
-      {expanded && toolResponse && (toolResponse.stdout || toolResponse.stderr) && (
+      {expanded && output && (
         <pre className="mt-1 px-2 py-1 text-xs text-neutral-500 bg-neutral-100/50 rounded border border-neutral-200 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
-          {toolResponse.stdout || ""}
-          {toolResponse.stderr ? `${toolResponse.stdout ? "\n" : ""}${toolResponse.stderr}` : ""}
+          {output}
         </pre>
       )}
     </div>
@@ -321,7 +323,7 @@ export function ToolCallCard({
 
   if (isWrite) return wrap(<WriteCard rawInput={rawInput} status={status} />)
   if (isEdit) return wrap(<EditCard contentItems={contentItems} title={title} status={status} />)
-  if (isBash) return wrap(<BashCard title={title} rawInput={rawInput} toolResponse={toolResponse ?? null} status={status} />)
+  if (isBash) return wrap(<BashCard rawInput={rawInput} contentItems={contentItems} status={status} />)
   if (isTask) return wrap(<TaskCard title={title} rawInput={rawInput} contentItems={contentItems} status={status} />)
   if (isRead) return wrap(<ReadCard title={title} rawInput={rawInput} status={status} />)
   if (isSearch) return wrap(<SearchCard title={title} rawOutput={rawOutput} status={status} />)

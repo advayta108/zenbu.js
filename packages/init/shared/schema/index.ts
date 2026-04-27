@@ -275,6 +275,19 @@ export const appSchema = createSchema({
   sidebarOpenByWindow: f.record(zod.string(), zod.boolean()).default({}),
   lastTabByWorkspace: f.record(zod.string(), zod.string()).default({}),
   utilitySidebarSelectedByWindow: f.record(zod.string(), zod.string()).default({}),
+  // Warm pool of pre-created agent rows. `NewAgentService.promoteNewAgentTab`
+  // consumes the head entry on submit so the user gets a ready agent instead
+  // of waiting on a fresh `agent.init`. `PooledAgentService` keeps
+  // `pool.length === poolSize` by subscribing to the field.
+  pool: f
+    .array(
+      zod.object({
+        agentId: zod.string(),
+        sessionId: zod.string(),
+      }),
+    )
+    .default([]),
+  poolSize: f.number().default(1),
 });
 
 export const schema = appSchema;

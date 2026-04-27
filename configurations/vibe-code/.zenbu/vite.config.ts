@@ -1,0 +1,26 @@
+import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
+import os from "node:os"
+import path from "node:path"
+
+const packagesDir = path.join(
+  os.homedir(),
+  ".zenbu",
+  "plugins",
+  "zenbu",
+  "packages",
+)
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      "#zenbu": packagesDir,
+    },
+    dedupe: ["react", "react-dom"],
+  },
+  server: {
+    hmr: { protocol: "ws", host: "localhost" },
+    allowedHosts: true,
+  },
+})

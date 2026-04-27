@@ -36,10 +36,7 @@ function DialogOverlay({
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
-      className={cn(
-        "fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
-        className
-      )}
+      className={cn("fixed inset-0 z-50", className)}
       {...props}
     />
   )
@@ -58,10 +55,10 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
-        className="fixed inset-0 z-50 flex items-center justify-center p-4 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0"
+        className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-[12vh] outline-none"
         {...props}
       >
-        {/* Click-outside close: clicking the dim area around the card. */}
+        {/* Click-outside close: clicking the area around the card. */}
         <DialogPrimitive.Close asChild>
           <button
             type="button"
@@ -72,7 +69,7 @@ function DialogContent({
         </DialogPrimitive.Close>
         <div
           className={cn(
-            "relative z-10 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-lg border bg-background p-6 shadow-lg outline-none sm:max-w-lg data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:zoom-in-95 duration-200",
+            "relative z-10 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-md border bg-background p-6 shadow-lg outline-none sm:max-w-lg",
             className
           )}
         >

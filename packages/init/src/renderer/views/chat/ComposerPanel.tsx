@@ -1,5 +1,6 @@
 import { Composer } from "./components/Composer"
 import { ComposerToolbar } from "./components/ComposerToolbar"
+import { QueuedMessages } from "./components/QueuedMessages"
 import type { ExpectedVisibleMessage } from "./lib/chat-invariants"
 
 export type ComposerPanelProps = {
@@ -15,6 +16,7 @@ export function ComposerPanel({
 }: ComposerPanelProps) {
   return (
     <div className="shrink-0">
+      <QueuedMessages agentId={agentId} />
       <Composer
         agentId={agentId}
         scrollToBottom={scrollToBottom}

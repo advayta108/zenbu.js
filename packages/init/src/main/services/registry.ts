@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import fs from "node:fs"
+import fsp from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -118,10 +118,18 @@ async function fetchRemoteRegistry(): Promise<
   }
 }
 
-function readLocalRegistry(): RegistryEntry[] {
-  if (!fs.existsSync(LOCAL_REGISTRY_PATH)) return []
+async function pathExists(p: string): Promise<boolean> {
   try {
-    return parseJsonl(fs.readFileSync(LOCAL_REGISTRY_PATH, "utf8"))
+    await fsp.access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function readLocalRegistry(): Promise<RegistryEntry[]> {
+  try {
+    return parseJsonl(await fsp.readFile(LOCAL_REGISTRY_PATH, "utf8"))
   } catch {
     return []
   }
@@ -131,8 +139,8 @@ function installPathFor(name: string): string {
   return path.join(PLUGINS_ROOT, name)
 }
 
-function isInstalled(name: string): boolean {
-  return fs.existsSync(installPathFor(name))
+async function isInstalled(name: string): Promise<boolean> {
+  return pathExists(installPathFor(name))
 }
 
 const BUN_BIN = path.join(
@@ -177,16 +185,16 @@ function runSetupScript(
   })
 }
 
-function findManifest(dir: string): string | null {
+async function findManifest(dir: string): Promise<string | null> {
   const root = path.join(dir, "zenbu.plugin.json")
-  if (fs.existsSync(root)) return root
+  if (await pathExists(root)) return root
   // Shallow search: one level down (e.g., packages/foo/zenbu.plugin.json)
   try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    for (const entry of await fsp.readdir(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue
       if (entry.name === "node_modules" || entry.name.startsWith(".")) continue
       const sub = path.join(dir, entry.name, "zenbu.plugin.json")
-      if (fs.existsSync(sub)) return sub
+      if (await pathExists(sub)) return sub
     }
   } catch {}
   return null
@@ -200,16 +208,16 @@ export class RegistryService extends Service {
   evaluate() {}
 
   async getRegistry(): Promise<RegistryResult> {
-    const statuses = this.ctx.installer.listPluginsWithStatus()
+    const statuses = await this.ctx.installer.listPluginsWithStatus()
     const byName = new Map<string, { manifestPath: string; enabled: boolean }>()
     for (const s of statuses) {
       byName.set(s.name, { manifestPath: s.manifestPath, enabled: s.enabled })
     }
-    const enrich = <T extends { name: string }>(e: T) => {
+    const enrich = async <T extends { name: string }>(e: T) => {
       const status = byName.get(e.name)
       return {
         ...e,
-        installed: isInstalled(e.name),
+        installed: await isInstalled(e.name),
         installPath: installPathFor(e.name),
         enabled: status?.enabled ?? false,
         manifestPath: status?.manifestPath ?? null,
@@ -224,14 +232,14 @@ export class RegistryService extends Service {
      * available; marked `local: true` so the UI can hide install/security
      * controls that need a repo.
      */
-    const localEntries = (catalogNames: Set<string>) => {
+    const localEntries = async (catalogNames: Set<string>) => {
       const extra: RegistryListing["entries"] = []
       for (const s of statuses) {
         if (catalogNames.has(s.name)) continue
         let title: string | undefined
         let description = ""
         try {
-          const m = JSON.parse(fs.readFileSync(s.manifestPath, "utf8"))
+          const m = JSON.parse(await fsp.readFile(s.manifestPath, "utf8"))
           if (typeof m.title === "string") title = m.title
           if (typeof m.description === "string") description = m.description
         } catch {}
@@ -252,22 +260,22 @@ export class RegistryService extends Service {
 
     const remote = await fetchRemoteRegistry()
     if ("entries" in remote) {
-      const catalog = remote.entries.map(enrich)
+      const catalog = await Promise.all(remote.entries.map(enrich))
       const names = new Set(catalog.map((e) => e.name))
       return {
         ok: true,
         listing: {
           source: "remote",
-          entries: [...catalog, ...localEntries(names)],
+          entries: [...catalog, ...(await localEntries(names))],
         },
       }
     }
 
-    const local = readLocalRegistry()
+    const local = await readLocalRegistry()
     if (local.length === 0 && statuses.length === 0) {
       return { ok: false, error: remote.error }
     }
-    const catalog = local.map(enrich)
+    const catalog = await Promise.all(local.map(enrich))
     const names = new Set(catalog.map((e) => e.name))
     return {
       ok: true,
@@ -277,7 +285,7 @@ export class RegistryService extends Service {
           local.length === 0
             ? `Showing only locally installed plugins (${remote.error})`
             : `Using local registry (${remote.error})`,
-        entries: [...catalog, ...localEntries(names)],
+        entries: [...catalog, ...(await localEntries(names))],
       },
     }
   }
@@ -369,15 +377,15 @@ export class RegistryService extends Service {
         return { ok: false, error: "Missing name or repo" }
       }
       const target = installPathFor(entry.name)
-      if (fs.existsSync(target)) {
+      if (await pathExists(target)) {
         return { ok: false, error: `${target} already exists` }
       }
-      fs.mkdirSync(PLUGINS_ROOT, { recursive: true })
+      await fsp.mkdir(PLUGINS_ROOT, { recursive: true })
 
       append(`Cloning ${entry.repo} → ${target}`)
       await gitClone(entry.repo, target)
 
-      const manifest = findManifest(target)
+      const manifest = await findManifest(target)
       if (!manifest) {
         return {
           ok: false,
@@ -392,8 +400,8 @@ export class RegistryService extends Service {
       const setupTs = path.join(manifestDir, "setup.ts")
       const setupSh = path.join(manifestDir, "setup.sh")
       let setupScript: string | null = null
-      if (fs.existsSync(setupTs)) setupScript = setupTs
-      else if (fs.existsSync(setupSh)) setupScript = setupSh
+      if (await pathExists(setupTs)) setupScript = setupTs
+      else if (await pathExists(setupSh)) setupScript = setupSh
       if (setupScript) {
         append(`Running ${path.basename(setupScript)}…`)
         await runSetupScript(manifestDir, setupScript, append)
@@ -401,7 +409,7 @@ export class RegistryService extends Service {
         append("No setup script (skipping)")
       }
 
-      this.ctx.installer.addPluginToConfig(manifest)
+      await this.ctx.installer.addPluginToConfig(manifest)
       append(`Added to config`)
 
       return { ok: true, manifestPath: manifest, log }
@@ -434,10 +442,10 @@ export class RegistryService extends Service {
       // plugin dir name; kept conservative — only touches exact paths).
       const dir = installPathFor(args.name)
       const manifest = path.join(dir, "zenbu.plugin.json")
-      this.ctx.installer.removePluginFromConfig(manifest)
+      await this.ctx.installer.removePluginFromConfig(manifest)
 
       if (args.deleteFiles) {
-        if (fs.existsSync(dir)) {
+        if (await pathExists(dir)) {
           // rm -rf equivalent, safe because `dir` is under PLUGINS_ROOT
           // and is a plugin-named subdir.
           if (path.relative(PLUGINS_ROOT, dir).startsWith("..")) {
@@ -446,7 +454,7 @@ export class RegistryService extends Service {
               error: `Refusing to delete outside plugins root: ${dir}`,
             }
           }
-          fs.rmSync(dir, { recursive: true, force: true })
+          await fsp.rm(dir, { recursive: true, force: true })
         }
       }
       return { ok: true }
@@ -459,9 +467,9 @@ export class RegistryService extends Service {
   }
 
   /** Absolute directory on disk for an installed plugin, or null. */
-  getInstalledPluginDir(name: string): string | null {
+  async getInstalledPluginDir(name: string): Promise<string | null> {
     const dir = installPathFor(name)
-    return fs.existsSync(dir) ? dir : null
+    return (await pathExists(dir)) ? dir : null
   }
 }
 

@@ -1,0 +1,7 @@
+{
+  "id": "research",
+  "name": "Research",
+  "description": "Deep research with wiki, source aggregation, and structured notes",
+  "tags": ["wiki", "sources", "notes"],
+  "thumbnail": "thumbnail.png"
+}

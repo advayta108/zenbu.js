@@ -10,6 +10,7 @@ import {
   summarizeMessage,
   type ExpectedVisibleMessage,
 } from "../lib/chat-invariants"
+import { ChatErrorBoundary } from "../App"
 
 export type ScrollMetrics = {
   scrollTop: number
@@ -482,7 +483,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
           ref={autoScroll.scrollRef}
           onScroll={handleScroll}
           onClick={autoScroll.handleInteraction}
-          className={`min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-1 [scrollbar-width:none] ${
+          className={`min-h-0 flex-1 overflow-y-auto px-1 @md:px-4 pt-3 pb-1 [scrollbar-width:none] ${
             autoScroll.userScrolled
               ? "hover:[scrollbar-width:thin] hover:[scrollbar-color:var(--color-neutral-300)_transparent]"
               : ""
@@ -491,7 +492,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
         >
           <div
             ref={autoScroll.contentRef}
-            className="mx-auto w-full max-w-[919px] space-y-1.5 px-5"
+            className="mx-auto w-full max-w-[919px] space-y-1.5 px-1 @md:px-3"
           >
             {hasMoreAbove && (
               <div className="flex justify-center py-2">
@@ -499,16 +500,24 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(
               </div>
             )}
 
-            {messages.map((msg, i) => (
-              <div key={getMessageKey(msg, i)}>
-                <MessageRow
-                  message={msg}
-                  components={C}
-                  onPermissionSelect={onPermissionSelect}
-                  onQuestionSubmit={onQuestionSubmit}
-                />
-              </div>
-            ))}
+            {messages.map((msg, i) => {
+              const summary = summarizeMessage(msg)
+              const label = summary
+                ? `${msg.role}${summary.toolCallId ? ` (${summary.toolCallId})` : ""}`
+                : msg.role
+              return (
+                <div key={getMessageKey(msg, i)}>
+                  <ChatErrorBoundary label={label} compact>
+                    <MessageRow
+                      message={msg}
+                      components={C}
+                      onPermissionSelect={onPermissionSelect}
+                      onQuestionSubmit={onQuestionSubmit}
+                    />
+                  </ChatErrorBoundary>
+                </div>
+              )
+            })}
 
             <div className={`shrink-0 ${loading ? "h-9" : "min-h-9 pb-4"}`}>
              

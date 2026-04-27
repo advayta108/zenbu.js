@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { PLUGIN_SETUP_STATE_JSON, INTERNAL_DIR } from "./paths";
 
@@ -14,10 +14,9 @@ export type PluginSetupRecord = {
 
 export type PluginSetupState = Record<string, PluginSetupRecord>;
 
-export function readPluginSetupState(): PluginSetupState {
+export async function readPluginSetupState(): Promise<PluginSetupState> {
   try {
-    if (!fs.existsSync(PLUGIN_SETUP_STATE_JSON)) return {};
-    const raw = fs.readFileSync(PLUGIN_SETUP_STATE_JSON, "utf8");
+    const raw = await fsp.readFile(PLUGIN_SETUP_STATE_JSON, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {};
@@ -39,27 +38,27 @@ export function readPluginSetupState(): PluginSetupState {
 /**
  * Atomic write-rename so a crash mid-write can't corrupt the state file.
  */
-export function writePluginSetupState(next: PluginSetupState): void {
-  fs.mkdirSync(INTERNAL_DIR, { recursive: true });
+export async function writePluginSetupState(next: PluginSetupState): Promise<void> {
+  await fsp.mkdir(INTERNAL_DIR, { recursive: true });
   const tmp = PLUGIN_SETUP_STATE_JSON + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2));
-  fs.renameSync(tmp, PLUGIN_SETUP_STATE_JSON);
+  await fsp.writeFile(tmp, JSON.stringify(next, null, 2));
+  await fsp.rename(tmp, PLUGIN_SETUP_STATE_JSON);
 }
 
-export function getStoredSetupVersion(pluginName: string): number {
-  const state = readPluginSetupState();
+export async function getStoredSetupVersion(pluginName: string): Promise<number> {
+  const state = await readPluginSetupState();
   return state[pluginName]?.version ?? 0;
 }
 
-export function recordSetupVersion(
+export async function recordSetupVersion(
   pluginName: string,
   version: number,
-): void {
-  const state = readPluginSetupState();
+): Promise<void> {
+  const state = await readPluginSetupState();
   const current = state[pluginName]?.version ?? 0;
   if (version <= current) return;
   state[pluginName] = { version, at: Date.now() };
-  writePluginSetupState(state);
+  await writePluginSetupState(state);
 }
 
 /**
@@ -67,13 +66,13 @@ export function recordSetupVersion(
  * manifest has no `setup` field (or it's malformed), meaning no gate runs
  * for this plugin.
  */
-export function readManifestSetup(manifestPath: string): {
+export async function readManifestSetup(manifestPath: string): Promise<{
   script: string;
   version: number;
   scriptAbs: string;
-} | null {
+} | null> {
   try {
-    const raw = fs.readFileSync(manifestPath, "utf8");
+    const raw = await fsp.readFile(manifestPath, "utf8");
     const manifest = JSON.parse(raw);
     const setup = manifest?.setup;
     if (!setup || typeof setup !== "object") return null;
@@ -87,9 +86,9 @@ export function readManifestSetup(manifestPath: string): {
   }
 }
 
-export function readManifestName(manifestPath: string): string | null {
+export async function readManifestName(manifestPath: string): Promise<string | null> {
   try {
-    const raw = fs.readFileSync(manifestPath, "utf8");
+    const raw = await fsp.readFile(manifestPath, "utf8");
     const manifest = JSON.parse(raw);
     const name = manifest?.name;
     return typeof name === "string" && name ? name : null;

@@ -32,7 +32,7 @@ function printUsage() {
 zen — Zenbu CLI
 
 Usage:
-  zen [--agent <name>] [--resume] [--blocking]   Open a Zenbu window
+  zen [path] [-r|-n] [--blocking]                Open a workspace at path (default: cwd)
   zen kyju <generate|db> [...]                   Run the kyju CLI
   zen link                                       Regenerate registry types
   zen doctor                                     Re-run kernel setup.ts
@@ -42,19 +42,19 @@ Usage:
   zen exec -e '<ts>' | zen exec <file.ts>        Run TS with rpc/events pre-opened
   zen profile [--duration <ms>] [--out <path>]   CPU profile the kernel main process
   zen profile heap [--out <path>]                Heap snapshot of the kernel main process
+
+Open flags:
+  -r, --reuse-window   Swap workspace on the last focused window
+  -n, --new-window     Always open a new window
 `)
 }
 
 async function main() {
   const argv = process.argv.slice(2)
   const first = argv[0]
-  // A bare positional that isn't a subcommand is almost always a typo —
-  // error instead of silently treating it as an agent name.
-  if (first && !first.startsWith("-") && !SUBCOMMANDS.has(first)) {
-    console.error(`zen: unknown subcommand "${first}"`)
-    printUsage()
-    process.exit(1)
-  }
+  // Anything that isn't a known subcommand falls through to `open` — which
+  // accepts a `[path]` positional (`zen .`, `zen /some/dir`) plus its own
+  // flags. `open` validates the path and rejects unknown flags itself.
   if (!first || !SUBCOMMANDS.has(first)) {
     await runOpen(argv)
     return

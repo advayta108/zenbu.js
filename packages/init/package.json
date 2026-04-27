@@ -11,6 +11,7 @@
   "dependencies": {
     "@effect/platform": "^0.94.5",
     "@effect/platform-node": "^0.104.1",
+    "@parcel/watcher": "^2.5.0",
     "@tailwindcss/vite": "^4",
     "@vitejs/plugin-react": "^5.0.0",
     "@xterm/addon-fit": "^0.11.0",

@@ -1,5 +1,5 @@
 import path from "node:path"
-import fs from "node:fs"
+import fsp from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { Service, runtime } from "../runtime"
 import { ReloaderService } from "./reloader"
@@ -20,12 +20,13 @@ export class CoreRendererService extends Service {
   port = 0
 
   async evaluate() {
+    let configFile: string | false = false
+    try {
+      await fsp.access(viteConfigPath)
+      configFile = viteConfigPath
+    } catch {}
     const entry = await this.trace("reloader-create", () =>
-      this.ctx.reloader.create(
-        "core",
-        rendererRoot,
-        fs.existsSync(viteConfigPath) ? viteConfigPath : false,
-      ),
+      this.ctx.reloader.create("core", rendererRoot, configFile),
     )
     this.url = entry.url
     this.port = entry.port

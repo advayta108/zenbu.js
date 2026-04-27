@@ -31,6 +31,15 @@ function NewAgentScreen() {
   );
   const workspaceCwd = activeWorkspace?.cwds?.[0];
 
+  // The new-chat view mounts around the head of the warm pool: a real,
+  // already-spawned agent row whose model/mode/thinking selectors and
+  // draft state all live on the agent itself. On submit, `promoteNewAgentTab`
+  // pops this same head and swaps the sentinel pane tab for the session id,
+  // so the agent flows directly into the chat view with no swap mid-flight.
+  const warmAgentId = useDb(
+    (root) => root.plugin.kernel.pool?.[0]?.agentId,
+  );
+
   const [pendingCwd, setPendingCwd] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (pendingCwd === undefined && workspaceCwd) setPendingCwd(workspaceCwd);
@@ -94,6 +103,18 @@ function NewAgentScreen() {
     [rpc, client, pendingCwd, workspaceCwd],
   );
 
+  if (!warmAgentId) {
+    return (
+      <div className="flex h-full w-full items-center justify-center px-6">
+        <div className="max-w-md rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-700">
+          invariant violated: warm pool is empty. PooledAgentService should
+          always keep `kernel.pool.length === poolSize`; if you see this,
+          the refill loop is broken.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full w-full items-start justify-center px-6 pt-[14vh]">
       <div className="w-full max-w-[919px] flex flex-col">
@@ -110,7 +131,7 @@ function NewAgentScreen() {
             <FolderSyncIcon className="size-3 opacity-70" />
           </button>
         </div>
-        <Composer agentId={sentinelTabId} onSubmit={onSubmit} />
+        <Composer agentId={warmAgentId} onSubmit={onSubmit} />
       </div>
     </div>
   );

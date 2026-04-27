@@ -56,19 +56,10 @@ if (!wsToken) throw new Error("Missing ?wsToken= in workspace URL")
 
 const AGENT_SIDEBAR_STORAGE_KEY = "agent-sidebar:width"
 const UTILITY_SIDEBAR_STORAGE_KEY = "utility-sidebar:width"
-const AGENT_MIN = 220
-const AGENT_MAX = 500
 const AGENT_DEFAULT = 280
-const UTIL_MIN = 220
-const UTIL_MAX = 720
 const UTIL_DEFAULT = 320
 
-function makeWidthStore(
-  storageKey: string,
-  min: number,
-  max: number,
-  defaultVal: number,
-) {
+function makeWidthStore(storageKey: string, defaultVal: number) {
   const listeners = new Set<() => void>()
   let memo: number | null = null
 
@@ -79,7 +70,7 @@ function makeWidthStore(
       if (raw != null) {
         const n = parseInt(raw, 10)
         if (Number.isFinite(n)) {
-          memo = Math.max(min, Math.min(max, n))
+          memo = n
           return memo
         }
       }
@@ -89,10 +80,10 @@ function makeWidthStore(
   }
   function get(): number { return read() }
   function set(next: number) {
-    const clamped = Math.max(min, Math.min(max, Math.round(next)))
-    if (clamped === memo) return
-    memo = clamped
-    try { localStorage.setItem(storageKey, String(clamped)) } catch {}
+    const rounded = Math.round(next)
+    if (rounded === memo) return
+    memo = rounded
+    try { localStorage.setItem(storageKey, String(rounded)) } catch {}
     for (const l of listeners) l()
   }
   function useWidth(): number {
@@ -105,18 +96,8 @@ function makeWidthStore(
   return { get, set, useWidth }
 }
 
-const agentWidthStore = makeWidthStore(
-  AGENT_SIDEBAR_STORAGE_KEY,
-  AGENT_MIN,
-  AGENT_MAX,
-  AGENT_DEFAULT,
-)
-const utilWidthStore = makeWidthStore(
-  UTILITY_SIDEBAR_STORAGE_KEY,
-  UTIL_MIN,
-  UTIL_MAX,
-  UTIL_DEFAULT,
-)
+const agentWidthStore = makeWidthStore(AGENT_SIDEBAR_STORAGE_KEY, AGENT_DEFAULT)
+const utilWidthStore = makeWidthStore(UTILITY_SIDEBAR_STORAGE_KEY, UTIL_DEFAULT)
 
 // ---- main view ----
 
@@ -481,7 +462,6 @@ function WorkspaceContent() {
             borderRight: "1px solid var(--zenbu-panel-border)",
           }}
         >
-          <UtilPanelHeader title={formatScope(selectedUtilEntry!.scope)} />
           <div className="flex-1 min-h-0 relative">
             <ViewCacheSlot
               cacheKey={`utility-sidebar:${windowId}:${selectedUtilEntry!.scope}`}
@@ -576,23 +556,6 @@ function UtilityRail({
         .usb-icon:hover svg { opacity: 0.85; }
         .usb-icon.is-active svg { opacity: 1; }
       `}</style>
-    </div>
-  )
-}
-
-function UtilPanelHeader({ title }: { title: string }) {
-  return (
-    <div
-      className="shrink-0 flex items-center"
-      style={{
-        height: 32,
-        paddingLeft: 10,
-        paddingRight: 10,
-      }}
-    >
-      <span className="flex-1 text-[11px] uppercase tracking-wide text-muted-foreground truncate">
-        {title}
-      </span>
     </div>
   )
 }

@@ -35,6 +35,7 @@ function tmpDbPath() {
 }
 
 async function openSectionedDb(dbPath: string, sections: SectionConfig[]) {
+  // eslint-disable-next-line prefer-const -- captured by closure before assignment
   let db: Awaited<ReturnType<typeof createDb>>;
 
   const replica = createReplica({

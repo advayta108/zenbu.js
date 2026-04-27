@@ -72,7 +72,6 @@ class ManagedTerminal {
     });
 
     this.exitPromise = new Promise<TerminalExitStatus>((resolve) => {
-      // @ts-expect-error look into later
       this.proc.on("close", (code, signal) => {
         this._exitStatus = {
           exitCode: code ?? null,
@@ -83,7 +82,6 @@ class ManagedTerminal {
         resolve(this._exitStatus);
       });
 
-      // @ts-expect-error look into later
       this.proc.on("error", (err) => {
         if (!this._exitStatus) {
           this._exitStatus = { exitCode: null, signal: null };

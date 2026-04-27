@@ -841,6 +841,7 @@ function OrchestratorContent() {
         sessionId: null,
         firstPromptSentAt: null,
         createdAt: Date.now(),
+        queuedMessages: [],
       });
     });
     if (evicted.length > 0) {

@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
@@ -41,11 +41,13 @@ export class AgentIconsSeedService extends Service {
     const blobIds: Record<string, string> = {};
     for (const id of needsIcon) {
       const svgPath = path.join(ICONS_DIR, `${id}.svg`);
-      if (!fs.existsSync(svgPath)) {
+      let data: Uint8Array;
+      try {
+        data = new Uint8Array(await fsp.readFile(svgPath));
+      } catch {
         console.warn(`[agent-icons-seed] missing ${svgPath}`);
         continue;
       }
-      const data = new Uint8Array(fs.readFileSync(svgPath));
       const blobId = await Effect.runPromise(client.createBlob(data, true));
       blobIds[id] = blobId;
     }

@@ -595,6 +595,10 @@ export function createBridge(opts?: { noLoadSession?: boolean }) {
             title: stripShellWrapper(item.command),
             kind: "execute",
             status,
+            rawInput: { command: stripShellWrapper(item.command) },
+            ...(item.aggregatedOutput
+              ? { rawOutput: { output: item.aggregatedOutput } }
+              : {}),
             ...(content.length > 0 ? { content } : {}),
           },
         });
@@ -654,6 +658,14 @@ export function createBridge(opts?: { noLoadSession?: boolean }) {
             title: `${item.server}/${item.tool}`,
             kind: "execute",
             status,
+            ...(item.arguments !== undefined
+              ? { rawInput: item.arguments }
+              : {}),
+            ...(item.result !== undefined && item.result !== null
+              ? { rawOutput: item.result }
+              : item.error
+                ? { rawOutput: { error: item.error } }
+                : {}),
             ...(mcpContent.length > 0 ? { content: mcpContent } : {}),
           },
         });

@@ -104,6 +104,7 @@ export class WindowService extends Service {
           sessionId: null,
           firstPromptSentAt: null,
           createdAt: Date.now(),
+          queuedMessages: [],
         });
         k.windowStates = [
           ...k.windowStates,
