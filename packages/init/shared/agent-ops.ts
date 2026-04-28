@@ -45,6 +45,9 @@ export function makeViewAppState(
     sidebarPanel: "overview",
     utilitySidebarSelected: null,
     cachedAt: null,
+    loadedAt: null,
+    loadCount: 0,
+    loadError: null,
     ...overrides,
   };
 }

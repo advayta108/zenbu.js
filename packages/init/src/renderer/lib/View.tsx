@@ -389,6 +389,9 @@ export function View({
             sidebarPanel: "overview",
             utilitySidebarSelected: null,
             cachedAt: null,
+            loadedAt: null,
+            loadCount: 0,
+            loadError: null,
           },
         };
       }
@@ -489,6 +492,29 @@ export function View({
     };
   }, [id, onLoad]);
 
+  // Persisted views write load-debug fields so the view-debug plugin (and
+  // anything else watching `viewState[id]`) can tell loaded vs loading.
+  // Each iframe `load` event bumps `loadCount` + sets `loadedAt`; we
+  // also fire once on attach if the entry has already loaded so a
+  // late-mounting <View> still records "yes, this thing is up".
+  useEffect(() => {
+    if (!persisted) return;
+    const entry = cache.get(id);
+    if (!entry) return;
+    const tracker = () => {
+      writeLoadDebug(client, id, {
+        loadedAt: Date.now(),
+        loadError: null,
+        bumpCount: true,
+      });
+    };
+    entry.onLoadCallbacks.add(tracker);
+    void entry.ready.then(tracker);
+    return () => {
+      entry.onLoadCallbacks.delete(tracker);
+    };
+  }, [persisted, id, client]);
+
   return (
     <div
       ref={placeholderRef}
@@ -508,9 +534,38 @@ function writeCachedAt(
     const cur = root.plugin.kernel.viewState[viewId];
     if (!cur) return; // no viewState entry; skip (system/ephemeral views)
     if (cur.cachedAt === cachedAt) return;
+    // (Re-)creating the cache entry resets load tracking. The iframe
+    // hasn't fired its load event for this fresh src yet; clear stale
+    // loadedAt + loadError so observers see "loading" until the first
+    // load event ticks them through.
+    const reset =
+      cachedAt !== null && cur.cachedAt === null
+        ? { loadedAt: null, loadError: null }
+        : cachedAt === null
+          ? { loadedAt: null }
+          : null;
     root.plugin.kernel.viewState = {
       ...root.plugin.kernel.viewState,
-      [viewId]: { ...cur, cachedAt },
+      [viewId]: { ...cur, cachedAt, ...(reset ?? {}) },
+    };
+  });
+}
+
+function writeLoadDebug(
+  client: ReturnType<typeof useKyjuClient>,
+  viewId: string,
+  patch: { loadedAt?: number; loadError?: string | null; bumpCount?: boolean },
+): void {
+  void client.update((root) => {
+    const cur = root.plugin.kernel.viewState[viewId];
+    if (!cur) return;
+    const next = { ...cur };
+    if ("loadedAt" in patch) next.loadedAt = patch.loadedAt ?? null;
+    if ("loadError" in patch) next.loadError = patch.loadError ?? null;
+    if (patch.bumpCount) next.loadCount = (cur.loadCount ?? 0) + 1;
+    root.plugin.kernel.viewState = {
+      ...root.plugin.kernel.viewState,
+      [viewId]: next,
     };
   });
 }

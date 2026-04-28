@@ -54,6 +54,9 @@ const viewAppStateSchema = zod.object({
   sidebarPanel: zod.string().default("overview"),
   utilitySidebarSelected: zod.string().nullable().default(null),
   cachedAt: zod.number().nullable().default(null),
+  loadedAt: zod.number().nullable().default(null),
+  loadCount: zod.number().default(0),
+  loadError: zod.string().nullable().default(null),
 });
 
 const agentAppStateSchema = zod.object({
