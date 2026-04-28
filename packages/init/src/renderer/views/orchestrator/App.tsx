@@ -19,14 +19,8 @@ import {
 } from "lucide-react";
 import { nanoid } from "nanoid";
 import { makeCollection } from "@zenbu/kyju/schema";
-import {
-  useWsConnection,
-  RpcProvider,
-  EventsProvider,
-  KyjuClientProvider,
-} from "../../lib/ws-connection";
-import type { WsConnectionState } from "../../lib/ws-connection";
-import { KyjuProvider, useDb, useCollection } from "../../lib/kyju-react";
+import { useDb, useCollection } from "../../lib/kyju-react";
+import { ViewProvider } from "../../lib/View";
 import { useKyjuClient, useRpc } from "../../lib/providers";
 import { DragRegionOverlay } from "../../lib/drag-region";
 import {
@@ -64,7 +58,7 @@ import {
   type ArchivedAgent,
 } from "../../../../shared/agent-ops";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
-import { ViewCacheSlot } from "../../lib/view-cache";
+import { View } from "../../lib/View";
 
 const params = new URLSearchParams(window.location.search);
 const wsPort = Number(params.get("wsPort"));
@@ -78,6 +72,13 @@ import type { SchemaRoot } from "../../../../shared/schema";
 
 type AgentItem = SchemaRoot["agents"][number];
 type RegistryEntry = { scope: string; url: string; port: number };
+
+// The workspace shell view's id is fully derived from (windowId,
+// workspaceId), so the orchestrator title bar and the workspace iframe
+// can both point at the same `viewState` row without coordination.
+function workspaceShellViewId(windowId: string, workspaceId: string): string {
+  return `workspace:${windowId}:${workspaceId}`;
+}
 
 type ErrorFallbackRender = (args: {
   error: Error;
@@ -635,7 +636,7 @@ function OrchestratorContent() {
   const openAgentIds = useMemo(() => {
     const ids = new Set<string>();
     for (const v of allViews) {
-      if (v.scope === "chat" && v.params.agentId) ids.add(v.params.agentId);
+      if (v.scope === "chat" && v.props.agentId) ids.add(v.props.agentId);
     }
     return ids;
   }, [allViews]);
@@ -657,15 +658,21 @@ function OrchestratorContent() {
   );
   const workspaceCwds = activeWorkspace?.cwds ?? [];
 
-  // Per-view sidebar state. Read from the active view's state record;
-  // falls back to defaults if no active view.
   const activeViewId = useDb(
     (root) => root.plugin.kernel.windowState[windowId!]?.activeViewId ?? null,
   );
+  // Agent-sidebar visibility is a property of the *workspace shell* view
+  // (one row per (window, workspace)), not of whichever chat tab the
+  // user is on. Both this title bar and the workspace iframe agree on
+  // the deterministic id below, so the toggle hits a single shared row.
+  const shellViewId =
+    windowId && activeWorkspaceId
+      ? workspaceShellViewId(windowId, activeWorkspaceId)
+      : null;
   const sidebarOpen = useDb((root) => {
-    if (!activeViewId) return true;
-    const vs = root.plugin.kernel.viewState[activeViewId];
-    return vs?.sidebarOpen ?? false;
+    if (!shellViewId) return true;
+    const vs = root.plugin.kernel.viewState[shellViewId];
+    return vs?.sidebarOpen ?? true;
   });
 
   // Ensure the windows + windowState entries exist for our windowId. Most
@@ -719,7 +726,7 @@ function OrchestratorContent() {
             windowId: windowId!,
             parentId: null,
             scope: "chat",
-            params: { agentId },
+            props: { agentId },
             createdAt: now,
           },
         ];
@@ -743,7 +750,7 @@ function OrchestratorContent() {
         if (prevViewId) {
           const prevView = k.views.find((v) => v.id === prevViewId);
           const prevAgentId =
-            prevView?.scope === "chat" ? prevView.params.agentId : undefined;
+            prevView?.scope === "chat" ? prevView.props.agentId : undefined;
           if (prevAgentId) {
             const prevAS = k.agentState[prevAgentId];
             k.agentState = {
@@ -785,16 +792,19 @@ function OrchestratorContent() {
     [rpc],
   );
 
-  // Per-view sidebar toggle: writes to viewState[activeViewId].sidebarOpen.
-  // Falls back to a no-op if there's no active view (nothing to toggle on).
+  // Toggle the workspace shell's agent sidebar. The shell view writes
+  // its own viewState row (see <View persisted /> in WorkspaceFrame), so
+  // there's always a row to update once a workspace is active.
   const toggleSidebar = useCallback(() => {
-    if (!activeViewId) return;
-    const cur = client.plugin.kernel.viewState.read()?.[activeViewId];
-    if (!cur) return;
-    const next = { ...cur, sidebarOpen: !cur.sidebarOpen };
+    if (!shellViewId) return;
     const all = client.plugin.kernel.viewState.read() ?? {};
-    client.plugin.kernel.viewState.set({ ...all, [activeViewId]: next });
-  }, [client, activeViewId]);
+    const cur = all[shellViewId];
+    if (!cur) return;
+    client.plugin.kernel.viewState.set({
+      ...all,
+      [shellViewId]: { ...cur, sidebarOpen: !cur.sidebarOpen },
+    });
+  }, [client, shellViewId]);
 
   const rootFocusRef = useRef<HTMLDivElement>(null);
   useFocusOnRequest("orchestrator", () => {
@@ -845,9 +855,6 @@ function OrchestratorContent() {
         >
           <WorkspaceFrame
             workspaceId={activeWorkspaceId ?? null}
-            registryMap={registryMap}
-            wsPort={wsPort}
-            wsToken={wsToken}
             windowId={windowId!}
           />
         </ErrorBoundary>
@@ -858,25 +865,11 @@ function OrchestratorContent() {
 
 function WorkspaceFrame({
   workspaceId,
-  registryMap,
-  wsPort,
-  wsToken,
   windowId,
 }: {
   workspaceId: string | null;
-  registryMap: Map<string, RegistryEntry>;
-  wsPort: number;
-  wsToken: string;
   windowId: string;
 }) {
-  const entry = registryMap.get("workspace");
-  if (!entry) {
-    return (
-      <div className="flex-1 min-w-0 min-h-0 flex items-center justify-center text-neutral-400 text-xs">
-        Workspace view not registered
-      </div>
-    );
-  }
   if (!workspaceId) {
     return (
       <div className="flex-1 min-w-0 min-h-0 flex items-center justify-center text-neutral-400 text-xs">
@@ -884,21 +877,6 @@ function WorkspaceFrame({
       </div>
     );
   }
-  let entryPath = new URL(entry.url).pathname;
-  const ownsServer = entryPath === "/" || entryPath === "";
-  if (ownsServer) entryPath = "";
-  else if (entryPath.endsWith("/")) entryPath = entryPath.slice(0, -1);
-  const targetPort = ownsServer ? entry.port : wsPort;
-  const cacheKey = `workspace:${windowId}:${workspaceId}`;
-  // Unique subdomain per (window, workspace) so each workspace gets its
-  // own iframe Origin for cookies / localStorage / etc.
-  const raw = `ws-${windowId}-${workspaceId}`;
-  const hostname = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const src = `http://${hostname}.localhost:${targetPort}${entryPath}/index.html?wsPort=${wsPort}&wsToken=${encodeURIComponent(
-    wsToken,
-  )}&windowId=${encodeURIComponent(
-    windowId,
-  )}&workspaceId=${encodeURIComponent(workspaceId)}`;
   return (
     <div
       className="flex-1 min-w-0 min-h-0 relative"
@@ -908,9 +886,12 @@ function WorkspaceFrame({
       // than showing the lighter panel background.
       style={{ background: "var(--zenbu-chrome)" }}
     >
-      <ViewCacheSlot
-        cacheKey={cacheKey}
-        src={src}
+      <View
+        id={workspaceShellViewId(windowId, workspaceId)}
+        scope="workspace"
+        props={{ workspaceId }}
+        persisted
+        pinned
         style={{
           position: "absolute",
           inset: 0,
@@ -929,55 +910,29 @@ function WorkspaceFrame({
   );
 }
 
-function ConnectedApp({
-  connection,
-}: {
-  connection: Extract<WsConnectionState, { status: "connected" }>;
-}) {
-  return (
-    <RpcProvider value={connection.rpc}>
-      <EventsProvider value={connection.events}>
-        <KyjuClientProvider value={connection.kyjuClient}>
-          <KyjuProvider
-            client={connection.kyjuClient}
-            replica={connection.replica}
-          >
-            <ShortcutForwarderProvider windowId={windowId!}>
-              <OrchestratorContent />
-              <DragRegionOverlay />
-            </ShortcutForwarderProvider>
-          </KyjuProvider>
-        </KyjuClientProvider>
-      </EventsProvider>
-    </RpcProvider>
-  );
-}
-
 export function App() {
-  const connection = useWsConnection();
-
-  if (connection.status === "connecting") {
-    return (
-      <div className="flex h-full items-center justify-center text-neutral-500 text-xs"></div>
-    );
-  }
-
-  if (connection.status === "error") {
-    return (
-      <div className="flex h-full items-center justify-center text-red-400 text-xs">
-        {connection.error}
-      </div>
-    );
-  }
-
   return (
-    <ErrorBoundary
-      scope="root"
-      fallback={({ error, reset }) => (
-        <FullErrorFallback error={error} onReset={reset} />
+    <ViewProvider
+      fallback={
+        <div className="flex h-full items-center justify-center text-neutral-500 text-xs" />
+      }
+      errorFallback={(error) => (
+        <div className="flex h-full items-center justify-center text-red-400 text-xs">
+          {error}
+        </div>
       )}
     >
-      <ConnectedApp connection={connection} />
-    </ErrorBoundary>
+      <ErrorBoundary
+        scope="root"
+        fallback={({ error, reset }) => (
+          <FullErrorFallback error={error} onReset={reset} />
+        )}
+      >
+        <ShortcutForwarderProvider windowId={windowId!}>
+          <OrchestratorContent />
+          <DragRegionOverlay />
+        </ShortcutForwarderProvider>
+      </ErrorBoundary>
+    </ViewProvider>
   );
 }

@@ -120,7 +120,7 @@ export class WindowService extends Service {
             windowId,
             parentId: null,
             scope: "chat",
-            params: { agentId },
+            props: { agentId },
             createdAt: Date.now(),
           },
         ];
@@ -182,7 +182,7 @@ export class WindowService extends Service {
             windowId,
             parentId: null,
             scope: "chat",
-            params: { agentId: lastAgent.id },
+            props: { agentId: lastAgent.id },
             createdAt: Date.now(),
           },
         ];
@@ -325,7 +325,7 @@ export class WindowService extends Service {
     );
     if (!view) return null;
 
-    const agentId = view.params.agentId ?? "";
+    const agentId = view.props.agentId ?? "";
 
     // Hide the view from the source window during the drag preview by
     // moving it to a sentinel windowId we keep in pendingTearOffs. On

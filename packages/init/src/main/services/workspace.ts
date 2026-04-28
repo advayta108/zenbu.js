@@ -8,6 +8,7 @@ import { subscribe, type AsyncSubscription } from "@parcel/watcher"
 import { Service, runtime } from "../runtime"
 import { DbService } from "./db"
 import { WorkspaceContextService } from "./workspace-context"
+import { makeWorkspaceAppState } from "../../../shared/agent-ops"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const CONFIGURATIONS_DIR = path.resolve(__dirname, "../../../../../configurations")
@@ -203,11 +204,10 @@ export class WorkspaceService extends Service {
         // restores it.
         if (prevId && ws.activeViewId) {
           const prevState = k.workspaceState[prevId]
+          const base = prevState ?? makeWorkspaceAppState(prevId)
           k.workspaceState = {
             ...k.workspaceState,
-            [prevId]: prevState
-              ? { ...prevState, lastViewId: ws.activeViewId }
-              : { workspaceId: prevId, lastViewId: ws.activeViewId },
+            [prevId]: { ...base, lastViewId: ws.activeViewId },
           }
         }
 
@@ -225,7 +225,7 @@ export class WorkspaceService extends Service {
           if (!view) return false
           if (view.windowId !== windowId) return false
           if (view.scope !== "chat") return false
-          const agentId = view.params.agentId
+          const agentId = view.props.agentId
           if (!agentId) return false
           const bound = k.agentState[agentId]?.workspaceId ?? null
           // Unbound agents (legacy / warm-pool) are visible everywhere;
@@ -299,11 +299,10 @@ export class WorkspaceService extends Service {
         // Persist last-active-view before clearing.
         if (prevId && ws.activeViewId) {
           const prevState = k.workspaceState[prevId]
+          const base = prevState ?? makeWorkspaceAppState(prevId)
           k.workspaceState = {
             ...k.workspaceState,
-            [prevId]: prevState
-              ? { ...prevState, lastViewId: ws.activeViewId }
-              : { workspaceId: prevId, lastViewId: ws.activeViewId },
+            [prevId]: { ...base, lastViewId: ws.activeViewId },
           }
         }
 

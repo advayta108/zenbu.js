@@ -117,8 +117,8 @@ export class CliIntentService extends Service {
               (v) =>
                 v.windowId === MAIN_WINDOW_ID &&
                 v.scope === "chat" &&
-                v.params.agentId &&
-                !agentIds.has(v.params.agentId),
+                v.props.agentId &&
+                !agentIds.has(v.props.agentId),
             )
             .map((v) => v.id),
         );

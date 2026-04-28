@@ -6,15 +6,9 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  useWsConnection,
-  RpcProvider,
-  EventsProvider,
-  KyjuClientProvider,
-} from "../../lib/ws-connection";
-import { KyjuProvider, useCollection, useDb } from "../../lib/kyju-react";
+import { useCollection, useDb } from "../../lib/kyju-react";
 import { useDragRegion } from "../../lib/drag-region";
-import type { WsConnectionState } from "../../lib/ws-connection";
+import { ViewProvider, useViewProps } from "../../lib/View";
 import { ChatDisplay } from "./ChatDisplay";
 import { ComposerPanel } from "./ComposerPanel";
 import { MinimapContent } from "./components/MinimapContent";
@@ -162,7 +156,6 @@ function ErrorFallback({
 }
 
 const searchParams = new URLSearchParams(window.location.search);
-const agentId = searchParams.get("agentId") ?? "";
 const viewId = searchParams.get("viewId") ?? "";
 const isMinimap = searchParams.get("minimap") === "true";
 
@@ -183,6 +176,8 @@ const CHAT_TITLE_BAR_HEIGHT = 36;
 const CHAT_TITLE_FADE_HEIGHT = 16;
 
 function ChatContent() {
+  const props = useViewProps();
+  const agentId = props.agentId ?? "";
   const scrollToBottomRef = useRef<(() => void) | null>(null);
   const expectedVisibleMessageRef = useRef<ExpectedVisibleMessage | null>(null);
 
@@ -193,7 +188,7 @@ function ChatContent() {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col bg-(--zenbu-panel) relative">
       <ExplosionTrap />
-      <ChatTitleBar />
+      <ChatTitleBar agentId={agentId} />
       <div className="@container relative flex flex-1 min-h-0 min-w-0 flex-col">
         <ChatDisplay
           agentId={agentId}
@@ -225,7 +220,7 @@ function ChatContent() {
   );
 }
 
-function ChatTitleBar() {
+function ChatTitleBar({ agentId }: { agentId: string }) {
   const dragRef = useDragRegion<HTMLDivElement>();
   const agent = useDb((root) =>
     root.plugin.kernel.agents.find((a) => a.id === agentId),
@@ -299,49 +294,16 @@ function ChatTitleBar() {
   );
 }
 
-function ConnectedApp({
-  connection,
-}: {
-  connection: Extract<WsConnectionState, { status: "connected" }>;
-}) {
-  return (
-    <RpcProvider value={connection.rpc}>
-      <EventsProvider value={connection.events}>
-        <KyjuClientProvider value={connection.kyjuClient}>
-          <KyjuProvider
-            client={connection.kyjuClient}
-            replica={connection.replica}
-          >
-            <ChatContent />
-          </KyjuProvider>
-        </KyjuClientProvider>
-      </EventsProvider>
-    </RpcProvider>
-  );
-}
-
 export function App() {
-  const connection = useWsConnection();
-
-  if (connection.status === "connecting") {
-    return (
-      <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
-        
-      </div>
-    );
-  }
-
-  if (connection.status === "error") {
-    return (
-      <div className="flex h-full items-center justify-center text-red-400 text-sm">
-        {connection.error}
-      </div>
-    );
-  }
-
   return (
-    <ChatErrorBoundary>
-      <ConnectedApp connection={connection} />
-    </ChatErrorBoundary>
+    <ViewProvider
+      fallback={
+        <div className="flex h-full items-center justify-center text-muted-foreground text-sm" />
+      }
+    >
+      <ChatErrorBoundary>
+        <ChatContent />
+      </ChatErrorBoundary>
+    </ViewProvider>
   );
 }

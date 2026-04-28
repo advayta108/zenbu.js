@@ -27,6 +27,17 @@ export type ZenbuEvents = {
     data: { sessionId: string; data: string }
     exit: { sessionId: string; exitCode: number }
   }
+  bottomTerminal: {
+    /**
+     * Emitted by the bottom-terminal plugin's pty service when the spawned
+     * shell produces output. Each bottom-panel iframe owns a sessionId
+     * (assigned when it calls `createSession`) and filters incoming events
+     * locally by sessionId — i.e., one panel's output never lands in a
+     * different panel.
+     */
+    data: { sessionId: string; data: string }
+    exit: { sessionId: string; exitCode: number }
+  }
   shortcut: {
     dispatched: { id: string; scope: string; originScope: string; windowId: string | null; ts: number }
   }

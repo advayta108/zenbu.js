@@ -185,6 +185,21 @@
       "idx": 36,
       "tag": "migration",
       "when": 1777335814295
+    },
+    {
+      "idx": 37,
+      "tag": "add_bottom_panel",
+      "when": 1777339091952
+    },
+    {
+      "idx": 38,
+      "tag": "migration",
+      "when": 1777339880654
+    },
+    {
+      "idx": 39,
+      "tag": "add_view_label",
+      "when": 1777340062987
     }
   ]
 }

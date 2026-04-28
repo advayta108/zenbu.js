@@ -26,7 +26,7 @@ const viewSchema = zod.object({
   windowId: zod.string(),
   parentId: zod.string().nullable().default(null),
   scope: zod.string(),
-  params: zod.record(zod.string(), zod.string()).default({}),
+  props: zod.record(zod.string(), zod.string()).default({}),
   createdAt: zod.number(),
 });
 
@@ -53,6 +53,7 @@ const viewAppStateSchema = zod.object({
   tabSidebarOpen: zod.boolean().default(true),
   sidebarPanel: zod.string().default("overview"),
   utilitySidebarSelected: zod.string().nullable().default(null),
+  cachedAt: zod.number().nullable().default(null),
 });
 
 const agentAppStateSchema = zod.object({
@@ -64,6 +65,9 @@ const agentAppStateSchema = zod.object({
 const workspaceAppStateSchema = zod.object({
   workspaceId: zod.string(),
   lastViewId: zod.string().nullable().default(null),
+  bottomPanelOpen: zod.boolean().default(false),
+  bottomPanelSelected: zod.string().nullable().default(null),
+  bottomPanelHeight: zod.number().default(260),
 });
 
 const workspaceIconSchema = zod.object({
@@ -149,6 +153,8 @@ export const appSchema = createSchema({
           .object({
             kind: zod.string().optional(),
             sidebar: zod.boolean().optional(),
+            bottomPanel: zod.boolean().optional(),
+            label: zod.string().optional(),
           })
           .optional(),
       }),

@@ -44,6 +44,7 @@ export function makeViewAppState(
     tabSidebarOpen: true,
     sidebarPanel: "overview",
     utilitySidebarSelected: null,
+    cachedAt: null,
     ...overrides,
   };
 }
@@ -67,6 +68,9 @@ export function makeWorkspaceAppState(
   return {
     workspaceId,
     lastViewId: null,
+    bottomPanelOpen: false,
+    bottomPanelSelected: null,
+    bottomPanelHeight: 260,
     ...overrides,
   };
 }
@@ -86,7 +90,7 @@ export function findExistingViewForAgent(
   agentId: string,
 ): { windowId: string; viewId: string } | null {
   for (const v of views) {
-    if (v.scope === "chat" && v.params.agentId === agentId) {
+    if (v.scope === "chat" && v.props.agentId === agentId) {
       return { windowId: v.windowId, viewId: v.id };
     }
   }
@@ -102,7 +106,7 @@ export function findAgentIdForView(
   viewId: string,
 ): string | null {
   const v = views.find((x) => x.id === viewId);
-  return v?.params.agentId ?? null;
+  return v?.props.agentId ?? null;
 }
 
 /**
@@ -151,7 +155,7 @@ export function activateView(
   if (previousViewId && previousViewId !== target.viewId) {
     const prevView = kernel.views.find((v) => v.id === previousViewId);
     const prevAgentId =
-      prevView?.scope === "chat" ? prevView.params.agentId : undefined;
+      prevView?.scope === "chat" ? prevView.props.agentId : undefined;
     if (prevAgentId) {
       const prev = kernel.agentState[prevAgentId];
       if (prev) {
@@ -167,7 +171,7 @@ export function activateView(
   // Clear unread on the now-active chat view's agent.
   const newView = kernel.views.find((v) => v.id === target.viewId);
   const newAgentId =
-    newView?.scope === "chat" ? newView.params.agentId : undefined;
+    newView?.scope === "chat" ? newView.props.agentId : undefined;
   if (newAgentId) {
     const cur = kernel.agentState[newAgentId];
     if (cur) {

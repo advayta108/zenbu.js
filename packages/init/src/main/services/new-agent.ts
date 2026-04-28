@@ -106,7 +106,9 @@ export class NewAgentService extends Service {
       // sentinel view's id was a `new-agent:<nanoid>` value before the
       // refactor, but post-refactor sentinels are normal nanoid view ids
       // - we still mint a fresh chat view id and remove the sentinel.
-      const sentinelIdx = k.views.findIndex((v) => v.id === sentinelViewId)
+      const sentinelIdx = k.views.findIndex(
+        (v) => v.id === sentinelViewId,
+      )
       if (sentinelIdx === -1) return
 
       const sentinel = k.views[sentinelIdx]
@@ -117,7 +119,7 @@ export class NewAgentService extends Service {
         windowId,
         parentId: sentinel.parentId ?? null,
         scope: "chat",
-        params: { agentId },
+        props: { agentId },
         createdAt: Date.now(),
       }
       k.views = [
@@ -228,7 +230,9 @@ export class NewAgentService extends Service {
       }
 
       // Replace the sentinel view with a chat-scoped view.
-      const sentinelIdx = k.views.findIndex((v) => v.id === sentinelViewId)
+      const sentinelIdx = k.views.findIndex(
+        (v: { id: string }) => v.id === sentinelViewId,
+      )
       if (sentinelIdx === -1) return
 
       const sentinel = k.views[sentinelIdx]
@@ -238,7 +242,7 @@ export class NewAgentService extends Service {
         windowId,
         parentId: sentinel.parentId ?? null,
         scope: "chat",
-        params: { agentId },
+        props: { agentId },
         createdAt: Date.now(),
       }
       k.views = [

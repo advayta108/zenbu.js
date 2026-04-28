@@ -12,7 +12,12 @@ interface ViewEntry {
   port: number;
   ownsServer: boolean;
   workspaceId?: string;
-  meta?: { kind?: string; sidebar?: boolean };
+  meta?: {
+    kind?: string;
+    sidebar?: boolean;
+    bottomPanel?: boolean;
+    label?: string;
+  };
 }
 
 export class ViewRegistryService extends Service {
@@ -27,7 +32,12 @@ export class ViewRegistryService extends Service {
     scope: string,
     root: string,
     configFile?: string | false,
-    meta?: { kind?: string; sidebar?: boolean },
+    meta?: {
+      kind?: string;
+      sidebar?: boolean;
+      bottomPanel?: boolean;
+      label?: string;
+    },
   ): Promise<ViewEntry> {
     const existing = this.views.get(scope);
     if (existing) return existing;
@@ -48,7 +58,7 @@ export class ViewRegistryService extends Service {
     };
     this.views.set(scope, entry);
     await this.syncToDb();
-    console.log(`[view-registry] registered "${scope}" at ${entry.url} wsId=${ws ?? "global"} sidebar=${meta?.sidebar ?? false}`);
+    console.log(`[view-registry] registered "${scope}" at ${entry.url} wsId=${ws ?? "global"} sidebar=${meta?.sidebar ?? false} bottomPanel=${meta?.bottomPanel ?? false}`);
     return entry;
   }
 
@@ -56,7 +66,12 @@ export class ViewRegistryService extends Service {
     scope: string,
     reloaderId: string,
     pathPrefix: string,
-    meta?: { kind?: string; sidebar?: boolean },
+    meta?: {
+      kind?: string;
+      sidebar?: boolean;
+      bottomPanel?: boolean;
+      label?: string;
+    },
   ): ViewEntry {
     const existing = this.views.get(scope);
     if (existing) return existing;
@@ -79,7 +94,7 @@ export class ViewRegistryService extends Service {
     this.views.set(scope, entry);
     void this.syncToDb();
     console.log(
-      `[view-registry] aliased "${scope}" -> ${reloaderId}${pathPrefix} wsId=${ws ?? "global"} sidebar=${meta?.sidebar ?? false}`,
+      `[view-registry] aliased "${scope}" -> ${reloaderId}${pathPrefix} wsId=${ws ?? "global"} sidebar=${meta?.sidebar ?? false} bottomPanel=${meta?.bottomPanel ?? false}`,
     );
     return entry;
   }
@@ -152,7 +167,7 @@ export class ViewRegistryService extends Service {
       meta: e.meta,
     }));
     console.log(
-      `[view-registry] syncToDb entries=[${snapshot.map(s => `${s.scope}(ws=${s.workspaceId ?? "global"},sidebar=${s.meta?.sidebar ?? false})`).join(", ")}]`,
+      `[view-registry] syncToDb entries=[${snapshot.map(s => `${s.scope}(ws=${s.workspaceId ?? "global"},sidebar=${s.meta?.sidebar ?? false},bottomPanel=${s.meta?.bottomPanel ?? false})`).join(", ")}]`,
     );
     await Effect.runPromise(
       client.update((root) => {

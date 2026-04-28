@@ -128,7 +128,7 @@ export class InsertService extends Service {
       client.update((root) => {
         const k = root.plugin.kernel;
         const view = k.views.find(
-          (v) => v.scope === "chat" && v.params.agentId === args.agentId,
+          (v) => v.scope === "chat" && v.props.agentId === args.agentId,
         );
         if (!view) return;
         ok = true;

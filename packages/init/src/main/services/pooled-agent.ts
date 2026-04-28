@@ -117,7 +117,7 @@ export class PooledAgentService extends Service {
       ? kernel.views.find((v) => v.id === focusedActiveViewId)
       : undefined
     const focusedAgentId =
-      focusedView?.scope === "chat" ? focusedView.params.agentId : undefined
+      focusedView?.scope === "chat" ? focusedView.props.agentId : undefined
     const focusedAgent = focusedAgentId
       ? kernel.agents.find((a) => a.id === focusedAgentId)
       : undefined

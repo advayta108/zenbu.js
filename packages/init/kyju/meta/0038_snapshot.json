@@ -1,0 +1,239 @@
+{
+  "id": "9065fa53-08f7-46df-b4a2-69769441d1a2",
+  "prevId": "8e8b7d32-3e53-471a-87fa-62a9ed35dce6",
+  "fields": {
+    "agentConfigs": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "49ce2ae25aa6615c",
+      "default": [
+        {
+          "id": "codex",
+          "name": "codex",
+          "startCommand": "$ZENBU_BUN $HOME/.zenbu/plugins/zenbu/packages/codex-acp/src/index.ts",
+          "availableModels": [],
+          "availableThinkingLevels": [],
+          "availableModes": [],
+          "defaultConfiguration": {}
+        },
+        {
+          "id": "claude",
+          "name": "claude",
+          "startCommand": "$ZENBU_BUN $HOME/.zenbu/plugins/zenbu/packages/claude-acp/src/index.ts",
+          "availableModels": [],
+          "availableThinkingLevels": [],
+          "availableModes": [],
+          "defaultConfiguration": {}
+        },
+        {
+          "id": "cursor",
+          "name": "cursor",
+          "startCommand": "agent acp",
+          "availableModels": [],
+          "availableThinkingLevels": [],
+          "availableModes": [],
+          "defaultConfiguration": {}
+        },
+        {
+          "id": "opencode",
+          "name": "opencode",
+          "startCommand": "opencode acp",
+          "availableModels": [],
+          "availableThinkingLevels": [],
+          "availableModes": [],
+          "defaultConfiguration": {}
+        },
+        {
+          "id": "copilot",
+          "name": "copilot",
+          "startCommand": "copilot --acp",
+          "availableModels": [],
+          "availableThinkingLevels": [],
+          "availableModes": [],
+          "defaultConfiguration": {}
+        }
+      ]
+    },
+    "agents": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "ceb5cedb1114bbba",
+      "default": []
+    },
+    "archivedAgents": {
+      "kind": "collection",
+      "debugName": "archivedAgents"
+    },
+    "hotAgentsCap": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "cddf8275afa15408",
+      "default": 100
+    },
+    "skillRoots": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "e2c7a0c35cb2fd9d",
+      "default": []
+    },
+    "selectedConfigId": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "00404e686415370f",
+      "default": "claude"
+    },
+    "summarizationAgentConfigId": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "12539628f53a3f78",
+      "default": null
+    },
+    "summarizationModel": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "12539628f53a3f78",
+      "default": null
+    },
+    "orchestratorViewPath": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "00404e686415370f",
+      "default": "/views/orchestrator/index.html"
+    },
+    "viewRegistry": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "5c07a336ddef0560",
+      "default": []
+    },
+    "windows": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "10bfb6ad00896492",
+      "default": []
+    },
+    "windowState": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "e5a3ca19c9b7ba63",
+      "default": {}
+    },
+    "views": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "ae406ef2f3306f04",
+      "default": []
+    },
+    "viewState": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "f77093f6231eac0f",
+      "default": {}
+    },
+    "agentState": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "dda746ca4ae74d7b",
+      "default": {}
+    },
+    "commands": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "0fa6844b1a83162b",
+      "default": []
+    },
+    "majorMode": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "00404e686415370f",
+      "default": "fundamental-mode"
+    },
+    "minorModes": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "e2c7a0c35cb2fd9d",
+      "default": []
+    },
+    "focusedWindowId": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "12539628f53a3f78",
+      "default": null
+    },
+    "shortcutRegistry": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "d5a3eb43ae014437",
+      "default": []
+    },
+    "shortcutOverrides": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "543a2197adc75660",
+      "default": {}
+    },
+    "shortcutDisabled": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "e2c7a0c35cb2fd9d",
+      "default": []
+    },
+    "focusRequestTarget": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "12539628f53a3f78",
+      "default": null
+    },
+    "focusRequestWindowId": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "12539628f53a3f78",
+      "default": null
+    },
+    "focusRequestNonce": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "00404e686415370f",
+      "default": ""
+    },
+    "updateState": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "7e47bdbf9e5aa6f5",
+      "default": {
+        "status": "idle",
+        "availableVersion": null,
+        "releaseNotes": null,
+        "downloadPercent": null,
+        "downloadBytesPerSecond": null,
+        "error": null,
+        "lastCheckedAt": null,
+        "dismissedVersion": null
+      }
+    },
+    "workspaces": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "36c738486aaa8cac",
+      "default": []
+    },
+    "workspaceState": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "f94da3e6d62831ce",
+      "default": {}
+    },
+    "pool": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "8a6b5de3771ce531",
+      "default": []
+    },
+    "poolSize": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "cddf8275afa15408",
+      "default": 1
+    }
+  }
+}

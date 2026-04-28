@@ -237,7 +237,7 @@ function installForwarder() {
 
     if (e.data.type === HEARTBEAT) {
       const childRect = matched.getBoundingClientRect()
-      // Invisible / collapsed iframes (view-cache preload slots, hidden
+      // Invisible / collapsed iframes (View-cache preload slots, hidden
       // tabs) shouldn't publish drag regions — their translated rects
       // would land at (0, 0) with tiny width/height and stomp the real
       // one when IDs happen to collide. The explicit `remove` still

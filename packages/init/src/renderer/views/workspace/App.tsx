@@ -7,16 +7,10 @@ import {
 } from "react"
 import { nanoid } from "nanoid"
 import { makeCollection } from "@zenbu/kyju/schema"
-import {
-  RpcProvider,
-  EventsProvider,
-  KyjuClientProvider,
-  useWsConnection,
-} from "@/lib/ws-connection"
-import type { WsConnectionState } from "@/lib/ws-connection"
-import { KyjuProvider, useDb } from "@/lib/kyju-react"
+import { useDb } from "@/lib/kyju-react"
+import { ViewProvider } from "@/lib/View"
 import { useKyjuClient, useRpc } from "@/lib/providers"
-import { ViewCacheSlot } from "@/lib/view-cache"
+import { View } from "@/lib/View"
 import { AgentList } from "@/views/orchestrator/components/AgentList"
 import { ActiveView } from "@/views/orchestrator/components/ActiveView"
 import {
@@ -24,9 +18,11 @@ import {
   validSelectionFromTemplate,
   makeAgentAppState,
   makeViewAppState,
+  makeWorkspaceAppState,
   type ArchivedAgent,
 } from "../../../../shared/agent-ops"
-import type { SchemaRoot, View } from "../../../../shared/schema"
+import type { SchemaRoot, View as ViewRow } from "../../../../shared/schema"
+import { useShortcutHandler } from "../../lib/shortcut-handler"
 
 type AgentItem = SchemaRoot["agents"][number]
 type RegistryEntry = {
@@ -35,7 +31,12 @@ type RegistryEntry = {
   port: number
   icon?: string
   workspaceId?: string
-  meta?: { kind?: string; sidebar?: boolean }
+  meta?: {
+    kind?: string
+    sidebar?: boolean
+    bottomPanel?: boolean
+    label?: string
+  }
 }
 
 const params = new URLSearchParams(window.location.search)
@@ -121,21 +122,21 @@ function WorkspaceContent() {
   const agents = useDb((root) => root.plugin.kernel.agents) ?? []
 
   const registry = useDb((root) => root.plugin.kernel.viewRegistry) ?? []
-  const registryMap = useMemo(() => {
-    const m = new Map<string, RegistryEntry>()
-    for (const e of registry) m.set(e.scope, e)
-    return m
-  }, [registry])
 
   const activeViewId = useDb(
     (root) => root.plugin.kernel.windowState[windowId]?.activeViewId ?? null,
   )
 
-  // Per-view sidebar / utility state. Read from the active view's record;
-  // defaults if no active view.
-  const activeViewState = activeViewId ? viewState[activeViewId] : null
-  const sidebarOpen = activeViewState?.sidebarOpen ?? true
-  const utilSelected = activeViewState?.utilitySidebarSelected ?? null
+  // The agent sidebar / utility-sidebar selection are properties of the
+  // workspace *shell* view (one row per (window, workspace)), not of the
+  // active chat tab. The orchestrator title bar agrees on the same id
+  // formula, so toggling there updates the same row this iframe reads.
+  const shellViewId = workspaceIdParam
+    ? `workspace:${windowId}:${workspaceIdParam}`
+    : null
+  const shellViewState = shellViewId ? viewState[shellViewId] : null
+  const sidebarOpen = shellViewState?.sidebarOpen ?? true
+  const utilSelected = shellViewState?.utilitySidebarSelected ?? null
 
   const sidebarEntries = useMemo<RegistryEntry[]>(() => {
     const all = registry.filter((e) => e.meta?.sidebar === true)
@@ -149,18 +150,61 @@ function WorkspaceContent() {
     [sidebarEntries, utilSelected],
   )
 
-  const updateActiveViewState = useCallback(
+  // Per-workspace bottom-panel state. Defaults are defensive — old DBs
+  // whose `workspaceState` rows predate the migration may not carry the
+  // new fields, so we never trust them to be present.
+  const workspaceStateMap =
+    useDb((root) => root.plugin.kernel.workspaceState) ?? {}
+  const activeWsState = workspaceIdParam
+    ? workspaceStateMap[workspaceIdParam]
+    : null
+  const bottomPanelOpen = activeWsState?.bottomPanelOpen ?? false
+  const bottomPanelSelected = activeWsState?.bottomPanelSelected ?? null
+  const bottomPanelHeight = activeWsState?.bottomPanelHeight ?? 260
+
+  const bottomEntries = useMemo<RegistryEntry[]>(() => {
+    const all = registry.filter((e) => e.meta?.bottomPanel === true)
+    return all.filter(
+      (e) => !e.workspaceId || e.workspaceId === workspaceIdParam,
+    )
+  }, [registry])
+  const selectedBottomEntry = useMemo(
+    () => bottomEntries.find((e) => e.scope === bottomPanelSelected),
+    [bottomEntries, bottomPanelSelected],
+  )
+
+  // Update the workspace-shell view's state row. Used for sidebarOpen
+  // and utilitySidebarSelected, which are properties of the shell, not
+  // of the active chat tab.
+  const updateShellViewState = useCallback(
     (updater: (cur: SchemaRoot["viewState"][string]) => SchemaRoot["viewState"][string]) => {
-      if (!activeViewId) return
+      if (!shellViewId) return
       const all = client.plugin.kernel.viewState.read() ?? {}
-      const cur = all[activeViewId]
+      const cur = all[shellViewId]
       if (!cur) return
       void client.plugin.kernel.viewState.set({
         ...all,
-        [activeViewId]: updater(cur),
+        [shellViewId]: updater(cur),
       })
     },
-    [client, activeViewId],
+    [client, shellViewId],
+  )
+
+  const updateActiveWorkspaceState = useCallback(
+    (
+      updater: (
+        cur: SchemaRoot["workspaceState"][string],
+      ) => SchemaRoot["workspaceState"][string],
+    ) => {
+      if (!workspaceIdParam) return
+      const all = client.plugin.kernel.workspaceState.read() ?? {}
+      const cur = all[workspaceIdParam] ?? makeWorkspaceAppState(workspaceIdParam)
+      void client.plugin.kernel.workspaceState.set({
+        ...all,
+        [workspaceIdParam]: updater(cur),
+      })
+    },
+    [client],
   )
 
   // ---- handlers ----
@@ -203,7 +247,7 @@ function WorkspaceContent() {
           windowId,
           parentId: activeViewId ?? null,
           scope: "new-agent",
-          params: {},
+          props: {},
           createdAt: Date.now(),
         },
       ]
@@ -255,7 +299,7 @@ function WorkspaceContent() {
           windowId,
           parentId: activeViewId ?? null,
           scope: "plugins",
-          params: {},
+          props: {},
           createdAt: Date.now(),
         },
       ]
@@ -290,7 +334,7 @@ function WorkspaceContent() {
         if (oldActiveId) {
           const oldView = k.views.find((v) => v.id === oldActiveId)
           const oldAgentId =
-            oldView?.scope === "chat" ? oldView.params.agentId : undefined
+            oldView?.scope === "chat" ? oldView.props.agentId : undefined
           if (oldAgentId) {
             const cur = k.agentState[oldAgentId]
             k.agentState = {
@@ -305,7 +349,7 @@ function WorkspaceContent() {
         // Clear unread on the newly-active chat view's agent.
         const newView = k.views.find((v) => v.id === viewId)
         const newAgentId =
-          newView?.scope === "chat" ? newView.params.agentId : undefined
+          newView?.scope === "chat" ? newView.props.agentId : undefined
         if (newAgentId) {
           const cur = k.agentState[newAgentId]
           k.agentState = {
@@ -362,7 +406,7 @@ function WorkspaceContent() {
       const view = views.find((v) => v.id === viewId)
       // Only ask for confirmation if it's a chat view with conversation
       // history; sentinels and empty views close quietly.
-      const agentId = view?.scope === "chat" ? view.params.agentId : undefined
+      const agentId = view?.scope === "chat" ? view.props.agentId : undefined
       const hasMessages = agentId
         ? (() => {
             const a = client.readRoot().plugin.kernel.agents.find(
@@ -395,12 +439,12 @@ function WorkspaceContent() {
   const onUtilIconClick = useCallback(
     (scope: string) => {
       const next = scope === utilSelected ? null : scope
-      updateActiveViewState((cur) => ({
+      updateShellViewState((cur) => ({
         ...cur,
         utilitySidebarSelected: next,
       }))
     },
-    [updateActiveViewState, utilSelected],
+    [updateShellViewState, utilSelected],
   )
 
   // Track lastViewId on the workspace whenever the active view changes.
@@ -411,36 +455,18 @@ function WorkspaceContent() {
     const cur = client.plugin.kernel.workspaceState.read() ?? {}
     const existing = cur[workspaceIdParam]
     if (existing?.lastViewId === activeViewId) return
+    const base =
+      existing ?? makeWorkspaceAppState(workspaceIdParam)
     void client.plugin.kernel.workspaceState.set({
       ...cur,
-      [workspaceIdParam]: existing
-        ? { ...existing, lastViewId: activeViewId }
-        : { workspaceId: workspaceIdParam, lastViewId: activeViewId },
+      [workspaceIdParam]: { ...base, lastViewId: activeViewId },
     })
   }, [activeViewId, client])
 
   // ---- iframe srcs ----
 
-  const wsParam = workspaceIdParam
-    ? `&workspaceId=${encodeURIComponent(workspaceIdParam)}`
-    : ""
-
   const utilPanelVisible = selectedUtilEntry != null
-  const utilPanelSrc = useMemo(() => {
-    if (!selectedUtilEntry) return ""
-    let entryPath = new URL(selectedUtilEntry.url).pathname
-    const ownsServer = entryPath === "/" || entryPath === ""
-    if (ownsServer) entryPath = ""
-    else if (entryPath.endsWith("/")) entryPath = entryPath.slice(0, -1)
-    const targetPort = ownsServer ? selectedUtilEntry.port : wsPort
-    const raw = `usb-${windowId}-${selectedUtilEntry.scope}`
-    const hostname = raw.toLowerCase().replace(/[^a-z0-9]/g, "")
-    return `http://${hostname}.localhost:${targetPort}${entryPath}/index.html?wsPort=${wsPort}&wsToken=${encodeURIComponent(
-      wsToken,
-    )}&windowId=${encodeURIComponent(
-      windowId,
-    )}&scope=${encodeURIComponent(selectedUtilEntry.scope)}${wsParam}`
-  }, [selectedUtilEntry, wsParam])
+  const bottomPanelVisible = bottomPanelOpen && selectedBottomEntry != null
 
   // ---- layout state ----
 
@@ -448,6 +474,46 @@ function WorkspaceContent() {
   const utilWidth = utilWidthStore.useWidth()
   const [agentResizing, setAgentResizing] = useState(false)
   const [utilResizing, setUtilResizing] = useState(false)
+  // Local in-flight height during a vertical drag. Committed to kyju on
+  // mouseup so we don't write through the WS on every pixel of movement.
+  const [bottomDragHeight, setBottomDragHeight] = useState<number | null>(null)
+  const [bottomResizing, setBottomResizing] = useState(false)
+  const effectiveBottomHeight = bottomDragHeight ?? bottomPanelHeight
+
+  // ---- Cmd+J: toggle bottom panel for this window's active workspace.
+  // Uses { always: true } and gates manually because the keystroke can
+  // originate from any nested iframe (chat, plugin) and document-level
+  // focus checks would miss those cases. We filter to the focused
+  // window via ctx.windowId, and to the active workspace iframe via
+  // windowState[windowId].activeWorkspaceId — otherwise hidden cached
+  // workspace iframes for inactive workspaces would also flip.
+  useShortcutHandler({
+    id: "kernel.toggleBottomPanel",
+    when: { always: true },
+    handler: (ctx) => {
+      if (ctx.windowId !== windowId) return
+      if (!workspaceIdParam) return
+      const ws = client.plugin.kernel.windowState.read()?.[windowId]
+      if (ws?.activeWorkspaceId !== workspaceIdParam) return
+
+      const all = client.plugin.kernel.workspaceState.read() ?? {}
+      const cur =
+        all[workspaceIdParam] ?? makeWorkspaceAppState(workspaceIdParam)
+      const nextOpen = !(cur.bottomPanelOpen ?? false)
+      let nextSelected = cur.bottomPanelSelected ?? null
+      if (nextOpen && !nextSelected && bottomEntries.length > 0) {
+        nextSelected = bottomEntries[0].scope
+      }
+      void client.plugin.kernel.workspaceState.set({
+        ...all,
+        [workspaceIdParam]: {
+          ...cur,
+          bottomPanelOpen: nextOpen,
+          bottomPanelSelected: nextSelected,
+        },
+      })
+    },
+  })
 
   // Defensive: agents/insertHotAgent/validSelectionFromTemplate/ArchivedAgent/
   // makeCollection are kept available for the future inline-create path.
@@ -470,7 +536,7 @@ function WorkspaceContent() {
         >
           <AgentList
             agents={agents}
-            views={sortedViews as View[]}
+            views={sortedViews as ViewRow[]}
             activeViewId={activeViewId}
             currentWorkspaceId={workspaceIdParam || null}
             windowId={windowId}
@@ -491,25 +557,61 @@ function WorkspaceContent() {
       )}
       {agentResizing && <ResizeOverlay />}
 
-      <div className="flex-1 min-w-0 min-h-0 relative">
-        {sortedViews.length > 0 ? (
-          <ActiveView
-            views={sortedViews as View[]}
-            activeViewId={activeViewId}
-            registryMap={registryMap}
-            wsPort={wsPort}
-            wsToken={wsToken}
-            windowId={windowId}
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+        <div className="flex-1 min-h-0 relative">
+          {sortedViews.length > 0 ? (
+            <ActiveView
+              views={sortedViews as ViewRow[]}
+              activeViewId={activeViewId}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center text-muted-foreground text-xs">
+              <button
+                onClick={handleNewAgent}
+                className="px-3 py-1.5 rounded bg-secondary hover:bg-accent text-secondary-foreground transition-colors cursor-pointer"
+              >
+                + New Chat
+              </button>
+            </div>
+          )}
+        </div>
+        {bottomPanelVisible && (
+          <BottomPanelResizeHandle
+            getStartHeight={() => effectiveBottomHeight}
+            onPreview={setBottomDragHeight}
+            onCommit={() => {
+              if (bottomDragHeight != null) {
+                const next = bottomDragHeight
+                updateActiveWorkspaceState((cur) => ({
+                  ...cur,
+                  bottomPanelHeight: next,
+                }))
+                setBottomDragHeight(null)
+              }
+            }}
+            onResizeChange={setBottomResizing}
           />
-        ) : (
-          <div className="flex h-full items-center justify-center text-muted-foreground text-xs">
-            <button
-              onClick={handleNewAgent}
-              className="px-3 py-1.5 rounded bg-secondary hover:bg-accent text-secondary-foreground transition-colors cursor-pointer"
-            >
-              + New Chat
-            </button>
-          </div>
+        )}
+        {bottomResizing && <ResizeOverlay direction="row" />}
+        {bottomPanelVisible && (
+          <BottomPanel
+            entries={bottomEntries}
+            selectedScope={bottomPanelSelected}
+            height={effectiveBottomHeight}
+            windowId={windowId}
+            onSelectScope={(scope) => {
+              updateActiveWorkspaceState((cur) => ({
+                ...cur,
+                bottomPanelSelected: scope,
+              }))
+            }}
+            onClose={() => {
+              updateActiveWorkspaceState((cur) => ({
+                ...cur,
+                bottomPanelOpen: false,
+              }))
+            }}
+          />
         )}
       </div>
 
@@ -533,9 +635,10 @@ function WorkspaceContent() {
           }}
         >
           <div className="flex-1 min-h-0 relative">
-            <ViewCacheSlot
-              cacheKey={`utility-sidebar:${windowId}:${selectedUtilEntry!.scope}`}
-              src={utilPanelSrc}
+            <View
+              id={`util:${windowId}:${selectedUtilEntry!.scope}`}
+              scope={selectedUtilEntry!.scope}
+              pinned
               style={{
                 position: "absolute",
                 inset: 0,
@@ -681,17 +784,182 @@ function ResizeHandle({
   )
 }
 
-function ResizeOverlay() {
+function ResizeOverlay({ direction = "col" }: { direction?: "col" | "row" }) {
   return (
     <div
       style={{
         position: "fixed",
         inset: 0,
         zIndex: 9999,
-        cursor: "col-resize",
+        cursor: direction === "row" ? "row-resize" : "col-resize",
         background: "transparent",
       }}
     />
+  )
+}
+
+function BottomPanelResizeHandle({
+  getStartHeight,
+  onPreview,
+  onCommit,
+  onResizeChange,
+}: {
+  getStartHeight: () => number
+  onPreview: (next: number) => void
+  onCommit: () => void
+  onResizeChange: (resizing: boolean) => void
+}) {
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      const startY = e.clientY
+      const startHeight = getStartHeight()
+      document.body.style.cursor = "row-resize"
+      document.body.style.userSelect = "none"
+      onResizeChange(true)
+
+      const onMove = (ev: MouseEvent) => {
+        const delta = ev.clientY - startY
+        // Drag up shrinks delta (negative) → bigger panel; clamp.
+        const next = Math.max(120, Math.min(800, startHeight - delta))
+        onPreview(next)
+      }
+      const onUp = () => {
+        document.body.style.cursor = ""
+        document.body.style.userSelect = ""
+        onResizeChange(false)
+        onCommit()
+        window.removeEventListener("mousemove", onMove)
+        window.removeEventListener("mouseup", onUp)
+      }
+      window.addEventListener("mousemove", onMove)
+      window.addEventListener("mouseup", onUp)
+    },
+    [getStartHeight, onPreview, onCommit, onResizeChange],
+  )
+
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{
+        height: 4,
+        cursor: "row-resize",
+        flexShrink: 0,
+        background: "transparent",
+        marginTop: -2,
+        marginBottom: -2,
+        zIndex: 1,
+      }}
+    />
+  )
+}
+
+function BottomPanel({
+  entries,
+  selectedScope,
+  height,
+  windowId,
+  onSelectScope,
+  onClose,
+}: {
+  entries: RegistryEntry[]
+  selectedScope: string | null
+  height: number
+  windowId: string
+  onSelectScope: (scope: string) => void
+  onClose: () => void
+}) {
+  return (
+    <div
+      className="shrink-0 flex flex-col overflow-hidden"
+      style={{
+        height,
+        background: "var(--zenbu-panel)",
+        borderTop: "1px solid var(--zenbu-panel-border)",
+      }}
+    >
+      <div
+        className="shrink-0 flex items-center gap-1 px-2"
+        style={{
+          height: 28,
+          borderBottom: "1px solid var(--zenbu-panel-border)",
+          background: "var(--zenbu-panel)",
+        }}
+      >
+        {entries.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground px-1">
+            no bottom-panel views
+          </div>
+        ) : (
+          entries.map((e) => {
+            const label = e.meta?.label ?? formatScope(e.scope)
+            return (
+              <button
+                key={e.scope}
+                type="button"
+                onClick={() => onSelectScope(e.scope)}
+                className={`bp-tab inline-flex items-center gap-1 px-2 h-[22px] rounded text-[11px] cursor-pointer ${
+                  e.scope === selectedScope ? "is-active" : ""
+                }`}
+                title={label}
+              >
+                {e.icon && (
+                  <span
+                    className="inline-flex items-center justify-center"
+                    dangerouslySetInnerHTML={{ __html: e.icon }}
+                  />
+                )}
+                <span>{label}</span>
+              </button>
+            )
+          })
+        )}
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={onClose}
+          title="Close (Cmd+J)"
+          className="bp-close inline-flex items-center justify-center rounded cursor-pointer"
+          style={{ width: 22, height: 22 }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+          >
+            <line x1="3" y1="3" x2="9" y2="9" />
+            <line x1="9" y1="3" x2="3" y2="9" />
+          </svg>
+        </button>
+      </div>
+      <div className="flex-1 min-h-0 relative">
+        {selectedScope && (
+          <View
+            id={`bottom-panel:${windowId}:${selectedScope}`}
+            scope={selectedScope}
+            pinned
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+            }}
+          />
+        )}
+      </div>
+      <style>{`
+        .bp-tab { color: var(--muted-foreground); transition: background-color 80ms ease; }
+        .bp-tab:hover { background: var(--zenbu-control-hover); color: var(--foreground); }
+        .bp-tab.is-active { background: var(--accent); color: var(--accent-foreground); }
+        .bp-tab svg { width: 12px; height: 12px; opacity: 0.85; }
+        .bp-close { color: var(--muted-foreground); transition: background-color 80ms ease; }
+        .bp-close:hover { background: var(--zenbu-control-hover); color: var(--foreground); }
+      `}</style>
+    </div>
   )
 }
 
@@ -702,33 +970,10 @@ function formatScope(scope: string): string {
     .join(" ")
 }
 
-function ConnectedApp({
-  connection,
-}: {
-  connection: Extract<WsConnectionState, { status: "connected" }>
-}) {
-  return (
-    <RpcProvider value={connection.rpc}>
-      <EventsProvider value={connection.events}>
-        <KyjuClientProvider value={connection.kyjuClient}>
-          <KyjuProvider client={connection.kyjuClient} replica={connection.replica}>
-            <WorkspaceContent />
-          </KyjuProvider>
-        </KyjuClientProvider>
-      </EventsProvider>
-    </RpcProvider>
-  )
-}
-
 export function App() {
-  const connection = useWsConnection()
-  if (connection.status === "connecting") return <div className="h-full" />
-  if (connection.status === "error") {
-    return (
-      <div className="flex h-full items-center justify-center text-red-500 text-xs">
-        {connection.error}
-      </div>
-    )
-  }
-  return <ConnectedApp connection={connection} />
+  return (
+    <ViewProvider fallback={<div className="h-full" />}>
+      <WorkspaceContent />
+    </ViewProvider>
+  )
 }

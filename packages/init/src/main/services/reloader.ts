@@ -162,6 +162,27 @@ function getScopeFromPath(urlPath: string): string | null {
   return viewMatch ? viewMatch[1] : null
 }
 
+/**
+ * Resolve the view scope for a request. Aliased views (chat, plugins,
+ * workspace) live under `/views/<scope>/` on the core renderer, so the
+ * path tells us the scope. Own-server plugins (e.g. bottom-terminal,
+ * event-log-viewer) load `/index.html` directly on their own Vite port
+ * — there's no scope segment in the path. For those, the workspace /
+ * orchestrator passes `?scope=<scope>` in the iframe URL and we read it
+ * from the query. Without this fallback, advice + content-scripts
+ * (including `shortcut-capture.ts`) never get injected into own-server
+ * plugin iframes, so keystrokes never bubble up to the orchestrator.
+ */
+function resolveScope(urlPath: string, originalUrl: string | undefined): string | null {
+  const fromPath = getScopeFromPath(urlPath)
+  if (fromPath) return fromPath
+  if (!originalUrl) return null
+  const queryIdx = originalUrl.indexOf("?")
+  if (queryIdx < 0) return null
+  const params = new URLSearchParams(originalUrl.slice(queryIdx + 1))
+  return params.get("scope")
+}
+
 function parsePreludeId(id: string): { scope: string; workspaceId?: string } {
   const rest = id.slice(RESOLVED_PREFIX.length)
   const queryIdx = rest.indexOf("?")
@@ -265,7 +286,7 @@ function advicePreludePlugin(): Plugin {
     },
 
     transformIndexHtml(html, ctx) {
-      const scope = getScopeFromPath(ctx.path ?? "")
+      const scope = resolveScope(ctx.path ?? "", ctx.originalUrl)
       if (!scope) return html
       const workspaceId = extractWorkspaceIdFromUrl(ctx.originalUrl)
       const hasAdvice = getAdviceEntries(scope, workspaceId).length > 0

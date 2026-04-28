@@ -1,29 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShortcutIframeRegistryOptional } from "../providers/shortcut-forwarder";
 import { useFocusOnRequest } from "../../../lib/focus-request";
-import { ViewCacheSlot, getCachedIframe } from "../../../lib/view-cache";
-import type { View } from "../../../../../shared/schema";
+import { View, getViewIframe } from "../../../lib/View";
+import type { View as ViewRow } from "../../../../../shared/schema";
 
 /**
  * Renders the currently-active view's iframe in a window. Lazily mounts an
- * iframe per visited view (so switching back is instant) and hides the
- * inactive ones via `display: none`. The tab UI lives elsewhere - the
- * agent sidebar (`AgentList`) is the canonical view switcher.
+ * iframe per visited view (so switching back is instant) via `<View>`'s
+ * LRU cache. The tab UI lives elsewhere - the agent sidebar (`AgentList`)
+ * is the canonical view switcher.
  */
 export function ActiveView({
   views,
   activeViewId,
-  registryMap,
-  wsPort,
-  wsToken,
-  windowId,
 }: {
-  views: View[];
+  views: ViewRow[];
   activeViewId: string | null;
-  registryMap: Map<string, { scope: string; url: string; port: number }>;
-  wsPort: number;
-  wsToken: string;
-  windowId: string;
 }) {
   const knownViewIds = useRef<Set<string>>(new Set());
   // ActiveView is mounted in both the orchestrator iframe (provider
@@ -43,14 +35,14 @@ export function ActiveView({
 
   useFocusOnRequest("active-view", () => {
     if (!activeViewId) return;
-    const iframe = getCachedIframe(activeViewId);
+    const iframe = getViewIframe(activeViewId);
     iframe?.focus();
     iframe?.contentWindow?.focus();
   });
 
-  // Lazy-mount: only mount iframes for views the user has actually
-  // visited. Switching back to a previously-visited view re-uses the
-  // cached iframe (state preserved); never-visited views stay unmounted.
+  // Lazy-mount: only render `<View>` for views the user has actually
+  // visited. Switching back to a previously-visited view hits the LRU
+  // cache (state preserved); never-visited views stay unmounted.
   const [visitedViewIds, setVisitedViewIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (!activeViewId) return;
@@ -59,7 +51,7 @@ export function ActiveView({
       return new Set([...prev, activeViewId]);
     });
     requestAnimationFrame(() => {
-      const iframe = getCachedIframe(activeViewId);
+      const iframe = getViewIframe(activeViewId);
       iframe?.focus();
     });
   }, [activeViewId]);
@@ -77,7 +69,7 @@ export function ActiveView({
         return;
       const activeId = activeViewIdRef.current;
       if (!activeId) return;
-      const iframe = getCachedIframe(activeId);
+      const iframe = getViewIframe(activeId);
       if (iframe?.contentWindow === e.source) {
         iframe.focus();
         iframe.contentWindow?.postMessage(
@@ -100,42 +92,15 @@ export function ActiveView({
       <div className="relative flex-1 min-h-0">
         {activeViewId ? (
           viewsToRender.map((view) => {
-            // Single-path resolution: scope is a hard FK into viewRegistry.
-            // The renderer never branches on view.scope - it just looks up
-            // the entry and builds the URL.
-            const entry = registryMap.get(view.scope);
-            if (!entry) return null;
-            let entryPath = new URL(entry.url).pathname;
-            const ownsServer = entryPath === "/" || entryPath === "";
-            if (ownsServer) entryPath = "";
-            else if (entryPath.endsWith("/")) entryPath = entryPath.slice(0, -1);
-            // Aliased views (e.g. "chat") proxy through the kernel's wsPort.
-            // Own-server views (e.g. plugin scopes) go directly to their
-            // plugin's Vite port - the kernel HTTP proxy only routes to core.
-            const targetPort = ownsServer ? entry.port : wsPort;
-            const hostname = view.id.toLowerCase().replace(/[^a-z0-9]/g, "");
-            // Standard query params + view.params (renderer-specific shape).
-            const baseParams: Record<string, string> = {
-              wsPort: String(wsPort),
-              wsToken,
-              windowId,
-              viewId: view.id,
-              ...view.params,
-            };
-            const qs = Object.entries(baseParams)
-              .map(
-                ([k, v]) =>
-                  `${encodeURIComponent(k)}=${encodeURIComponent(v)}`,
-              )
-              .join("&");
-            const src = `http://${hostname}.localhost:${targetPort}${entryPath}/index.html?${qs}`;
             knownViewIds.current.add(view.id);
             const isActive = view.id === activeViewId;
             return (
-              <ViewCacheSlot
+              <View
                 key={view.id}
-                cacheKey={view.id}
-                src={src}
+                id={view.id}
+                scope={view.scope}
+                props={view.props}
+                pinned={isActive}
                 hidden={!isActive}
                 onLoad={(win) => shortcutIframes?.register(view.id, win)}
                 style={{

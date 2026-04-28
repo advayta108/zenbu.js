@@ -68,6 +68,37 @@ function shouldSwallow(combo: string): boolean {
 }
 
 if (!IS_TOP_FRAME) {
+  // Cache the last bindings + armed messages so we can replay them to
+  // iframes that mount after the orchestrator's initial broadcast (e.g.
+  // a bottom-panel iframe opened on Cmd+J — created long after the
+  // workspace itself received its bindings).
+  let lastBindingsMsg: BindingsMessage | null = null;
+  let lastArmedMsg: { type: "zenbu-shortcut:armed"; armed: boolean } | null =
+    null;
+
+  const childWindows = (): Window[] => {
+    const out: Window[] = [];
+    for (const f of Array.from(document.querySelectorAll("iframe"))) {
+      const w = (f as HTMLIFrameElement).contentWindow;
+      if (w) out.push(w);
+    }
+    return out;
+  };
+  const broadcastDown = (msg: unknown) => {
+    for (const w of childWindows()) {
+      try {
+        w.postMessage(msg, "*");
+      } catch {}
+    }
+  };
+  const replayTo = (win: Window | null) => {
+    if (!win) return;
+    try {
+      if (lastBindingsMsg) win.postMessage(lastBindingsMsg, "*");
+      if (lastArmedMsg) win.postMessage(lastArmedMsg, "*");
+    } catch {}
+  };
+
   window.addEventListener("message", (e: MessageEvent) => {
     const data = e.data;
     if (!data || typeof data !== "object") return;
@@ -76,11 +107,22 @@ if (!IS_TOP_FRAME) {
       const b = data as BindingsMessage;
       exactBindings = new Set(b.exact);
       prefixBindings = new Set(b.prefixes);
+      lastBindingsMsg = b;
+      // Relay to child iframes: the orchestrator only knows about
+      // iframes registered through its ActiveView (chat/workspace/etc).
+      // Iframes nested deeper (utility-sidebar plugins, bottom-panel
+      // plugins) are mounted inside the workspace's React tree and
+      // never get the orchestrator's direct push, so their local
+      // bindings cache stays empty and `shouldSwallow` mis-fires.
+      // Forwarding here closes the gap.
+      broadcastDown(data);
       return;
     }
 
     if (data.type === "zenbu-shortcut:armed") {
       armed = Boolean((data as { armed: boolean }).armed);
+      lastArmedMsg = data as { type: "zenbu-shortcut:armed"; armed: boolean };
+      broadcastDown(data);
       return;
     }
 
@@ -91,6 +133,32 @@ if (!IS_TOP_FRAME) {
         window.parent.postMessage(data, "*");
       } catch {}
     }
+  });
+
+  // Replay bindings to iframes that mount after the initial push. The
+  // <View> primitive creates iframes lazily (e.g. when the bottom panel
+  // is first opened), so without this they boot with an empty bindings
+  // cache and mis-handle the first few keystrokes.
+  const onIframeAdded = (frame: HTMLIFrameElement) => {
+    if (frame.contentWindow) replayTo(frame.contentWindow);
+    frame.addEventListener("load", () => replayTo(frame.contentWindow));
+  };
+  const observer = new MutationObserver((records) => {
+    for (const rec of records) {
+      for (const node of Array.from(rec.addedNodes)) {
+        if (node instanceof HTMLIFrameElement) {
+          onIframeAdded(node);
+        } else if (node instanceof HTMLElement) {
+          for (const f of Array.from(node.querySelectorAll("iframe"))) {
+            onIframeAdded(f as HTMLIFrameElement);
+          }
+        }
+      }
+    }
+  });
+  observer.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
   });
 
   const onKeydown = (event: KeyboardEvent) => {

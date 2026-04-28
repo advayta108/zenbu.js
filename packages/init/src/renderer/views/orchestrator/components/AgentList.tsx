@@ -64,7 +64,7 @@ export function AgentList({
     for (const view of views) {
       if (view.windowId !== windowId) continue
       if (view.scope !== "chat") continue
-      const agentId = view.params.agentId
+      const agentId = view.props.agentId
       const agent = agentId ? agents.find((a) => a.id === agentId) : undefined
       if (!agent) continue
       // Explicit workspace binding (not cwd-derived). An agent shows in
