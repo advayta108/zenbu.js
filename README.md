@@ -9,49 +9,31 @@
 
 <p align="center">
   <img alt="status: under construction" src="https://img.shields.io/badge/status-under_construction-orange"><br>
-  The extensible coding agent GUI
+  A customizable app for using coding agents
 </p>
-
 <p align="center">
   <img src="./assets/screenshot.webp" width="640" style="background: transparent;" />
 </p>
 
-## Plugins
 
-Plugins are units of code that can modify Zenbu's behavior.
+## What is Zenbu
+Zenbu is a performant and minimal GUI for developing with coding agents
 
-They are configured in:
+At its core is a system for modifying and extending the app. All features in the app are built on top of this core, allowing you to:
+- edit any part of the app's original source code at runtime, and it will automatically update the app
+- create composable and shareable modifications to the app (plugins)
 
-~~~txt
-~/.zenbu/config.jsonc
-~~~
+Zenbu is currently under heavy construction. If you are interested in the project, you can download the code and start playing with the app by installing it, there is no development mode:
+- https://www.zenbu.dev/download
+- https://github.com/zenbu-labs/zenbu/releases
 
-Example:
+When you install the app, the source code of the app is downloaded and stored in `/.zenbu`. When the app is launched, there is a thin launcher (electron + custom node module loaders) that dynamically processes and run the raw source code.
 
-~~~jsonc
-{
-  "plugins": [
-    "...your plugin paths here"
-  ]
-}
-~~~
+## Development Tips
 
-The plugin API is not stable yet. For now, use the core plugin as the reference:
+### CLI
 
-- [packages/init](https://github.com/zenbu-labs/zenbu/tree/main/packages/init)
-
-## Agents
-
-Zenbu currently ships with support for codex, claude, cursor, opencode, and copilot.
-
-Zenbu assumes you have already authenticated the agent through its own CLI.
-
-Additional agents can be added from Zenbu Settings if they are [ACP compatible](https://agentclientprotocol.com/get-started/registry).
-
-## CLI
-
-The zen CLI is mainly for development and debugging.
-
+The cli lets your agent easily control and introspect thea app. It also comes with tools to help manage and scaffold plugins.
 ~~~bash
 zen                     # open a new window
 zen --agent claude      # open with a specific agent
@@ -88,7 +70,7 @@ Run this for the full list of commands:
 zen --help
 ~~~
 
-## Resetting local state
+### Resetting local state
 
 If an agent, plugin, or update breaks your local app, either revert changes in:
 
