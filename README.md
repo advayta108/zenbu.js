@@ -5,7 +5,7 @@
 <h1 align="center">Zenbu</h1>
 
 <p align="center">
-  <img alt="status: beta" src="https://img.shields.io/badge/status-beta-orange"><br>
+  <img alt="status: under construction" src="https://img.shields.io/badge/status-under_construction-orange"><br>
   The extensible coding agent GUI
 </p>
 
@@ -13,70 +13,112 @@
   <img src="./assets/screenshot.webp" width="640" style="background: transparent;" />
 </p>
 
-## Installation
+## Status
 
-Download the latest build from [zenbu.dev/download](https://www.zenbu.dev/download) or [GitHub Releases](https://github.com/zenbu-labs/zenbu/releases).
+Zenbu is under active construction. It may break and is not ready for general usage.
+
+## Codebase pointers
+
+Main app:
+
+- [apps/zenbu](https://github.com/zenbu-labs/zenbu/tree/main/apps/zenbu)
+
+Current plugin API reference:
+
+- [packages/init](https://github.com/zenbu-labs/zenbu/tree/main/packages/init)
+
+Local reactive database:
+
+- [packages/kyju](https://github.com/zenbu-labs/zenbu/tree/main/packages/kyju)
+
+Plugin RPC:
+
+- [packages/zenrpc](https://github.com/zenbu-labs/zenbu/tree/main/packages/zenrpc)
 
 ## Plugins
 
-Plugins are units of code that can modify the app's behavior.
+Plugins are units of code that can modify Zenbu's behavior.
 
-Plugins are configured at `~/.zenbu/config.jsonc`:
+They are configured in:
 
-```
+~~~txt
+~/.zenbu/config.jsonc
+~~~
+
+Example:
+
+~~~jsonc
 {
   "plugins": [
-    ...your plugin paths here
+    "...your plugin paths here"
   ]
 }
-```
+~~~
 
-The plugin API is not yet stable or complete, but you can reference the [core plugin](https://github.com/zenbu-labs/zenbu/tree/main/packages/init) to learn what plugin API's are available and how to setup a plugin
+The plugin API is not stable yet. For now, use the core plugin as the reference:
 
-## Configuring agents
+- [packages/init](https://github.com/zenbu-labs/zenbu/tree/main/packages/init)
 
-Zenbu ships with **codex**, **claude**, **cursor**, **opencode**, and **copilot** preconfigured. It assumes you've already authenticated whichever one you want to use through its own CLI. You can add more agents (that are [acp compatible](https://agentclientprotocol.com/get-started/registry)) inside Zenbu Settings.
+## Agents
 
-## `zen` CLI
+Zenbu currently ships with support for codex, claude, cursor, opencode, and copilot.
 
-```bash
+Zenbu assumes you have already authenticated the agent through its own CLI.
+
+Additional agents can be added from Zenbu Settings if they are [ACP compatible](https://agentclientprotocol.com/get-started/registry).
+
+## CLI
+
+The zen CLI is mainly for development and debugging.
+
+~~~bash
 zen                     # open a new window
 zen --agent claude      # open with a specific agent
 zen init my-plugin      # scaffold a new plugin
-zen doctor              # re-run setup if something looks off
+zen doctor              # re-run setup checks
 zen link                # regenerate registry types after editing a service or schema
-```
+~~~
 
-### Inspect the database
+Inspect the local database:
 
-Zenbu's state lives in a local reactive database named [kyju](https://github.com/zenbu-labs/zenbu/tree/main/packages/kyju), query it via the `zen` cli:
+~~~bash
+zen kyju db root
+zen kyju db collections
+zen kyju db collection <id>
+~~~
 
-```bash
-zen kyju db root                # full root document
-zen kyju db collections         # list every collection
-zen kyju db collection <id>     # page through a collection
-```
+Generate a migration after changing a plugin schema:
 
-When you change a plugin's schema, generate a migration with:
-
-```bash
+~~~bash
 zen kyju generate --name add_my_field
-```
+~~~
 
-### Script the running app
+Call procedures exposed by plugins:
 
-`zen exec` lets you call remote procedures exposed by plugins via [zenrpc](https://github.com/zenbu-labs/zenbu/tree/main/packages/zenrpc):
-
-```bash
+~~~bash
 zen exec -e 'console.log(await rpc.cli.listAgents())'
 zen exec -e 'const a = await rpc.cli.listAgents(); console.log(a.agents.length)'
 zen exec ./my-automation.ts
-```
+~~~
 
-Run `zen --help` for the full list of subcommands.
+Run this for the full list of commands:
 
-## Some notes
+~~~bash
+zen --help
+~~~
 
-This is a very early project and may include breaking changes on any commit
+## Resetting local state
 
-If an agent or update breaks your app, remove your changes made to `~/.zenbu/plugins/zenbu` with `git`, or delete `~/.zenbu/` and the app will reinstall itself on next launch.
+If an agent, plugin, or update breaks your local app, either revert changes in:
+
+~~~txt
+~/.zenbu/plugins/zenbu
+~~~
+
+or delete:
+
+~~~txt
+~/.zenbu/
+~~~
+
+Zenbu will reinstall itself on the next launch.
