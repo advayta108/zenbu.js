@@ -15,23 +15,6 @@
 <p align="center">
   <img src="./assets/screenshot.webp" width="640" style="background: transparent;" />
 </p>
-## Codebase pointers
-
-Main app:
-
-- [apps/zenbu](https://github.com/zenbu-labs/zenbu/tree/main/apps/zenbu)
-
-Current plugin API reference:
-
-- [packages/init](https://github.com/zenbu-labs/zenbu/tree/main/packages/init)
-
-Local reactive database:
-
-- [packages/kyju](https://github.com/zenbu-labs/zenbu/tree/main/packages/kyju)
-
-Plugin RPC:
-
-- [packages/zenrpc](https://github.com/zenbu-labs/zenbu/tree/main/packages/zenrpc)
 
 ## Plugins
 
