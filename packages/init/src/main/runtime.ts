@@ -8,8 +8,10 @@ type SetupFn = () => SetupCleanup
 
 interface HotContext {
   accept(): void
-  dispose(cb: () => void | Promise<void>): void
+  dispose(cb: (data: any) => void | Promise<void>): void
   prune?(cb: () => void | Promise<void>): void
+  invalidate?(): void
+  data?: any
 }
 
 interface ServiceSlot {
@@ -18,6 +20,7 @@ interface ServiceSlot {
   ServiceClass: typeof Service
   status: "blocked" | "evaluating" | "ready" | "failed"
   workspaceId?: string
+  hot?: HotContext
 }
 
 console.log("[kernel] runtime edit check")
@@ -129,13 +132,30 @@ export class ServiceRuntime {
     // workspaces can both load a plugin with the same `static key` without
     // colliding in the global slot map. Kernel services (no active scope)
     // continue to use their bare key.
-    const ws = this._scopeStorage.getStore() ?? undefined
+    //
+    // Resolution order for `ws`:
+    //   1. wsId carried over via `hot.data` from the previous instance's
+    //      dispose hook. Plugin-file HMR (file change → dynohot dispatch)
+    //      re-runs the module body OUTSIDE our `runtime.scopedImport`
+    //      AsyncLocalStorage scope, so without this handoff a re-evaluated
+    //      workspace plugin would lose its workspace assignment and
+    //      re-register as a global service.
+    //   2. AsyncLocalStorage scope (set by `runtime.scopedImport`). This
+    //      is the source of truth on the first-ever import of a workspace
+    //      plugin.
+    //   3. undefined (kernel/global service).
+    const carriedWsId =
+      hot?.data && typeof hot.data === "object"
+        ? ((hot.data as any).__zenbu_workspaceId__ as string | undefined)
+        : undefined
+    const ws = carriedWsId ?? this._scopeStorage.getStore() ?? undefined
     const slotKey = ws ? `${baseKey}@@${ws}` : baseKey
 
     this.definitions.set(slotKey, ServiceClass)
     const slot = this.slots.get(slotKey)
     if (slot) {
       slot.ServiceClass = ServiceClass
+      slot.hot = hot ?? undefined
     } else {
       this.slots.set(slotKey, {
         error: null,
@@ -143,14 +163,31 @@ export class ServiceRuntime {
         ServiceClass,
         status: "blocked",
         workspaceId: ws,
+        hot: hot ?? undefined,
       })
     }
     this.rebuildDependentsIndex()
 
     hot?.accept()
+    hot?.dispose?.((data: any) => {
+      if (ws !== undefined) data.__zenbu_workspaceId__ = ws
+    })
     const token = Symbol(slotKey)
     this.registrationTokens.set(slotKey, token)
-    hot?.prune?.(() => this.unregister(slotKey, token))
+    hot?.prune?.(() => {
+      // Workspace-scoped slots have their lifecycle managed explicitly by
+      // WorkspaceService (load on activation, unregister on deletion).
+      // Honoring dynohot's prune here would let the runtime evict a slot
+      // any time an upstream module reload (e.g. workspace.ts itself)
+      // temporarily breaks dynamic-import tracking and dynohot decides the
+      // workspace plugin is unreachable. The plugin file isn't gone — we
+      // just lost a dynamic edge mid-dispatch — so the slot must stay.
+      // Real eviction happens through `unregisterByWorkspace`
+      // (`deleteWorkspace`) and full process shutdown.
+      const slot = this.slots.get(slotKey)
+      if (slot?.workspaceId) return
+      this.unregister(slotKey, token)
+    })
 
     void this.scheduleReconcile([slotKey])
   }
@@ -173,6 +210,30 @@ export class ServiceRuntime {
       this.rebuildDependentsIndex()
       await this.scheduleReconcile(keys)
     }
+  }
+
+  /**
+   * Bounce every workspace-scoped service belonging to `workspaceId` through
+   * the normal reconcile cycle. The slots, definitions, and instances stay
+   * put — we just ask the drain loop to run Phase 1 cleanup (each service's
+   * `__cleanupAllSetups("reload")`) and Phase 2 evaluate (re-injects ctx,
+   * re-runs `evaluate()`) on every match. The plugin's code is unchanged —
+   * we're just bouncing setups, the same way a normal HMR reload would.
+   *
+   * Use this when something upstream wants to bounce a workspace's plugins
+   * (e.g. `WorkspaceService` itself was hot-reloaded). For permanent
+   * eviction (`deleteWorkspace`) use `unregisterByWorkspace` instead.
+   */
+  async reloadByWorkspace(workspaceId: string): Promise<void> {
+    const keys: string[] = []
+    for (const [key, slot] of this.slots) {
+      if (slot.workspaceId === workspaceId) keys.push(key)
+    }
+    if (keys.length === 0) return
+    console.log(
+      `[hot] reloading ${keys.length} service(s) for workspace ${workspaceId}: ${keys.join(", ")}`,
+    )
+    await this.scheduleReconcile(keys)
   }
 
   getWorkspaceId(key: string): string | undefined {
@@ -577,4 +638,20 @@ export class ServiceRuntime {
   }
 }
 
-export const runtime: ServiceRuntime = (globalThis as any).__zenbu_service_runtime__ ??= new ServiceRuntime()
+// The runtime is a process-singleton. On a hot reload of THIS file, dynohot
+// re-evaluates the module body — but `??=` keeps the existing instance so we
+// don't lose every registered service. The old instance still points at the
+// previous `ServiceRuntime.prototype` though, so any new methods/fixes we add
+// here would be invisible to the live instance until the next process
+// restart. `setPrototypeOf` after the `??=` rebinds the instance to the
+// freshly-evaluated prototype, so HMR of runtime.ts itself works.
+export const runtime: ServiceRuntime = (() => {
+  const existing = (globalThis as any).__zenbu_service_runtime__ as ServiceRuntime | undefined
+  if (existing) {
+    Object.setPrototypeOf(existing, ServiceRuntime.prototype)
+    return existing
+  }
+  const fresh = new ServiceRuntime()
+  ;(globalThis as any).__zenbu_service_runtime__ = fresh
+  return fresh
+})()

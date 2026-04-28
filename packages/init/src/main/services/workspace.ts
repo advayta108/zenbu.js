@@ -532,15 +532,16 @@ export class WorkspaceService extends Service {
   }
 
   evaluate() {
-    this.setup("workspace-cleanup", () => {
-      return async () => {
-        for (const workspaceId of this.loadedWorkspacePlugins.keys()) {
-          await this.stopWorkspacePlugins(workspaceId)
-        }
-      }
-    })
-
-    this.setup("eager-load", () => {
+    // Eager-load every workspace's plugins on startup. No cleanup hook here:
+    // workspace plugins HMR independently through dynohot, so bouncing them
+    // when `workspace.ts` itself reloads is unnecessary. It was also unsafe:
+    // dynohot Phase 1 (cleanup) runs before Phase 2 (re-eval), so any new or
+    // renamed `ServiceRuntime` method called from this cleanup hits the OLD
+    // prototype on the live `runtime` singleton (its `setPrototypeOf` rebind
+    // happens in Phase 2). `loadedWorkspacePlugins` survives across reload
+    // and `loadWorkspacePlugins`'s idempotency guard short-circuits the next
+    // evaluate. Explicit eviction is owned by `deleteWorkspace`.
+    this.setup("workspace-plugins", () => {
       const root = this.ctx.db.client.readRoot()
       const workspaces = root.plugin.kernel.workspaces ?? []
       for (const ws of workspaces) {
