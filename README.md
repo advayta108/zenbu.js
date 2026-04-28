@@ -57,7 +57,7 @@ Because any modifications you make to the core plugins have the risk of conflict
 
 ### CLI
 
-The cli lets your agent easily control and introspect thea app. It also comes with tools to help manage and scaffold plugins.
+The cli lets your agent easily control and introspect the app. It also comes with tools to help manage and scaffold plugins.
 ~~~bash
 zen                     # open a new window
 zen --agent claude      # open with a specific agent
