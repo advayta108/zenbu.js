@@ -1,140 +1,189 @@
-import type { SchemaRoot } from "./schema";
+import type {
+  SchemaRoot,
+  View,
+  WindowAppState,
+  ViewAppState,
+  AgentAppState,
+  WorkspaceAppState,
+} from "./schema";
 
 type Kernel = SchemaRoot;
 export type HotAgent = Kernel["agents"][number];
 export type ArchivedAgent = HotAgent & { archivedAt: number };
-export type WindowState = Kernel["windowStates"][number];
+
+// ---------------------------------------------------------------------------
+// State-record factory helpers.
+//
+// Invariant: kernel.<x>State[id].<idField> === id for every record. These
+// factories are the single source of truth for that invariant - new call
+// sites should use them rather than constructing records inline.
+// ---------------------------------------------------------------------------
+
+export function makeWindowAppState(
+  windowId: string,
+  overrides?: Partial<Omit<WindowAppState, "windowId">>,
+): WindowAppState {
+  return {
+    windowId,
+    activeViewId: null,
+    activeWorkspaceId: null,
+    ...overrides,
+  };
+}
+
+export function makeViewAppState(
+  viewId: string,
+  overrides?: Partial<Omit<ViewAppState, "viewId">>,
+): ViewAppState {
+  return {
+    viewId,
+    draft: null,
+    pendingCwd: null,
+    order: 0,
+    sidebarOpen: false,
+    tabSidebarOpen: true,
+    sidebarPanel: "overview",
+    utilitySidebarSelected: null,
+    ...overrides,
+  };
+}
+
+export function makeAgentAppState(
+  agentId: string,
+  overrides?: Partial<Omit<AgentAppState, "agentId">>,
+): AgentAppState {
+  return {
+    agentId,
+    lastViewedAt: null,
+    workspaceId: null,
+    ...overrides,
+  };
+}
+
+export function makeWorkspaceAppState(
+  workspaceId: string,
+  overrides?: Partial<Omit<WorkspaceAppState, "workspaceId">>,
+): WorkspaceAppState {
+  return {
+    workspaceId,
+    lastViewId: null,
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// View / agent lookup helpers.
+// ---------------------------------------------------------------------------
 
 /**
- * Find an existing open tab for the given agent, so a caller about to create
- * a fresh window/session can focus it instead of duplicating the agent into
- * a second window. Prefers a session that's already wired into a pane
- * (visible as a tab); falls back to any window that just has the session in
- * its `sessions` array (window freshly created, orchestrator hasn't
- * populated panes yet).
+ * Find an existing chat-view that already references this agent, so a caller
+ * about to create a fresh window/view can focus the existing one instead of
+ * duplicating the agent into a second tab. Returns the first match across
+ * all windows.
  */
-export function findExistingAgentTab(
-  windowStates: readonly WindowState[],
+export function findExistingViewForAgent(
+  views: readonly View[],
   agentId: string,
-): { windowId: string; sessionId: string; paneId: string | null } | null {
-  for (const ws of windowStates) {
-    const sessions = ws.sessions ?? [];
-    const panes = ws.panes ?? [];
-    for (const s of sessions) {
-      if (s.agentId !== agentId) continue;
-      const pane = panes.find((p) => (p.tabIds ?? []).includes(s.id));
-      if (pane) return { windowId: ws.id, sessionId: s.id, paneId: pane.id };
+): { windowId: string; viewId: string } | null {
+  for (const v of views) {
+    if (v.scope === "chat" && v.params.agentId === agentId) {
+      return { windowId: v.windowId, viewId: v.id };
     }
   }
-  for (const ws of windowStates) {
-    const s = (ws.sessions ?? []).find((ss) => ss.agentId === agentId);
-    if (s) return { windowId: ws.id, sessionId: s.id, paneId: null };
-  }
   return null;
 }
 
 /**
- * Find the agentId for a session anywhere in the window graph. Returns null
- * if the session doesn't exist. Used by InsertService to resolve persisted
- * draft keys when a session isn't currently live.
+ * Resolve the agentId a view points to, by reading its params. Returns null
+ * for non-chat views or views with no agentId param.
  */
-export function findAgentIdForSession(
-  windowStates: readonly WindowState[],
-  sessionId: string,
+export function findAgentIdForView(
+  views: readonly View[],
+  viewId: string,
 ): string | null {
-  for (const ws of windowStates) {
-    const s = (ws.sessions ?? []).find((ss) => ss.id === sessionId);
-    if (s) return s.agentId;
-  }
-  return null;
+  const v = views.find((x) => x.id === viewId);
+  return v?.params.agentId ?? null;
 }
 
 /**
- * Strict "live" check for InsertService: is the session the active tab of
- * the focused pane of the focused window? Only then is it safe to dispatch
- * a cross-window insert event without racing local edits in another
- * composer (which has no merge protocol).
+ * "Live" check for InsertService: is this view the active view of the
+ * focused window? Only then is it safe to dispatch a cross-window insert
+ * event without racing local edits in another composer (no merge protocol).
  *
- * Why not just "session is active tab anywhere": the orchestrator tracks
- * activeTabId per-pane independent of focus, so a session can be the
- * active tab in a backgrounded pane / backgrounded window while the user
- * is actually typing into a completely different agent's composer in the
- * focused pane. We want the insert to land wherever the user is *actually*
- * looking / typing — that's focusedWindowId + focusedPaneId + activeTabId,
- * not just activeTabId.
- *
- * Everything else goes through the persisted draft path, and the composer
- * picks up the change on refocus via `RefocusRehydratePlugin` (Phase 8b).
- *
- * TODO(crdt): With a CRDT on editor state, any mounted composer could
- * receive the insert and merge it with concurrent local edits. Until then,
- * we keep exactly one authoritative writer at a time.
+ * Everything else goes through the persisted-draft path on the view's state
+ * record; the composer picks up the change on refocus.
  */
-export function findLiveSessionTab(
+export function findLiveViewTab(
   kernel: Kernel,
-  sessionId: string,
-): { windowId: string; paneId: string } | null {
+  viewId: string,
+): { windowId: string } | null {
   const focusedWindowId = kernel.focusedWindowId;
   if (!focusedWindowId) return null;
-  const ws = kernel.windowStates.find((w) => w.id === focusedWindowId);
+  const ws = kernel.windowState[focusedWindowId];
   if (!ws) return null;
-  const focusedPaneId = ws.focusedPaneId;
-  if (!focusedPaneId) return null;
-  const pane = ws.panes.find((p) => p.id === focusedPaneId);
-  if (!pane) return null;
-  if (pane.activeTabId !== sessionId) return null;
-  const sessionExists = (ws.sessions ?? []).some((s) => s.id === sessionId);
-  if (!sessionExists) return null;
-  return { windowId: ws.id, paneId: pane.id };
+  if (ws.activeViewId !== viewId) return null;
+  // Confirm the entity exists; defensive against a torn-off view that's
+  // still pointed-to by a stale activeViewId.
+  if (!kernel.views.some((v) => v.id === viewId)) return null;
+  return { windowId: focusedWindowId };
 }
 
 /**
- * Mutate `kernel.windowStates` to bring the given session to the front
- * within its window: set the pane's `activeTabId`, mark the pane focused,
- * and clear/set `lastViewedAt` to match the convention
- * `recent-agents.switchToSession` uses.
+ * Activate a view in its window. Sets `windowState[windowId].activeViewId`,
+ * and updates the unread-badge state on `agentState`:
+ *   - the now-active chat view's agent: lastViewedAt = null (currently viewing)
+ *   - the previously-active chat view's agent: lastViewedAt = now (just left)
  *
  * Must be called inside a `client.update((root) => ...)` callback.
- * No-op if the target doesn't exist (window/session removed concurrently).
  */
-export function activateAgentTab(
+export function activateView(
   kernel: Kernel,
-  target: { windowId: string; sessionId: string; paneId: string | null },
+  target: { windowId: string; viewId: string },
 ): void {
-  const ws = kernel.windowStates.find((w) => w.id === target.windowId);
+  const ws = kernel.windowState[target.windowId];
   if (!ws) return;
-  const pane = target.paneId
-    ? ws.panes.find((p) => p.id === target.paneId)
-    : ws.panes.find((p) => (p.tabIds ?? []).includes(target.sessionId));
-  if (pane) {
-    const oldActive = pane.activeTabId;
-    pane.activeTabId = target.sessionId;
-    ws.focusedPaneId = pane.id;
-    const now = Date.now();
-    for (const s of ws.sessions) {
-      if (s.id === oldActive && s.id !== target.sessionId) s.lastViewedAt = now;
-      else if (s.id === target.sessionId) s.lastViewedAt = null;
+  const previousViewId = ws.activeViewId;
+  ws.activeViewId = target.viewId;
+
+  const now = Date.now();
+
+  // Mark the previously-active chat view's agent as "departed" (unread state).
+  if (previousViewId && previousViewId !== target.viewId) {
+    const prevView = kernel.views.find((v) => v.id === previousViewId);
+    const prevAgentId =
+      prevView?.scope === "chat" ? prevView.params.agentId : undefined;
+    if (prevAgentId) {
+      const prev = kernel.agentState[prevAgentId];
+      if (prev) {
+        prev.lastViewedAt = now;
+      } else {
+        kernel.agentState[prevAgentId] = makeAgentAppState(prevAgentId, {
+          lastViewedAt: now,
+        });
+      }
+    }
+  }
+
+  // Clear unread on the now-active chat view's agent.
+  const newView = kernel.views.find((v) => v.id === target.viewId);
+  const newAgentId =
+    newView?.scope === "chat" ? newView.params.agentId : undefined;
+  if (newAgentId) {
+    const cur = kernel.agentState[newAgentId];
+    if (cur) {
+      cur.lastViewedAt = null;
+    } else {
+      kernel.agentState[newAgentId] = makeAgentAppState(newAgentId, {
+        lastViewedAt: null,
+      });
     }
   }
 }
 
-/**
- * Insert a freshly-created agent into `kernel.agents`, enforcing the
- * `hotAgentsCap` limit. If the array is already at/above the cap, the
- * oldest-by-`createdAt` hot agents are removed from the array and returned
- * as archived records so the caller can push them into the `archivedAgents`
- * collection after the update resolves (collections aren't draft-mutable).
- *
- * Must be called inside a `client.update((root) => ...)` callback; mutates
- * the draft kernel in place.
- *
- * Usage:
- *   let evicted: ArchivedAgent[] = [];
- *   await client.update((root) => {
- *     evicted = insertHotAgent(root.plugin.kernel, newAgent);
- *   });
- *   if (evicted.length) await concatArchived(client, evicted);
- */
+// ---------------------------------------------------------------------------
+// Hot-agent / archived-agent helpers (unchanged from prior implementation).
+// ---------------------------------------------------------------------------
+
 type AgentConfig = Kernel["agentConfigs"][number];
 
 /**
@@ -175,6 +224,16 @@ export function validSelectionFromTemplate(
   return out;
 }
 
+/**
+ * Insert a freshly-created agent into `kernel.agents`, enforcing the
+ * `hotAgentsCap` limit. If the array is already at/above the cap, the
+ * oldest-by-`createdAt` hot agents are removed from the array and returned
+ * as archived records so the caller can push them into the `archivedAgents`
+ * collection after the update resolves (collections aren't draft-mutable).
+ *
+ * Must be called inside a `client.update((root) => ...)` callback; mutates
+ * the draft kernel in place.
+ */
 export function insertHotAgent(
   kernel: Kernel,
   agent: HotAgent,

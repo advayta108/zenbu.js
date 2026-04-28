@@ -37,14 +37,14 @@ function isEditorStateEmpty(state: any): boolean {
  * without a handoff.
  */
 type DraftFlush = { flush: () => void }
-const activeFlushByAgent = new Map<string, DraftFlush>()
+const activeFlushByView = new Map<string, DraftFlush>()
 
-export function getDraftFlush(agentId: string): (() => void) | null {
-  const entry = activeFlushByAgent.get(agentId)
+export function getDraftFlush(viewId: string): (() => void) | null {
+  const entry = activeFlushByView.get(viewId)
   return entry ? entry.flush : null
 }
 
-export function DraftPersistencePlugin({ agentId }: { agentId: string }) {
+export function DraftPersistencePlugin({ viewId }: { viewId: string }) {
   const [editor] = useLexicalComposerContext()
   const client = useKyjuClient()
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -54,24 +54,30 @@ export function DraftPersistencePlugin({ agentId }: { agentId: string }) {
   const saveDraft = useCallback(() => {
     lastSaveRef.current = Date.now()
     const state = editor.getEditorState().toJSON()
-    const chatBlobs = client.plugin.kernel.chatBlobs.read() ?? []
+    const viewStateRecord = client.plugin.kernel.viewState.read() ?? {}
+    const current = viewStateRecord[viewId]
+    if (!current) return
 
-    if (isEditorStateEmpty(state) && chatBlobs.length === 0) {
-      const drafts = client.plugin.kernel.composerDrafts.read() ?? {}
-      if (drafts[agentId]) {
-        const next = { ...drafts }
-        delete next[agentId]
-        client.plugin.kernel.composerDrafts.set(next)
+    const blobs = current.draft?.blobs ?? []
+
+    if (isEditorStateEmpty(state) && blobs.length === 0) {
+      // Empty draft - clear it on the view's state record.
+      if (current.draft != null) {
+        const next = { ...viewStateRecord, [viewId]: { ...current, draft: null } }
+        client.plugin.kernel.viewState.set(next)
       }
       return
     }
 
-    const drafts = client.plugin.kernel.composerDrafts.read() ?? {}
-    client.plugin.kernel.composerDrafts.set({
-      ...drafts,
-      [agentId]: { editorState: state, chatBlobs },
-    })
-  }, [editor, client, agentId])
+    const next = {
+      ...viewStateRecord,
+      [viewId]: {
+        ...current,
+        draft: { editorState: state, blobs },
+      },
+    }
+    client.plugin.kernel.viewState.set(next)
+  }, [editor, client, viewId])
 
   const cancelPending = useCallback(() => {
     if (timerRef.current) {
@@ -88,7 +94,7 @@ export function DraftPersistencePlugin({ agentId }: { agentId: string }) {
     cancelPending()
     const stale = Date.now() - lastSaveRef.current >= MAX_STALE_MS
     if (stale) {
-      // Stale — save on next idle, with a timeout fallback
+      // Stale - save on next idle, with a timeout fallback
       idleRef.current = requestIdleCallback(() => {
         idleRef.current = null
         saveDraft()
@@ -106,7 +112,7 @@ export function DraftPersistencePlugin({ agentId }: { agentId: string }) {
   }, [editor, scheduleSave])
 
   // Register this plugin's imperative flush so RefocusRehydratePlugin can
-  // force a synchronous persist when the composer blurs. Scope to agentId
+  // force a synchronous persist when the composer blurs. Scope to viewId
   // because the orchestrator may have multiple composer iframes in flight
   // during HMR transitions.
   const flushNow = useCallback(() => {
@@ -115,14 +121,14 @@ export function DraftPersistencePlugin({ agentId }: { agentId: string }) {
   }, [cancelPending, saveDraft])
 
   useEffect(() => {
-    activeFlushByAgent.set(agentId, { flush: flushNow })
+    activeFlushByView.set(viewId, { flush: flushNow })
     return () => {
-      const current = activeFlushByAgent.get(agentId)
+      const current = activeFlushByView.get(viewId)
       if (current && current.flush === flushNow) {
-        activeFlushByAgent.delete(agentId)
+        activeFlushByView.delete(viewId)
       }
     }
-  }, [agentId, flushNow])
+  }, [viewId, flushNow])
 
   // Flush on unmount if anything is pending
   useEffect(() => {
@@ -139,10 +145,10 @@ export function DraftPersistencePlugin({ agentId }: { agentId: string }) {
 
 export function getInitialEditorState(
   client: any,
-  agentId: string,
+  viewId: string,
 ): string | null {
-  const drafts = client.plugin.kernel.composerDrafts.read() ?? {}
-  const draft = drafts[agentId]
+  const viewStateRecord = client.plugin.kernel.viewState.read() ?? {}
+  const draft = viewStateRecord[viewId]?.draft
   if (!draft?.editorState) return null
   // Rewrite any legacy file-reference / image nodes to the generic token
   // shape on the way in. The next save (debounced) persists the migrated
@@ -152,17 +158,10 @@ export function getInitialEditorState(
   return JSON.stringify(migrated)
 }
 
-export function restoreChatBlobs(client: any, agentId: string): void {
-  const drafts = client.plugin.kernel.composerDrafts.read() ?? {}
-  const draft = drafts[agentId]
-  const chatBlobs = draft?.chatBlobs ?? []
-  client.plugin.kernel.chatBlobs.set(chatBlobs)
-}
-
 /** Check if a persisted draft has real content (for use outside the chat view) */
-export function draftHasContent(draft: { editorState?: any; chatBlobs?: any[] } | undefined): boolean {
+export function draftHasContent(draft: { editorState?: any; blobs?: any[] } | null | undefined): boolean {
   if (!draft) return false
-  if (draft.chatBlobs?.length) return true
+  if (draft.blobs?.length) return true
   if (!draft.editorState) return false
   return !isEditorStateEmpty(draft.editorState)
 }

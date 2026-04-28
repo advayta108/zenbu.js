@@ -39,9 +39,9 @@ import {
 import { cn } from "@/lib/utils";
 
 export function ChangeCwdItem({
-  agentId,
+  viewId,
 }: {
-  agentId: string;
+  viewId: string;
   currentCwd: string;
 }) {
   const rpc = useRpc();
@@ -50,16 +50,18 @@ export function ChangeCwdItem({
     const dir = await rpc.window.pickDirectory();
     if (!dir) return;
     try {
-      const current = client.plugin.kernel.composerPending.read() ?? {};
+      const current = client.plugin.kernel.viewState.read() ?? {};
+      const cur = current[viewId];
+      if (!cur) return;
       const next = {
         ...current,
-        [agentId]: { ...(current[agentId] ?? {}), cwd: dir },
+        [viewId]: { ...cur, pendingCwd: dir },
       };
-      await client.plugin.kernel.composerPending.set(next);
+      await client.plugin.kernel.viewState.set(next);
     } catch (err) {
       console.error("[cwd-selector] write pending cwd failed", err);
     }
-  }, [rpc, agentId, client]);
+  }, [rpc, viewId, client]);
   return (
     <DropdownMenuItem className="text-xs" onClick={onClick}>
       <FolderSyncIcon className="size-3" />
@@ -283,7 +285,13 @@ function ContextIndicator({ used, size }: { used: number; size: number }) {
   );
 }
 
-export function ComposerToolbar({ agentId }: { agentId: string }) {
+export function ComposerToolbar({
+  agentId,
+  viewId,
+}: {
+  agentId: string;
+  viewId: string;
+}) {
   const rpc = useRpc();
 
   const agent = useDb((root) =>
@@ -311,11 +319,11 @@ export function ComposerToolbar({ agentId }: { agentId: string }) {
   }, [events]);
 
   const pendingCwd = useDb(
-    (root) => root.plugin.kernel.composerPending?.[agentId]?.cwd,
+    (root) => root.plugin.kernel.viewState?.[viewId]?.pendingCwd ?? null,
   );
-  const agentCwd = (pendingCwd ?? (agent?.metadata?.cwd as string | undefined)) as
+  const agentCwd = ((pendingCwd ?? agent?.metadata?.cwd) as
     | string
-    | undefined;
+    | undefined);
 
   const template = useMemo(
     () => agentConfigs?.find((c) => c.id === agent?.configId),
@@ -380,7 +388,7 @@ export function ComposerToolbar({ agentId }: { agentId: string }) {
               <FolderOpenIcon className="size-3" />
               Open in Finder
             </DropdownMenuItem>
-            <ChangeCwdItem agentId={agentId} currentCwd={agentCwd!} />
+            <ChangeCwdItem viewId={viewId} currentCwd={agentCwd!} />
           </DropdownMenuContent>
         </DropdownMenu>
       ) : (

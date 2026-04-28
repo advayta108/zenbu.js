@@ -8,7 +8,9 @@ import { KyjuProvider } from "../../lib/kyju-react"
 import type { WsConnectionState } from "../../lib/ws-connection"
 import { ComposerPanel } from "../chat/ComposerPanel"
 
-const agentId = new URLSearchParams(window.location.search).get("agentId") ?? ""
+const _params = new URLSearchParams(window.location.search)
+const agentId = _params.get("agentId") ?? ""
+const viewId = _params.get("viewId") ?? ""
 
 function MessageInputContent() {
   if (!agentId) {
@@ -25,7 +27,7 @@ function MessageInputContent() {
   return (
     <div className="flex h-full flex-col bg-white">
       <div className="flex-1" />
-      <ComposerPanel agentId={agentId} />
+      <ComposerPanel agentId={agentId} viewId={viewId} />
     </div>
   )
 }

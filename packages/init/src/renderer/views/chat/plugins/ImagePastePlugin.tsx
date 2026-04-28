@@ -63,21 +63,25 @@ function $getAdjacentPillNode(backward: boolean): LexicalNode | null {
 }
 
 /**
- * Clipboard image → composer pill. Same two-stage UX as before (optimistic
+ * Clipboard image -> composer pill. Same two-stage UX as before (optimistic
  * "uploading" placeholder, upgraded to "ready" once the blob lands on
  * disk), but now both stages go through the token-bus so a single
- * TokenNode class handles them — the plugin never touches Lexical
+ * TokenNode class handles them - the plugin never touches Lexical
  * directly.
  *
  * The local uploading-stub uses `dispatchTokenInsert({source:"paste"})`
  * with a fresh `localId`. When upload finishes, `dispatchTokenUpgrade`
  * with the same `localId` rewrites the payload in place.
  *
- * We still need the agentId + sessionId for the dispatch. We pass the
- * agentId in as a prop; sessionId comes from the paneId URL param same as
- * toolbar-wrapper uses — read lazily at paste time.
+ * Blob bookkeeping: we append the freshly-uploaded blob to the view's
+ * draft blobs (`viewState[viewId].draft.blobs`) so the composer's submit
+ * path can find it. The DraftPersistencePlugin also keeps draft.blobs in
+ * sync via its own debounced save.
  */
-export function ImagePastePlugin({ agentId }: { agentId: string } = { agentId: "" }) {
+export function ImagePastePlugin({
+  viewId,
+  agentId,
+}: { viewId: string; agentId: string } = { viewId: "", agentId: "" }) {
   const [editor] = useLexicalComposerContext()
   const client = useKyjuClient()
   const _rpc = useRpc() // kept so HMR plumbing matches other plugins
@@ -103,11 +107,10 @@ export function ImagePastePlugin({ agentId }: { agentId: string } = { agentId: "
         const mimeType = imageFile.type
         const localSrc = URL.createObjectURL(imageFile)
         const localId = nanoid()
-        const sessionId = resolveSessionIdFromUrl() ?? ""
 
         // Stage 1: optimistic pill (uploading).
         dispatchTokenInsert({
-          sessionId,
+          viewId,
           agentId,
           source: "paste",
           localId,
@@ -125,15 +128,27 @@ export function ImagePastePlugin({ agentId }: { agentId: string } = { agentId: "
             const data = new Uint8Array(buffer)
             const blobId = await (client as any).createBlob(data, true)
 
-            const blobs = client.plugin.kernel.chatBlobs.read() ?? []
-            await client.plugin.kernel.chatBlobs.set([
-              ...blobs,
-              { blobId, mimeType },
-            ])
+            // Append the new blob to the view's draft blobs.
+            const viewStateRecord = client.plugin.kernel.viewState.read() ?? {}
+            const cur = viewStateRecord[viewId]
+            if (cur) {
+              const existingBlobs = cur.draft?.blobs ?? []
+              const next = {
+                ...viewStateRecord,
+                [viewId]: {
+                  ...cur,
+                  draft: {
+                    editorState: cur.draft?.editorState ?? null,
+                    blobs: [...existingBlobs, { blobId, mimeType }],
+                  },
+                },
+              }
+              await client.plugin.kernel.viewState.set(next)
+            }
 
             // Stage 2: upgrade the stub to ready + real blob id.
             dispatchTokenUpgrade({
-              sessionId,
+              viewId,
               agentId,
               localId,
               payload: {
@@ -152,7 +167,7 @@ export function ImagePastePlugin({ agentId }: { agentId: string } = { agentId: "
       },
       COMMAND_PRIORITY_CRITICAL,
     )
-  }, [editor, client, agentId])
+  }, [editor, client, viewId, agentId])
 
   useEffect(() => {
     const handleDelete = (backward: boolean) => {
@@ -199,15 +214,6 @@ export function ImagePastePlugin({ agentId }: { agentId: string } = { agentId: "
   }, [editor])
 
   return null
-}
-
-function resolveSessionIdFromUrl(): string | null {
-  if (typeof window === "undefined") return null
-  const params = new URLSearchParams(window.location.search)
-  // sessionId isn't always in the URL today (the chat iframe URL carries
-  // paneId). The TokenInsertPlugin filters on agentId only, so leaving
-  // sessionId empty here is still correct for local inserts.
-  return params.get("sessionId")
 }
 
 // Keep the named exports so existing callers that imported ImageNode from

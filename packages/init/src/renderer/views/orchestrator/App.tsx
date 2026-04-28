@@ -57,16 +57,10 @@ import { KernelBinaryUpdateBanner } from "./components/KernelBinaryUpdateBanner"
 import { ShortcutForwarderProvider } from "./providers/shortcut-forwarder";
 import { useFocusOnRequest } from "../../lib/focus-request";
 import {
-  type PaneState,
-  type PaneNode,
-  initPaneState,
-  addTabToPane,
-  switchTabInPane,
-  closeTabInPane,
-} from "./pane-ops";
-import {
   insertHotAgent,
   validSelectionFromTemplate,
+  makeAgentAppState,
+  makeViewAppState,
   type ArchivedAgent,
 } from "../../../../shared/agent-ops";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
@@ -82,8 +76,6 @@ if (!wsToken) throw new Error("Missing ?wsToken= in orchestrator URL");
 
 import type { SchemaRoot } from "../../../../shared/schema";
 
-type WindowState = SchemaRoot["windowStates"][number];
-type SessionItem = WindowState["sessions"][number];
 type AgentItem = SchemaRoot["agents"][number];
 type RegistryEntry = { scope: string; url: string; port: number };
 
@@ -637,38 +629,24 @@ function SidebarToggleIcon({ open }: { open: boolean }) {
 }
 
 function OrchestratorContent() {
-  const allWindowStates =
-    useDb((root) => root.plugin.kernel.windowStates) ?? [];
-  const windowState = useMemo(
-    () => allWindowStates.find((ws) => ws.id === windowId),
-    [allWindowStates],
-  );
-  const sessions = windowState?.sessions ?? [];
   const agents = useDb((root) => root.plugin.kernel.agents);
+  const allViews = useDb((root) => root.plugin.kernel.views) ?? [];
+  // Open agents = agents that already have a chat view somewhere.
   const openAgentIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const ws of allWindowStates) {
-      for (const s of ws.sessions ?? []) ids.add(s.agentId);
+    for (const v of allViews) {
+      if (v.scope === "chat" && v.params.agentId) ids.add(v.params.agentId);
     }
     return ids;
-  }, [allWindowStates]);
+  }, [allViews]);
   const registry = useDb((root) => root.plugin.kernel.viewRegistry);
   const client = useKyjuClient();
   const rpc = useRpc();
-  const paneState: PaneState = useMemo(
-    () => ({
-      panes: windowState?.panes ?? [],
-      rootPaneId: windowState?.rootPaneId ?? null,
-      focusedPaneId: windowState?.focusedPaneId ?? null,
-    }),
-    [windowState?.panes, windowState?.rootPaneId, windowState?.focusedPaneId],
-  );
 
-  const initializedRef = useRef(false);
   const ensuredRef = useRef(false);
 
   const activeWorkspaceId = useDb(
-    (root) => root.plugin.kernel.activeWorkspaceByWindow?.[windowId!],
+    (root) => root.plugin.kernel.windowState[windowId!]?.activeWorkspaceId ?? null,
   );
   useWorkspaceThemeLink(activeWorkspaceId);
 
@@ -677,86 +655,40 @@ function OrchestratorContent() {
     () => (workspaces ?? []).find((w) => w.id === activeWorkspaceId),
     [workspaces, activeWorkspaceId],
   );
-
   const workspaceCwds = activeWorkspace?.cwds ?? [];
 
+  // Per-view sidebar state. Read from the active view's state record;
+  // falls back to defaults if no active view.
+  const activeViewId = useDb(
+    (root) => root.plugin.kernel.windowState[windowId!]?.activeViewId ?? null,
+  );
   const sidebarOpen = useDb((root) => {
-    const map = root.plugin.kernel.sidebarOpenByWindow;
-    if (!map || typeof map[windowId!] !== "boolean") return true;
-    return map[windowId!];
+    if (!activeViewId) return true;
+    const vs = root.plugin.kernel.viewState[activeViewId];
+    return vs?.sidebarOpen ?? false;
   });
 
+  // Ensure the windows + windowState entries exist for our windowId. Most
+  // windows are created by the main process; this is a defensive fill-in
+  // for cold-start edge cases.
   useEffect(() => {
     if (ensuredRef.current || !windowId) return;
-    const states = client.readRoot().plugin.kernel.windowStates ?? [];
-    if (states.some((ws) => ws.id === windowId)) return;
+    const k = client.readRoot().plugin.kernel;
+    if (k.windows.some((w) => w.id === windowId)) return;
     ensuredRef.current = true;
-    client.plugin.kernel.windowStates.set([
-      ...states,
-      {
-        id: windowId,
-        sessions: [],
-        panes: [],
-        rootPaneId: null,
-        focusedPaneId: null,
-        sidebarOpen: false,
-        tabSidebarOpen: true,
-        sidebarPanel: "overview",
-        persisted: false,
-      },
-    ]);
-  }, [client, allWindowStates]);
-
-  // One-shot cleanup on orchestrator mount: drop any `new-agent:*` and
-  // `scope:*` sentinel tabs left behind by prior sessions where the user
-  // opened the new-agent / plugins screen but never submitted. Without this,
-  // hundreds of orphans accumulate in pane.tabIds across restarts and each
-  // gets an iframe on render.
-  const cleanedRef = useRef(false);
-  useEffect(() => {
-    if (cleanedRef.current || !windowId) return;
-    const states = client.readRoot().plugin.kernel.windowStates ?? [];
-    const ws = states.find((w) => w.id === windowId);
-    if (!ws) return;
-    cleanedRef.current = true;
-
-    const isSentinel = (id: string) =>
-      id.startsWith("new-agent:") || id.startsWith("scope:");
-    const sessionIds = new Set(ws.sessions.map((s) => s.id));
-    let changed = false;
-    const cleanedSessions = ws.sessions.filter((s) => {
-      if (isSentinel(s.id)) {
-        changed = true;
-        return false;
-      }
-      return true;
+    void client.update((root) => {
+      const kk = root.plugin.kernel;
+      kk.windows = [...kk.windows, { id: windowId, persisted: false }];
+      kk.windowState = {
+        ...kk.windowState,
+        [windowId]: kk.windowState[windowId] ?? {
+          windowId,
+          activeViewId: null,
+          activeWorkspaceId: null,
+        },
+      };
     });
-    const cleanedPanes = ws.panes.map((p) => {
-      if (p.type !== "leaf") return p;
-      const next = p.tabIds.filter((id) => {
-        if (isSentinel(id)) return false;
-        return sessionIds.has(id);
-      });
-      if (next.length === p.tabIds.length) return p;
-      changed = true;
-      const activeTabId = next.includes(p.activeTabId ?? "")
-        ? p.activeTabId
-        : next[next.length - 1];
-      return { ...p, tabIds: next, activeTabId };
-    });
-    if (!changed) return;
-    console.log(
-      `[orchestrator] cleanup: removed ${
-        ws.sessions.length - cleanedSessions.length
-      } sentinel session(s) + tabIds`,
-    );
-    const updatedStates = states.map((s) =>
-      s.id === windowId
-        ? { ...s, sessions: cleanedSessions, panes: cleanedPanes }
-        : s,
-    );
-    client.plugin.kernel.windowStates.set(updatedStates).catch(() => {});
-  }, [client, allWindowStates]);
+  }, [client]);
 
   const registryMap = useMemo(() => {
     const map = new Map<string, RegistryEntry>();
@@ -764,254 +696,82 @@ function OrchestratorContent() {
     return map;
   }, [registry]);
 
-  const updateWindowState = useCallback(
-    async (updater: (ws: WindowState) => void) => {
-      const root = client.readRoot();
-      const states = root.plugin.kernel.windowStates ?? [];
-      const idx = states.findIndex((ws) => ws.id === windowId);
-      if (idx < 0) return;
-      const updated = [...states];
-      updated[idx] = { ...updated[idx] };
-      updater(updated[idx]);
-      await client.plugin.kernel.windowStates.set(updated);
-    },
-    [client],
-  );
-
-  const writePaneState = useCallback(
-    async (next: PaneState) => {
-      await updateWindowState((ws) => {
-        ws.panes = next.panes;
-        ws.rootPaneId = next.rootPaneId;
-        ws.focusedPaneId = next.focusedPaneId;
-      });
-    },
-    [updateWindowState],
-  );
-
-  const createAgentAndSession = useCallback(async (): Promise<string> => {
-    const kernel = client.readRoot().plugin.kernel;
-    const configs = kernel.agentConfigs;
-    const selectedConfigId = kernel.selectedConfigId;
-    const selectedConfig =
-      configs.find((c) => c.id === selectedConfigId) ?? configs[0];
-
-    const agentId = nanoid();
-    const sessionId = nanoid();
-
-    const focusedPaneId =
-      windowState?.focusedPaneId ?? windowState?.rootPaneId ?? null;
-    const focusedPane = focusedPaneId
-      ? (windowState?.panes ?? []).find((p) => p.id === focusedPaneId)
-      : undefined;
-    const focusedSessionId = focusedPane?.activeTabId;
-    const focusedSession = focusedSessionId
-      ? sessions.find((s) => s.id === focusedSessionId)
-      : undefined;
-    const focusedAgent = focusedSession
-      ? kernel.agents.find((a) => a.id === focusedSession.agentId)
-      : undefined;
-    const inheritedCwd =
-      typeof focusedAgent?.metadata?.cwd === "string"
-        ? focusedAgent.metadata.cwd
-        : undefined;
-    const newAgentCwd = inheritedCwd ?? workspaceCwds[0] ?? defaultCwd;
-
-    const seeded = validSelectionFromTemplate(selectedConfig);
-
-    let evicted: ArchivedAgent[] = [];
-    await client.update((root) => {
-      evicted = insertHotAgent(root.plugin.kernel, {
-        id: agentId,
-        name: selectedConfig.name,
-        startCommand: selectedConfig.startCommand,
-        configId: selectedConfig.id,
-        metadata: {
-          ...(newAgentCwd ? { cwd: newAgentCwd } : {}),
-        },
-        workspaceId: activeWorkspaceId ?? undefined,
-        eventLog: makeCollection({
-          collectionId: nanoid(),
-          debugName: "eventLog",
-        }),
-        status: "idle",
-        ...seeded,
-        title: { kind: "not-available" },
-        reloadMode: "keep-alive",
-        sessionId: null,
-        firstPromptSentAt: null,
-        createdAt: Date.now(),
-        queuedMessages: [],
-      });
-    });
-    if (evicted.length > 0) {
-      await client.plugin.kernel.archivedAgents.concat(evicted).catch(() => {});
-    }
-
-    await updateWindowState((ws) => {
-      ws.sessions = [
-        ...ws.sessions,
-        { id: sessionId, agentId, lastViewedAt: null },
-      ];
-    });
-
-    rpc.agent
-      .init(agentId)
-      .catch((e: unknown) =>
-        console.error("[orchestrator] agent init failed:", e),
-      );
-    return sessionId;
-  }, [client, rpc, updateWindowState, windowState, sessions, workspaceCwds]);
-
-  const createSessionForAgent = useCallback(
-    async (agentId: string): Promise<string> => {
-      const sessionId = nanoid();
-      await updateWindowState((ws) => {
-        ws.sessions = [
-          ...ws.sessions,
-          { id: sessionId, agentId, lastViewedAt: null },
-        ];
-      });
-      return sessionId;
-    },
-    [updateWindowState],
-  );
-
-  const removeSession = useCallback(
-    async (sessionId: string) => {
-      await updateWindowState((ws) => {
-        ws.sessions = ws.sessions.filter((s) => s.id !== sessionId);
-      });
-    },
-    [updateWindowState],
-  );
-
-  useEffect(() => {
-    if (initializedRef.current) return;
-    if (paneState.rootPaneId) {
-      initializedRef.current = true;
-      return;
-    }
-
-    const tabIds = sessions.map((s) => s.id);
-    if (tabIds.length === 0) return;
-
-    initializedRef.current = true;
-    const initial = initPaneState(tabIds, tabIds[tabIds.length - 1]);
-    writePaneState(initial);
-  }, [paneState.rootPaneId, sessions, writePaneState]);
-
-  const handleNewAgent = useCallback(async () => {
-    const tabId = `new-agent:${nanoid()}`;
-    if (paneState.rootPaneId) {
-      const next = addTabToPane(paneState, paneState.rootPaneId, tabId);
-      await writePaneState(next);
-    } else {
-      const initial = initPaneState([tabId], tabId);
-      await writePaneState(initial);
-    }
-  }, [paneState, writePaneState]);
-
-  const handleOpenPlugins = useCallback(async () => {
-    // Reuse an existing plugins tab in this pane if there is one; otherwise
-    // insert a new sentinel tab. The tab id prefix `scope:plugins:` is what
-    // WorkspaceView's iframe routing keys off of to load the plugins view
-    // instead of chat.
-    const paneId = paneState.rootPaneId;
-    const pane = paneId ? paneState.panes.find((p) => p.id === paneId) : null;
-    const existing = pane?.tabIds.find((t) => t.startsWith("scope:plugins:"));
-    if (existing) {
-      const next = switchTabInPane(paneState, paneId!, existing);
-      await writePaneState(next);
-      return;
-    }
-    const tabId = `scope:plugins:${nanoid()}`;
-    await updateWindowState((ws) => {
-      ws.sessions = [
-        ...ws.sessions,
-        { id: tabId, agentId: "", lastViewedAt: null },
-      ];
-    });
-    if (paneId) {
-      const next = addTabToPane(paneState, paneId, tabId);
-      await writePaneState(next);
-    } else {
-      const initial = initPaneState([tabId], tabId);
-      await writePaneState(initial);
-    }
-  }, [paneState, writePaneState, updateWindowState]);
-
-  const handleSwitchTab = useCallback(
-    async (tabId: string) => {
-      const paneId = paneState.rootPaneId;
-      if (!paneId) return;
-      const pane = paneState.panes.find((p) => p.id === paneId);
-      const oldActiveTabId = pane?.activeTabId;
-      const next = switchTabInPane(paneState, paneId, tabId);
-      await writePaneState(next);
-      if (oldActiveTabId !== tabId) {
-        await updateWindowState((ws) => {
-          const now = Date.now();
-          for (const s of ws.sessions) {
-            if (s.id === oldActiveTabId) s.lastViewedAt = now;
-            if (s.id === tabId) s.lastViewedAt = null;
-          }
-        });
-      }
-    },
-    [paneState, writePaneState, updateWindowState],
-  );
-
-  const handleCloseTab = useCallback(
-    async (tabId: string) => {
-      const paneId = paneState.rootPaneId;
-      if (!paneId) return;
-      const confirmed = await rpc.window.confirm({
-        title: "Close chat?",
-        message: "You can always re-open this chat later.",
-        confirmLabel: "Close",
-        windowId: windowId!,
-      });
-      if (!confirmed) return;
-      await removeSession(tabId);
-      const next = closeTabInPane(paneState, paneId, tabId);
-      await writePaneState(next);
-    },
-    [paneState, removeSession, writePaneState],
-  );
-
-  const handleCloseTabQuiet = useCallback(
-    async (tabId: string) => {
-      const paneId = paneState.rootPaneId;
-      if (!paneId) return;
-      await removeSession(tabId);
-      const next = closeTabInPane(paneState, paneId, tabId);
-      await writePaneState(next);
-    },
-    [paneState, removeSession, writePaneState],
-  );
-
+  // Load an existing agent into a new chat view in this window. Used by
+  // the title-bar agent picker.
   const handleLoadAgent = useCallback(
     async (agentId: string) => {
-      const sessionId = await createSessionForAgent(agentId);
-      if (paneState.rootPaneId) {
-        const paneId = paneState.rootPaneId;
-        const pane = paneState.panes.find((p) => p.id === paneId);
-        const oldActiveTabId = pane?.activeTabId;
-        const next = addTabToPane(paneState, paneId, sessionId);
-        await writePaneState(next);
-        if (oldActiveTabId) {
-          await updateWindowState((ws) => {
-            const s = ws.sessions.find((s) => s.id === oldActiveTabId);
-            if (s) s.lastViewedAt = Date.now();
-          });
+      const newViewId = nanoid();
+      const now = Date.now();
+      await client.update((root) => {
+        const k = root.plugin.kernel;
+        // Determine sibling order: append after the highest existing order
+        // among views in this window.
+        let maxOrder = -1;
+        for (const v of k.views) {
+          if (v.windowId !== windowId) continue;
+          const o = k.viewState[v.id]?.order ?? 0;
+          if (o > maxOrder) maxOrder = o;
         }
-      } else {
-        const initial = initPaneState([sessionId], sessionId);
-        await writePaneState(initial);
-      }
+        k.views = [
+          ...k.views,
+          {
+            id: newViewId,
+            windowId: windowId!,
+            parentId: null,
+            scope: "chat",
+            params: { agentId },
+            createdAt: now,
+          },
+        ];
+        // Inherit sidebar state from the previously-active view for UX
+        // continuity (otherwise sidebars reset on every new tab).
+        const ws = k.windowState[windowId!];
+        const prevViewId = ws?.activeViewId ?? null;
+        const prev = prevViewId ? k.viewState[prevViewId] : null;
+        k.viewState = {
+          ...k.viewState,
+          [newViewId]: makeViewAppState(newViewId, {
+            order: maxOrder + 1,
+            sidebarOpen: prev?.sidebarOpen ?? false,
+            tabSidebarOpen: prev?.tabSidebarOpen ?? true,
+            sidebarPanel: prev?.sidebarPanel ?? "overview",
+            utilitySidebarSelected: prev?.utilitySidebarSelected ?? null,
+          }),
+        };
+        // Mark the previously-active view's agent as departed (for the
+        // unread-badge state machine on agentState).
+        if (prevViewId) {
+          const prevView = k.views.find((v) => v.id === prevViewId);
+          const prevAgentId =
+            prevView?.scope === "chat" ? prevView.params.agentId : undefined;
+          if (prevAgentId) {
+            const prevAS = k.agentState[prevAgentId];
+            k.agentState = {
+              ...k.agentState,
+              [prevAgentId]: prevAS
+                ? { ...prevAS, lastViewedAt: now }
+                : makeAgentAppState(prevAgentId, { lastViewedAt: now }),
+            };
+          }
+        }
+        // Activate the new view.
+        if (ws) {
+          k.windowState = {
+            ...k.windowState,
+            [windowId!]: { ...ws, activeViewId: newViewId },
+          };
+        }
+        // Clear unread on the loaded agent.
+        const cur = k.agentState[agentId];
+        k.agentState = {
+          ...k.agentState,
+          [agentId]: cur
+            ? { ...cur, lastViewedAt: null }
+            : makeAgentAppState(agentId, { lastViewedAt: null }),
+        };
+      });
     },
-    [paneState, createSessionForAgent, writePaneState, updateWindowState],
+    [client],
   );
 
   const handleSelectWorkspace = useCallback(
@@ -1022,17 +782,19 @@ function OrchestratorContent() {
         console.error("[orchestrator] activateWorkspace failed:", e);
       }
     },
-    [rpc, windowId],
+    [rpc],
   );
 
+  // Per-view sidebar toggle: writes to viewState[activeViewId].sidebarOpen.
+  // Falls back to a no-op if there's no active view (nothing to toggle on).
   const toggleSidebar = useCallback(() => {
-    const map = client.plugin.kernel.sidebarOpenByWindow.read() ?? {};
-    const current = typeof map[windowId!] === "boolean" ? map[windowId!] : true;
-    client.plugin.kernel.sidebarOpenByWindow.set({
-      ...map,
-      [windowId!]: !current,
-    });
-  }, [client, windowId]);
+    if (!activeViewId) return;
+    const cur = client.plugin.kernel.viewState.read()?.[activeViewId];
+    if (!cur) return;
+    const next = { ...cur, sidebarOpen: !cur.sidebarOpen };
+    const all = client.plugin.kernel.viewState.read() ?? {};
+    client.plugin.kernel.viewState.set({ ...all, [activeViewId]: next });
+  }, [client, activeViewId]);
 
   const rootFocusRef = useRef<HTMLDivElement>(null);
   useFocusOnRequest("orchestrator", () => {
@@ -1040,13 +802,12 @@ function OrchestratorContent() {
     rootFocusRef.current?.focus();
   });
 
-  const rootPane = useMemo(
-    () =>
-      paneState.panes.find(
-        (p) => p.id === paneState.rootPaneId && p.type === "leaf",
-      ) ?? null,
-    [paneState],
-  );
+  // Keep references to fields that exist for the lint pass; the orchestrator
+  // itself doesn't render the tab UI (workspace iframe does).
+  void workspaceCwds;
+  void defaultCwd;
+  void useCollection;
+  void agents;
 
   return (
     <div

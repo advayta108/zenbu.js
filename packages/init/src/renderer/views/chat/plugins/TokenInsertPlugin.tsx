@@ -12,21 +12,20 @@ import { subscribeTokenInsert, subscribeTokenUpgrade } from "../lib/token-bus";
 
 /**
  * Subscribes to window-scoped insert/upgrade events and applies them to the
- * Lexical editor. Filters on `agentId` — there's only one composer mounted
- * per iframe, so sessionId narrowing is redundant for now (an insert sent
- * to the wrong iframe simply never reaches here via the RPC bridge, which
- * already filters on windowId+session).
+ * Lexical editor. Filters on `viewId` - there's exactly one composer
+ * per view (rendered into one iframe), so a viewId match is the precise
+ * "this insert is for me" check.
  *
  * `localId` in the TokenPayload's data is used to find a previously-inserted
  * transient node on upgrade. We stash it in the payload's `data._localId`
  * so it's round-trippable through persistence.
  */
-export function TokenInsertPlugin({ agentId }: { agentId: string }) {
+export function TokenInsertPlugin({ viewId }: { viewId: string }) {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
     const unsubInsert = subscribeTokenInsert((d) => {
-      if (d.agentId !== agentId) return;
+      if (d.viewId !== viewId) return;
       editor.update(() => {
         const payload = { ...d.payload };
         if (d.localId) {
@@ -40,7 +39,7 @@ export function TokenInsertPlugin({ agentId }: { agentId: string }) {
     });
 
     const unsubUpgrade = subscribeTokenUpgrade((d) => {
-      if (d.agentId !== agentId) return;
+      if (d.viewId !== viewId) return;
       editor.update(() => {
         const existing = findTokenByLocalId($getRoot(), d.localId);
         if (existing) {
@@ -56,7 +55,7 @@ export function TokenInsertPlugin({ agentId }: { agentId: string }) {
       unsubInsert();
       unsubUpgrade();
     };
-  }, [editor, agentId]);
+  }, [editor, viewId]);
 
   return null;
 }

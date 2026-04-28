@@ -45,7 +45,6 @@ export interface DispatchContext {
    */
   originScope: string;
   windowId: string | null;
-  paneId: string | null;
 }
 
 type ParsedBinding = {
@@ -205,7 +204,6 @@ export class ShortcutService extends Service {
     id: string,
     scope: string,
     windowId: string | null,
-    paneId: string | null,
   ): Promise<{ ok: boolean }> {
     // De-dup the dual-capture race: a captureAtWebContents shortcut fired
     // from inside a zenbu iframe can trip both the renderer capture and the
@@ -220,7 +218,7 @@ export class ShortcutService extends Service {
     const effectiveScope = entry?.scope ?? scope ?? "global";
     const originScope = scope ?? effectiveScope;
     console.log(
-      `[shortcut] dispatch "${id}" scope=${effectiveScope} origin=${originScope} windowId=${windowId} paneId=${paneId}`,
+      `[shortcut] dispatch "${id}" scope=${effectiveScope} origin=${originScope} windowId=${windowId}`,
     );
 
     const ctx: DispatchContext = {
@@ -228,7 +226,6 @@ export class ShortcutService extends Service {
       scope: effectiveScope,
       originScope,
       windowId,
-      paneId,
     };
 
     if (entry?.handler) {
@@ -245,7 +242,6 @@ export class ShortcutService extends Service {
         scope: effectiveScope,
         originScope,
         windowId,
-        paneId,
         ts: Date.now(),
       });
     } catch (err) {
@@ -296,7 +292,7 @@ export class ShortcutService extends Service {
           const focusedWindowId =
             this.ctx.db.effectClient.readRoot().plugin.kernel
               .focusedWindowId ?? null;
-          void this.dispatch(entry.id, entry.scope, focusedWindowId, null);
+          void this.dispatch(entry.id, entry.scope, focusedWindowId);
           return;
         }
       };

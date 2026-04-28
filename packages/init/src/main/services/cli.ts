@@ -10,6 +10,7 @@ import { RpcService } from "./rpc";
 import { WorkspaceService } from "./workspace";
 import { INTERNAL_DIR, RUNTIME_JSON } from "../../../shared/paths";
 import { MAIN_WINDOW_ID } from "../../../shared/schema";
+import { makeWindowAppState } from "../../../shared/agent-ops";
 
 const DB_PATH = path.join(process.cwd(), ".zenbu", "db");
 
@@ -86,13 +87,15 @@ export class CliService extends Service {
     const client = this.ctx.db.effectClient;
     const root = client.readRoot();
     const kernel = root.plugin.kernel;
-    const active = kernel.activeWorkspaceByWindow ?? {};
 
     let targetWindowId: string | null = null;
 
     if (mode === "default") {
-      for (const [wid, wsId] of Object.entries(active)) {
-        if (wsId === workspaceId && this.ctx.baseWindow.windows.has(wid)) {
+      for (const [wid, ws] of Object.entries(kernel.windowState)) {
+        if (
+          ws.activeWorkspaceId === workspaceId &&
+          this.ctx.baseWindow.windows.has(wid)
+        ) {
           targetWindowId = wid;
           break;
         }
@@ -115,20 +118,12 @@ export class CliService extends Service {
       const windowId = nanoid();
       await Effect.runPromise(
         client.update((root) => {
-          root.plugin.kernel.windowStates = [
-            ...root.plugin.kernel.windowStates,
-            {
-              id: windowId,
-              sessions: [],
-              panes: [],
-              rootPaneId: null,
-              focusedPaneId: null,
-              sidebarOpen: false,
-              tabSidebarOpen: true,
-              sidebarPanel: "overview",
-              persisted: false,
-            },
-          ];
+          const k = root.plugin.kernel;
+          k.windows = [...k.windows, { id: windowId, persisted: false }];
+          k.windowState = {
+            ...k.windowState,
+            [windowId]: makeWindowAppState(windowId),
+          };
         }),
       );
       this.ctx.baseWindow.createWindow({ windowId });

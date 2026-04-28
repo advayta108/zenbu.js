@@ -6,20 +6,22 @@ import { AgentService } from "./agent"
 import {
   insertHotAgent,
   validSelectionFromTemplate,
+  makeViewAppState,
+  makeAgentAppState,
   type ArchivedAgent,
 } from "../../../shared/agent-ops"
 
 /**
- * Backs `rpc.kernel.promoteNewAgentTab`: replaces a `new-agent:<nanoid>`
- * sentinel tab in a window's pane with a real agent + session. Prefers
- * the head of the warm pool (`PooledAgentService`); if the pool is empty
- * (e.g. cold start before the first refill, or the user opens new agents
- * faster than the pool can refill) it falls back to creating one inline.
+ * Backs `rpc.new-agent.promoteNewAgentTab`: replaces a `new-agent`-scoped
+ * sentinel view with a real chat-scoped view. Prefers the head of the
+ * warm pool (`PooledAgentService`); if the pool is empty (e.g. cold start
+ * before the first refill, or the user opens new agents faster than the
+ * pool can refill) it falls back to creating one inline.
  *
  * The new-agent onboarding view (`views/new-agent`) is rendered into the
- * sentinel tab. When the user submits a message there, the renderer calls
- * this method to swap the sentinel for a real chat session in the same
- * pane slot, then sends the prompt over `rpc.agent.send`.
+ * sentinel view. When the user submits a message there, the renderer calls
+ * this method to swap the sentinel for a real chat view in the same window
+ * slot, then sends the prompt over `rpc.agent.send`.
  */
 export class NewAgentService extends Service {
   static key = "new-agent"
@@ -28,23 +30,23 @@ export class NewAgentService extends Service {
 
   async promoteNewAgentTab(args: {
     windowId: string
-    sentinelTabId: string
+    sentinelViewId: string
     cwd?: string
     workspaceId?: string
-  }): Promise<{ agentId: string; sessionId: string }> {
-    const { windowId, sentinelTabId, cwd, workspaceId } = args
+  }): Promise<{ agentId: string; viewId: string }> {
+    const { windowId, sentinelViewId, cwd, workspaceId } = args
     const client = this.ctx.db.client
     const kernel = client.readRoot().plugin.kernel as any
 
     const head = (kernel.pool ?? [])[0] as
-      | { agentId: string; sessionId: string }
+      | { agentId: string }
       | undefined
 
     if (head) {
       return await this.promoteFromPool({
         head,
         windowId,
-        sentinelTabId,
+        sentinelViewId,
         cwd,
         workspaceId,
       })
@@ -52,63 +54,101 @@ export class NewAgentService extends Service {
 
     return await this.promoteInline({
       windowId,
-      sentinelTabId,
+      sentinelViewId,
       cwd,
       workspaceId,
     })
   }
 
   /**
-   * Atomic update: pop pool head, swap sentinel tabId for sessionId in
-   * the pane, append the session row. If the user picked a cwd different
-   * from the pool agent's seed, write it through `agent.changeCwd` after
-   * the swap so the running process picks it up before the renderer's
-   * subsequent `rpc.agent.send` lands.
+   * Atomic update: pop pool head, replace the sentinel view's entity row
+   * (in `kernel.views`) with a chat-scoped view referencing the popped
+   * agent, and update the active-view pointer if the sentinel was active.
+   * If the user picked a cwd different from the pool agent's seed, write
+   * it through `agent.changeCwd` after the swap so the running process
+   * picks it up before the renderer's subsequent `rpc.agent.send` lands.
    *
    * The race guard inside the update transaction protects against another
    * promote / pool prune landing between read and write.
    */
   private async promoteFromPool(args: {
-    head: { agentId: string; sessionId: string }
+    head: { agentId: string }
     windowId: string
-    sentinelTabId: string
+    sentinelViewId: string
     cwd?: string
     workspaceId?: string
-  }): Promise<{ agentId: string; sessionId: string }> {
-    const { head, windowId, sentinelTabId, cwd, workspaceId } = args
+  }): Promise<{ agentId: string; viewId: string }> {
+    const { head, windowId, sentinelViewId, cwd, workspaceId } = args
     const client = this.ctx.db.client
-    const { agentId, sessionId } = head
+    const { agentId } = head
+    const viewId = nanoid()
 
-    await client.update((root: any) => {
+    await client.update((root) => {
       const k = root.plugin.kernel
       if (k.pool[0]?.agentId !== agentId) {
         throw new Error("[new-agent] pool head changed mid-promote")
       }
       k.pool = k.pool.slice(1)
 
-      // The pool agent was created without a workspace binding; apply
-      // the caller's workspaceId now so the sidebar groups it correctly.
+      // Bind the agent to the active workspace (explicit, app-state).
       if (workspaceId) {
-        const a = k.agents.find((x: any) => x.id === agentId)
-        if (a) a.workspaceId = workspaceId
+        const existing = k.agentState[agentId]
+        k.agentState = {
+          ...k.agentState,
+          [agentId]: existing
+            ? { ...existing, workspaceId }
+            : makeAgentAppState(agentId, { workspaceId }),
+        }
       }
 
-      const ws = k.windowStates.find((w: any) => w.id === windowId)
-      if (!ws) return
-      ws.sessions = [
-        ...ws.sessions,
-        { id: sessionId, agentId, lastViewedAt: null },
+      // Find the sentinel view and replace it with a chat-scoped view.
+      // The view id changes (we mint a fresh id at promote time); the
+      // sentinel view's id was a `new-agent:<nanoid>` value before the
+      // refactor, but post-refactor sentinels are normal nanoid view ids
+      // - we still mint a fresh chat view id and remove the sentinel.
+      const sentinelIdx = k.views.findIndex((v) => v.id === sentinelViewId)
+      if (sentinelIdx === -1) return
+
+      const sentinel = k.views[sentinelIdx]
+      const sentinelOrder = k.viewState[sentinelViewId]?.order ?? 0
+
+      const chatView = {
+        id: viewId,
+        windowId,
+        parentId: sentinel.parentId ?? null,
+        scope: "chat",
+        params: { agentId },
+        createdAt: Date.now(),
+      }
+      k.views = [
+        ...k.views.slice(0, sentinelIdx),
+        chatView,
+        ...k.views.slice(sentinelIdx + 1),
       ]
-      const pane = ws.panes.find((p: any) =>
-        (p.tabIds ?? []).includes(sentinelTabId),
-      )
-      if (!pane) return
-      const idx = pane.tabIds.indexOf(sentinelTabId)
-      if (idx < 0) return
-      const next = [...pane.tabIds]
-      next[idx] = sessionId
-      pane.tabIds = next
-      if (pane.activeTabId === sentinelTabId) pane.activeTabId = sessionId
+
+      // Carry forward the sidebar state from the sentinel; chat view
+      // starts with no draft / no pendingCwd.
+      const sentinelState = k.viewState[sentinelViewId]
+      const newViewState = makeViewAppState(viewId, {
+        order: sentinelOrder,
+        sidebarOpen: sentinelState?.sidebarOpen ?? false,
+        tabSidebarOpen: sentinelState?.tabSidebarOpen ?? true,
+        sidebarPanel: sentinelState?.sidebarPanel ?? "overview",
+        utilitySidebarSelected: sentinelState?.utilitySidebarSelected ?? null,
+      })
+      const nextViewState = { ...k.viewState }
+      delete nextViewState[sentinelViewId]
+      nextViewState[viewId] = newViewState
+      k.viewState = nextViewState
+
+      // If the sentinel was the active view, promote the new view.
+      const ws = k.windowState[windowId]
+      if (ws && ws.activeViewId === sentinelViewId) {
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: { ...ws, activeViewId: viewId },
+        }
+      }
     })
 
     // If the user picked a cwd different from the pool seed, propagate
@@ -126,21 +166,21 @@ export class NewAgentService extends Service {
       }
     }
 
-    return { agentId, sessionId }
+    return { agentId, viewId }
   }
 
   /**
-   * Fallback when the pool is empty. Creates a fresh agent + session and
-   * fires `agent.init` async — same shape as the pre-pool implementation,
+   * Fallback when the pool is empty. Creates a fresh agent + view and
+   * fires `agent.init` async - same shape as the pre-pool implementation,
    * kept so an empty pool degrades to the old behavior instead of throwing.
    */
   private async promoteInline(args: {
     windowId: string
-    sentinelTabId: string
+    sentinelViewId: string
     cwd?: string
     workspaceId?: string
-  }): Promise<{ agentId: string; sessionId: string }> {
-    const { windowId, sentinelTabId, cwd, workspaceId } = args
+  }): Promise<{ agentId: string; viewId: string }> {
+    const { windowId, sentinelViewId, cwd, workspaceId } = args
     const client = this.ctx.db.client
     const kernel = client.readRoot().plugin.kernel as any
 
@@ -153,18 +193,18 @@ export class NewAgentService extends Service {
     }
 
     const agentId = nanoid()
-    const sessionId = nanoid()
+    const viewId = nanoid()
     const seeded = validSelectionFromTemplate(selectedConfig)
 
     let evicted: ArchivedAgent[] = []
     await client.update((root: any) => {
-      evicted = insertHotAgent(root.plugin.kernel, {
+      const k = root.plugin.kernel
+      evicted = insertHotAgent(k, {
         id: agentId,
         name: selectedConfig.name,
         startCommand: selectedConfig.startCommand,
         configId: selectedConfig.id,
         metadata: cwd ? { cwd } : {},
-        workspaceId,
         eventLog: makeCollection({
           collectionId: nanoid(),
           debugName: "eventLog",
@@ -179,24 +219,53 @@ export class NewAgentService extends Service {
         queuedMessages: [],
       })
 
-      const ws = root.plugin.kernel.windowStates.find(
-        (w: any) => w.id === windowId,
-      )
-      if (!ws) return
-      ws.sessions = [
-        ...ws.sessions,
-        { id: sessionId, agentId, lastViewedAt: null },
+      // Bind workspace if provided.
+      if (workspaceId) {
+        k.agentState = {
+          ...k.agentState,
+          [agentId]: makeAgentAppState(agentId, { workspaceId }),
+        }
+      }
+
+      // Replace the sentinel view with a chat-scoped view.
+      const sentinelIdx = k.views.findIndex((v) => v.id === sentinelViewId)
+      if (sentinelIdx === -1) return
+
+      const sentinel = k.views[sentinelIdx]
+      const sentinelOrder = k.viewState[sentinelViewId]?.order ?? 0
+      const chatView = {
+        id: viewId,
+        windowId,
+        parentId: sentinel.parentId ?? null,
+        scope: "chat",
+        params: { agentId },
+        createdAt: Date.now(),
+      }
+      k.views = [
+        ...k.views.slice(0, sentinelIdx),
+        chatView,
+        ...k.views.slice(sentinelIdx + 1),
       ]
-      const pane = ws.panes.find((p: any) =>
-        (p.tabIds ?? []).includes(sentinelTabId),
-      )
-      if (!pane) return
-      const idx = pane.tabIds.indexOf(sentinelTabId)
-      if (idx < 0) return
-      const next = [...pane.tabIds]
-      next[idx] = sessionId
-      pane.tabIds = next
-      if (pane.activeTabId === sentinelTabId) pane.activeTabId = sessionId
+
+      const sentinelState = k.viewState[sentinelViewId]
+      const nextViewState = { ...k.viewState }
+      delete nextViewState[sentinelViewId]
+      nextViewState[viewId] = makeViewAppState(viewId, {
+        order: sentinelOrder,
+        sidebarOpen: sentinelState?.sidebarOpen ?? false,
+        tabSidebarOpen: sentinelState?.tabSidebarOpen ?? true,
+        sidebarPanel: sentinelState?.sidebarPanel ?? "overview",
+        utilitySidebarSelected: sentinelState?.utilitySidebarSelected ?? null,
+      })
+      k.viewState = nextViewState
+
+      const ws = k.windowState[windowId]
+      if (ws && ws.activeViewId === sentinelViewId) {
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: { ...ws, activeViewId: viewId },
+        }
+      }
     })
 
     if (evicted.length > 0) {
@@ -211,7 +280,7 @@ export class NewAgentService extends Service {
         console.error("[new-agent] agent init failed:", err),
       )
 
-    return { agentId, sessionId }
+    return { agentId, viewId }
   }
 
   evaluate() {}

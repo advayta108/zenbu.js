@@ -6,16 +6,15 @@ export type ZenbuEvents = {
   }
   insert: {
     /**
-     * Emitted by `InsertService.insertToken` when a target session is live
-     * (focused window + focused pane + activeTabId match). The focused
-     * composer's `InsertBridgePlugin` translates this back into the local
-     * token bus so the Lexical insert happens on the correct editor
-     * instance.
+     * Emitted by `InsertService.insertToken` when a target view is live
+     * (focused window + activeViewId match). The focused composer's
+     * `InsertBridgePlugin` translates this back into the local token bus
+     * so the Lexical insert happens on the correct editor instance.
      */
     requested: {
       requestId: string
       windowId: string
-      sessionId: string
+      viewId: string
       agentId: string
       payload: TokenPayload
       ts: number
@@ -29,7 +28,7 @@ export type ZenbuEvents = {
     exit: { sessionId: string; exitCode: number }
   }
   shortcut: {
-    dispatched: { id: string; scope: string; originScope: string; windowId: string | null; paneId: string | null; ts: number }
+    dispatched: { id: string; scope: string; originScope: string; windowId: string | null; ts: number }
   }
   setup: {
     /** A line of stdout/stderr from a setup.ts subprocess, streamed live. */

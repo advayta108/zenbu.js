@@ -139,15 +139,22 @@ export class WorkspaceService extends Service {
     const client = this.ctx.db.effectClient
     await Effect.runPromise(
       client.update((root) => {
-        root.plugin.kernel.workspaces = (root.plugin.kernel.workspaces ?? []).filter(
-          (w) => w.id !== id,
-        )
-        const active = root.plugin.kernel.activeWorkspaceByWindow ?? {}
-        const nextActive: Record<string, string> = {}
-        for (const [wid, wsId] of Object.entries(active)) {
-          if (wsId !== id) nextActive[wid] = wsId as string
+        const k = root.plugin.kernel
+        k.workspaces = k.workspaces.filter((w) => w.id !== id)
+        // Clear `activeWorkspaceId` from any window that pointed here.
+        const nextWindowState: typeof k.windowState = {}
+        for (const wid of Object.keys(k.windowState)) {
+          const ws = k.windowState[wid]
+          nextWindowState[wid] =
+            ws.activeWorkspaceId === id
+              ? { ...ws, activeWorkspaceId: null }
+              : ws
         }
-        root.plugin.kernel.activeWorkspaceByWindow = nextActive
+        k.windowState = nextWindowState
+        // Drop the workspaceState row.
+        const nextWorkspaceState = { ...k.workspaceState }
+        delete nextWorkspaceState[id]
+        k.workspaceState = nextWorkspaceState
       }),
     )
     console.log(`[workspace] deleted ${id}`)
@@ -176,7 +183,8 @@ export class WorkspaceService extends Service {
   ): Promise<void> {
     const client = this.ctx.db.effectClient
     const root = this.ctx.db.client.readRoot()
-    const prevId = root.plugin.kernel.activeWorkspaceByWindow?.[windowId]
+    const prevId =
+      root.plugin.kernel.windowState[windowId]?.activeWorkspaceId ?? null
 
     if (prevId && prevId !== workspaceId) {
       const prevCtx = this.getWorkspaceContext(prevId)
@@ -187,60 +195,70 @@ export class WorkspaceService extends Service {
 
     await Effect.runPromise(
       client.update((root) => {
-        root.plugin.kernel.activeWorkspaceByWindow = {
-          ...(root.plugin.kernel.activeWorkspaceByWindow ?? {}),
-          [windowId]: workspaceId,
-        }
+        const k = root.plugin.kernel
+        const ws = k.windowState[windowId]
+        if (!ws) return
 
-        const ws = (root.plugin.kernel.windowStates ?? []).find(
-          (w) => w.id === windowId,
-        )
-        if (!ws || !ws.rootPaneId) return
-        const pane = (ws.panes ?? []).find((p) => p.id === ws.rootPaneId)
-        if (!pane || pane.type !== "leaf") return
-
-        const workspace = (root.plugin.kernel.workspaces ?? []).find(
-          (w) => w.id === workspaceId,
-        )
-        const cwds = new Set<string>(workspace?.cwds ?? [])
-        const sessions = ws.sessions ?? []
-        const agents = root.plugin.kernel.agents ?? []
-
-        const tabMatchesWorkspace = (tabId: string): boolean => {
-          if (tabId.startsWith("new-agent:") || tabId.startsWith("scope:")) {
-            return false
+        // Persist last-active-view for the previous workspace, so re-entry
+        // restores it.
+        if (prevId && ws.activeViewId) {
+          const prevState = k.workspaceState[prevId]
+          k.workspaceState = {
+            ...k.workspaceState,
+            [prevId]: prevState
+              ? { ...prevState, lastViewId: ws.activeViewId }
+              : { workspaceId: prevId, lastViewId: ws.activeViewId },
           }
-          const session = sessions.find((s) => s.id === tabId)
-          if (!session) return false
-          const agent = agents.find((a) => a.id === session.agentId)
-          const cwd =
-            typeof agent?.metadata?.cwd === "string"
-              ? agent.metadata.cwd
-              : ""
-          return cwd === "" || cwds.has(cwd)
         }
 
-        const lastTab =
-          root.plugin.kernel.lastTabByWorkspace?.[workspaceId]
+        // Switch the window to the new workspace.
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: { ...ws, activeWorkspaceId: workspaceId },
+        }
+
+        // Pick the active view: either the last view we left this
+        // workspace on, or the most-recent chat view bound to this
+        // workspace, otherwise the first view in this window.
+        const viewMatchesWorkspace = (viewId: string): boolean => {
+          const view = k.views.find((v) => v.id === viewId)
+          if (!view) return false
+          if (view.windowId !== windowId) return false
+          if (view.scope !== "chat") return false
+          const agentId = view.params.agentId
+          if (!agentId) return false
+          const bound = k.agentState[agentId]?.workspaceId ?? null
+          // Unbound agents (legacy / warm-pool) are visible everywhere;
+          // bound agents only match their own workspace.
+          return bound === null || bound === workspaceId
+        }
+
+        const lastViewId = k.workspaceState[workspaceId]?.lastViewId ?? null
 
         let target: string | undefined
-        if (
-          lastTab &&
-          pane.tabIds.includes(lastTab) &&
-          tabMatchesWorkspace(lastTab)
-        ) {
-          target = lastTab
+        if (lastViewId && viewMatchesWorkspace(lastViewId)) {
+          target = lastViewId
         } else {
-          for (let i = pane.tabIds.length - 1; i >= 0; i--) {
-            if (tabMatchesWorkspace(pane.tabIds[i])) {
-              target = pane.tabIds[i]
-              break
-            }
-          }
+          // Find the most-recent chat view in this window matching workspace,
+          // ordered by viewState.order descending.
+          const candidates = k.views
+            .filter((v) => v.windowId === windowId && viewMatchesWorkspace(v.id))
+            .sort(
+              (a, b) =>
+                (k.viewState[b.id]?.order ?? 0) -
+                (k.viewState[a.id]?.order ?? 0),
+            )
+          target = candidates[0]?.id
         }
 
-        if (target && target !== pane.activeTabId) {
-          pane.activeTabId = target
+        if (target && target !== ws.activeViewId) {
+          k.windowState = {
+            ...k.windowState,
+            [windowId]: {
+              ...k.windowState[windowId],
+              activeViewId: target,
+            },
+          }
         }
       }),
     )
@@ -261,7 +279,8 @@ export class WorkspaceService extends Service {
 
   async deactivateWorkspace(windowId: string): Promise<void> {
     const root = this.ctx.db.client.readRoot()
-    const prevId = root.plugin.kernel.activeWorkspaceByWindow?.[windowId]
+    const prevId =
+      root.plugin.kernel.windowState[windowId]?.activeWorkspaceId ?? null
 
     if (prevId) {
       const prevCtx = this.getWorkspaceContext(prevId)
@@ -273,9 +292,25 @@ export class WorkspaceService extends Service {
     const client = this.ctx.db.effectClient
     await Effect.runPromise(
       client.update((root) => {
-        const active = { ...(root.plugin.kernel.activeWorkspaceByWindow ?? {}) }
-        delete active[windowId]
-        root.plugin.kernel.activeWorkspaceByWindow = active
+        const k = root.plugin.kernel
+        const ws = k.windowState[windowId]
+        if (!ws) return
+
+        // Persist last-active-view before clearing.
+        if (prevId && ws.activeViewId) {
+          const prevState = k.workspaceState[prevId]
+          k.workspaceState = {
+            ...k.workspaceState,
+            [prevId]: prevState
+              ? { ...prevState, lastViewId: ws.activeViewId }
+              : { workspaceId: prevId, lastViewId: ws.activeViewId },
+          }
+        }
+
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: { ...ws, activeWorkspaceId: null },
+        }
       }),
     )
   }

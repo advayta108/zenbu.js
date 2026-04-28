@@ -8,7 +8,7 @@
 //   3. Listen for keydown on the orchestrator window (capture phase) AND for
 //      "zenbu-shortcut:keydown" messages from child iframes. Feed both into
 //      a single ChordMatcher.
-//   4. On match: call `rpc.shortcut.dispatch(id, scope, windowId, paneId)`.
+//   4. On match: call `rpc.shortcut.dispatch(id, scope, windowId)`.
 //      Main process runs backend handler (if any) and emits the
 //      `shortcut.dispatched` event, which `useShortcutHandler` subscribers
 //      filter locally.
@@ -48,6 +48,18 @@ export function useShortcutIframeRegistry(): IframeRegistry {
   return ctx;
 }
 
+/**
+ * No-throw variant for components that may be rendered outside a
+ * `ShortcutForwarderProvider`. Currently used by `ActiveView`, which is
+ * rendered both inside the orchestrator iframe (provider present) and
+ * inside the workspace iframe (separate React tree, no provider). Iframe
+ * shortcut forwarding is per-tree; the workspace iframe's children just
+ * don't get registered with the orchestrator's matcher.
+ */
+export function useShortcutIframeRegistryOptional(): IframeRegistry | null {
+  return useContext(IframeRegistryContext);
+}
+
 type CaptureLock = {
   acquire: () => () => void;
 };
@@ -77,22 +89,12 @@ export function ShortcutForwarderProvider({
 }) {
   const rpc = useRpc();
 
-  const registry = (useDb((root: any) => root.plugin.kernel.shortcutRegistry) ??
-    []) as { id: string; defaultBinding: string; description: string; scope: string }[];
-  const overrides = (useDb(
-    (root: any) => root.plugin.kernel.shortcutOverrides,
-  ) ?? {}) as Record<string, string>;
-  const disabled = (useDb(
-    (root: any) => root.plugin.kernel.shortcutDisabled,
-  ) ?? []) as string[];
+  const registry = useDb((root) => root.plugin.kernel.shortcutRegistry) ?? [];
+  const overrides =
+    useDb((root) => root.plugin.kernel.shortcutOverrides) ?? {};
+  const disabled = useDb((root) => root.plugin.kernel.shortcutDisabled) ?? [];
 
-  const windowStates = useDb(
-    (root: any) => root.plugin.kernel.windowStates,
-  ) as Array<{ id: string; focusedPaneId?: string | null }> | undefined;
-  const focusedPaneId =
-    windowStates?.find((ws) => ws.id === windowId)?.focusedPaneId ?? null;
-  const focusedPaneIdRef = useRef(focusedPaneId);
-  focusedPaneIdRef.current = focusedPaneId;
+  // Focus is window-level only post-refactor (no panes).
 
   const resolved: ResolvedBinding[] = useMemo(
     () => buildResolvedBindings(registry, overrides, disabled),
@@ -159,12 +161,11 @@ export function ShortcutForwarderProvider({
 
   const dispatchMatch = useCallback(
     (binding: ResolvedBinding) => {
-      const paneId = focusedPaneIdRef.current;
       console.log(
-        `[shortcut-forwarder] match "${binding.id}" scope=${binding.scope} paneId=${paneId}`,
+        `[shortcut-forwarder] match "${binding.id}" scope=${binding.scope}`,
       );
       void rpc.shortcut
-        .dispatch(binding.id, binding.scope, windowId, paneId)
+        .dispatch(binding.id, binding.scope, windowId)
         .catch((err: unknown) => {
           console.error(`[shortcut-forwarder] dispatch failed:`, err);
         });
@@ -201,13 +202,28 @@ export function ShortcutForwarderProvider({
 
   // Messages from child iframes.
   useEffect(() => {
+    type IframeKeydownMessage = {
+      type: "zenbu-shortcut:keydown";
+      combo: string;
+      scope: string;
+    };
+    const isIframeKeydownMessage = (
+      v: unknown,
+    ): v is IframeKeydownMessage => {
+      if (!v || typeof v !== "object") return false;
+      const m = v as Partial<IframeKeydownMessage>;
+      return (
+        m.type === "zenbu-shortcut:keydown" &&
+        typeof m.combo === "string" &&
+        typeof m.scope === "string"
+      );
+    };
+
     const onMessage = (e: MessageEvent) => {
-      const data = e.data;
-      if (!data || typeof data !== "object") return;
-      if (data.type !== "zenbu-shortcut:keydown") return;
+      if (!isIframeKeydownMessage(e.data)) return;
       if (captureLocksRef.current > 0) return;
 
-      const combo = data.combo as string;
+      const { combo, scope } = e.data;
       if (!combo) return;
 
       const result = matcherRef.current.processCombo(
@@ -222,7 +238,7 @@ export function ShortcutForwarderProvider({
         const b = result.binding;
         dispatchMatch({
           ...b,
-          scope: b.scope === "global" ? (data.scope as string) : b.scope,
+          scope: b.scope === "global" ? scope : b.scope,
         });
         return;
       }

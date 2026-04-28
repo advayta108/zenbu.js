@@ -24,8 +24,10 @@ import { registerAdvice, registerContentScript } from "./advice-config";
 import {
   insertHotAgent,
   validSelectionFromTemplate,
-  findExistingAgentTab,
-  activateAgentTab,
+  findExistingViewForAgent,
+  activateView,
+  makeViewAppState,
+  makeWindowAppState,
   type ArchivedAgent,
 } from "../../../shared/agent-ops";
 import { bootBus } from "../../../shared/boot-bus";
@@ -63,7 +65,7 @@ export class WindowService extends Service {
     string,
     {
       sourceWindowId: string;
-      sessionId: string;
+      viewId: string;
       agentId: string;
     }
   >();
@@ -79,7 +81,7 @@ export class WindowService extends Service {
 
     const windowId = nanoid();
     const agentId = nanoid();
-    const sessionId = nanoid();
+    const viewId = nanoid();
 
     const seeded = validSelectionFromTemplate(selectedConfig);
 
@@ -106,20 +108,26 @@ export class WindowService extends Service {
           createdAt: Date.now(),
           queuedMessages: [],
         });
-        k.windowStates = [
-          ...k.windowStates,
+        k.windows = [...k.windows, { id: windowId, persisted: false }];
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: makeWindowAppState(windowId, { activeViewId: viewId }),
+        };
+        k.views = [
+          ...k.views,
           {
-            id: windowId,
-            sessions: [{ id: sessionId, agentId, lastViewedAt: null }],
-            panes: [],
-            rootPaneId: null,
-            focusedPaneId: null,
-            sidebarOpen: false,
-            tabSidebarOpen: true,
-            sidebarPanel: "overview",
-            persisted: false,
+            id: viewId,
+            windowId,
+            parentId: null,
+            scope: "chat",
+            params: { agentId },
+            createdAt: Date.now(),
           },
         ];
+        k.viewState = {
+          ...k.viewState,
+          [viewId]: makeViewAppState(viewId, { order: 0 }),
+        };
       }),
     );
     if (evicted.length > 0) {
@@ -145,11 +153,11 @@ export class WindowService extends Service {
 
     if (!lastAgent) return this.createWindowWithAgent();
 
-    const existing = findExistingAgentTab(kernel.windowStates, lastAgent.id);
+    const existing = findExistingViewForAgent(kernel.views, lastAgent.id);
     if (existing) {
       await Effect.runPromise(
         client.update((root) => {
-          activateAgentTab(root.plugin.kernel, existing);
+          activateView(root.plugin.kernel, existing);
         }),
       );
       const win = baseWindow.windows.get(existing.windowId);
@@ -158,25 +166,30 @@ export class WindowService extends Service {
     }
 
     const windowId = nanoid();
-    const sessionId = nanoid();
+    const viewId = nanoid();
     await Effect.runPromise(
       client.update((root) => {
-        root.plugin.kernel.windowStates = [
-          ...root.plugin.kernel.windowStates,
+        const k = root.plugin.kernel;
+        k.windows = [...k.windows, { id: windowId, persisted: false }];
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: makeWindowAppState(windowId, { activeViewId: viewId }),
+        };
+        k.views = [
+          ...k.views,
           {
-            id: windowId,
-            sessions: [
-              { id: sessionId, agentId: lastAgent.id, lastViewedAt: null },
-            ],
-            panes: [],
-            rootPaneId: null,
-            focusedPaneId: null,
-            sidebarOpen: false,
-            tabSidebarOpen: true,
-            sidebarPanel: "overview",
-            persisted: false,
+            id: viewId,
+            windowId,
+            parentId: null,
+            scope: "chat",
+            params: { agentId: lastAgent.id },
+            createdAt: Date.now(),
           },
         ];
+        k.viewState = {
+          ...k.viewState,
+          [viewId]: makeViewAppState(viewId, { order: 0 }),
+        };
       }),
     );
 
@@ -235,24 +248,23 @@ export class WindowService extends Service {
 
   async moveTabToNewWindow(opts: {
     sourceWindowId: string;
-    sessionId: string;
+    viewId: string;
   }): Promise<{ windowId: string } | null> {
     const { baseWindow, db } = this.ctx;
     const client = db.effectClient;
     const kernel = client.readRoot().plugin.kernel;
 
-    const sourceWinState = (kernel.windowStates ?? []).find(
-      (ws) => ws.id === opts.sourceWindowId,
+    const sourceWindow = kernel.windows.find(
+      (w) => w.id === opts.sourceWindowId,
     );
-    if (!sourceWinState) return null;
+    if (!sourceWindow) return null;
 
-    const session = sourceWinState.sessions.find(
-      (s) => s.id === opts.sessionId,
+    const view = kernel.views.find(
+      (v) => v.id === opts.viewId && v.windowId === opts.sourceWindowId,
     );
-    if (!session) return null;
+    if (!view) return null;
 
     const windowId = nanoid();
-    const newSessionId = nanoid();
 
     const sourceWin = baseWindow.windows.get(opts.sourceWindowId);
     const bounds = sourceWin?.getBounds();
@@ -260,33 +272,25 @@ export class WindowService extends Service {
     await Effect.runPromise(
       client.update((root) => {
         const k = root.plugin.kernel;
-        k.windowStates = [
-          ...(k.windowStates ?? []),
-          {
-            id: windowId,
-            sessions: [
-              {
-                id: newSessionId,
-                agentId: session.agentId,
-                lastViewedAt: null,
-              },
-            ],
-            panes: [],
-            rootPaneId: null,
-            focusedPaneId: null,
-            sidebarOpen: false,
-            tabSidebarOpen: true,
-            sidebarPanel: "overview",
-            persisted: false,
-          },
-        ];
-        const srcWs = k.windowStates.find(
-          (ws) => ws.id === opts.sourceWindowId,
+        k.windows = [...k.windows, { id: windowId, persisted: false }];
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: makeWindowAppState(windowId, {
+            activeViewId: opts.viewId,
+          }),
+        };
+        // Move the view to the new window: just rewrite its windowId.
+        k.views = k.views.map((v) =>
+          v.id === opts.viewId ? { ...v, windowId } : v,
         );
-        if (srcWs) {
-          srcWs.sessions = srcWs.sessions.filter(
-            (s) => s.id !== opts.sessionId,
-          );
+        // Source window's activeViewId may have pointed at the moved view;
+        // clear it to fall back to whatever else is in that window.
+        const srcWs = k.windowState[opts.sourceWindowId];
+        if (srcWs && srcWs.activeViewId === opts.viewId) {
+          k.windowState = {
+            ...k.windowState,
+            [opts.sourceWindowId]: { ...srcWs, activeViewId: null },
+          };
         }
       }),
     );
@@ -308,7 +312,7 @@ export class WindowService extends Service {
 
   async beginTabTearOff(opts: {
     sourceWindowId: string;
-    sessionId: string;
+    viewId: string;
     screenX: number;
     screenY: number;
   }): Promise<{ previewWindowId: string } | null> {
@@ -316,28 +320,31 @@ export class WindowService extends Service {
     const client = db.effectClient;
     const kernel = client.readRoot().plugin.kernel;
 
-    const sourceWinState = (kernel.windowStates ?? []).find(
-      (ws) => ws.id === opts.sourceWindowId,
+    const view = kernel.views.find(
+      (v) => v.id === opts.viewId && v.windowId === opts.sourceWindowId,
     );
-    if (!sourceWinState) return null;
+    if (!view) return null;
 
-    const session = sourceWinState.sessions.find(
-      (s) => s.id === opts.sessionId,
-    );
-    if (!session) return null;
+    const agentId = view.params.agentId ?? "";
 
-    const agentId = session.agentId;
-
+    // Hide the view from the source window during the drag preview by
+    // moving it to a sentinel windowId we keep in pendingTearOffs. On
+    // cancel, we restore. On finalize, we move it to the new real window.
     await Effect.runPromise(
       client.update((root) => {
-        const srcWs = (root.plugin.kernel.windowStates ?? []).find(
-          (ws) => ws.id === opts.sourceWindowId,
-        );
-        if (srcWs) {
-          srcWs.sessions = srcWs.sessions.filter(
-            (s) => s.id !== opts.sessionId,
-          );
+        const k = root.plugin.kernel;
+        const srcWs = k.windowState[opts.sourceWindowId];
+        if (srcWs && srcWs.activeViewId === opts.viewId) {
+          k.windowState = {
+            ...k.windowState,
+            [opts.sourceWindowId]: { ...srcWs, activeViewId: null },
+          };
         }
+        // Park the view: clear its windowId so the source's tab bar
+        // (filtered by windowId) drops it. We restore on cancel.
+        k.views = k.views.map((v) =>
+          v.id === opts.viewId ? { ...v, windowId: "__tearoff__" } : v,
+        );
       }),
     );
 
@@ -398,7 +405,7 @@ export class WindowService extends Service {
         let screenshotDataUrl = "";
         if (coreEntry && chatRegistry) {
           const chatPath = new URL(chatRegistry.url).pathname;
-          const chatUrl = `http://localhost:${http.port}${chatPath}/index.html?agentId=${agentId}&wsPort=${http.port}&wsToken=${encodeURIComponent(http.authToken)}`;
+          const chatUrl = `http://localhost:${http.port}${chatPath}/index.html?agentId=${agentId}&viewId=${opts.viewId}&wsPort=${http.port}&wsToken=${encodeURIComponent(http.authToken)}`;
 
           const offscreen = new WebContentsView({
             webPreferences: {
@@ -447,7 +454,7 @@ export class WindowService extends Service {
     this.previewWindows.set(previewId, preview);
     this.pendingTearOffs.set(previewId, {
       sourceWindowId: opts.sourceWindowId,
-      sessionId: opts.sessionId,
+      viewId: opts.viewId,
       agentId,
     });
 
@@ -499,7 +506,6 @@ export class WindowService extends Service {
     const client = db.effectClient;
 
     const windowId = nanoid();
-    const newSessionId = nanoid();
 
     const sourceWin = baseWindow.windows.get(pending.sourceWindowId);
     const sourceBounds = sourceWin?.getBounds();
@@ -509,29 +515,17 @@ export class WindowService extends Service {
     await Effect.runPromise(
       client.update((root) => {
         const k = root.plugin.kernel;
-        k.windowStates = [
-          ...(k.windowStates ?? []),
-          {
-            id: windowId,
-            sessions: [
-              {
-                id: newSessionId,
-                agentId: pending.agentId,
-                lastViewedAt: null,
-              },
-            ],
-            panes: [],
-            rootPaneId: null,
-            focusedPaneId: null,
-            sidebarOpen: false,
-            tabSidebarOpen: true,
-            sidebarPanel: "overview",
-            /**
-             * come back to this
-             */
-            persisted: false,
-          },
-        ];
+        k.windows = [...k.windows, { id: windowId, persisted: false }];
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: makeWindowAppState(windowId, {
+            activeViewId: pending.viewId,
+          }),
+        };
+        // Move the parked view to the new window.
+        k.views = k.views.map((v) =>
+          v.id === pending.viewId ? { ...v, windowId } : v,
+        );
       }),
     );
 
@@ -546,6 +540,8 @@ export class WindowService extends Service {
     }
 
     this._mountNewWindows?.();
+    this.pendingTearOffs.delete(opts.previewWindowId);
+    this.previewWindows.delete(opts.previewWindowId);
     return { windowId };
   }
 
@@ -561,18 +557,23 @@ export class WindowService extends Service {
       const client = this.ctx.db.effectClient;
       await Effect.runPromise(
         client.update((root) => {
-          const srcWs = (root.plugin.kernel.windowStates ?? []).find(
-            (ws) => ws.id === pending.sourceWindowId,
+          const k = root.plugin.kernel;
+          // Restore the parked view back to its source window.
+          k.views = k.views.map((v) =>
+            v.id === pending.viewId
+              ? { ...v, windowId: pending.sourceWindowId }
+              : v,
           );
+          // Re-activate it in the source window.
+          const srcWs = k.windowState[pending.sourceWindowId];
           if (srcWs) {
-            srcWs.sessions = [
-              ...srcWs.sessions,
-              {
-                id: pending.sessionId,
-                agentId: pending.agentId,
-                lastViewedAt: null,
+            k.windowState = {
+              ...k.windowState,
+              [pending.sourceWindowId]: {
+                ...srcWs,
+                activeViewId: pending.viewId,
               },
-            ];
+            };
           }
         }),
       );
@@ -780,9 +781,24 @@ export class WindowService extends Service {
         const onClosed = () => {
           Effect.runPromise(
             db.effectClient.update((root) => {
-              root.plugin.kernel.windowStates = (
-                root.plugin.kernel.windowStates ?? []
-              ).filter((ws) => ws.id !== windowId || ws.persisted === true);
+              const k = root.plugin.kernel;
+              const win = k.windows.find((w) => w.id === windowId);
+              // Persisted windows survive close (e.g. the main window).
+              if (win?.persisted) return;
+              k.windows = k.windows.filter((w) => w.id !== windowId);
+              const nextWindowState = { ...k.windowState };
+              delete nextWindowState[windowId];
+              k.windowState = nextWindowState;
+              // Drop views belonging to this window, plus their state.
+              const droppedViewIds = new Set<string>(
+                k.views.filter((v) => v.windowId === windowId).map((v) => v.id),
+              );
+              if (droppedViewIds.size > 0) {
+                k.views = k.views.filter((v) => v.windowId !== windowId);
+                const nextViewState = { ...k.viewState };
+                for (const id of droppedViewIds) delete nextViewState[id];
+                k.viewState = nextViewState;
+              }
             }),
           ).catch(() => {});
         };

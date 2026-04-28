@@ -9,7 +9,7 @@ import { useEffect, useId, useLayoutEffect, useRef } from "react"
  * browsers) while still giving each slot its own "window" over the page.
  *
  * Intended consumers:
- *  - `LeafPane` (renders chat tabs and hits this cache per tabId)
+ *  - `ActiveView` (renders the active view in a window and hits this cache per viewId)
  *  - Preload drivers that want an iframe to be warm before anything
  *    actually claims it (e.g. the pooled-agent preload).
  *

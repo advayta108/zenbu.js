@@ -387,7 +387,7 @@ export class AgentService extends Service {
     agentId: string,
     text: string,
     images?: ImageRef[],
-    opts?: { cwd?: string },
+    opts?: { cwd?: string; viewId?: string },
   ) {
     // Apply any pending config (cwd today; model/thinkingLevel/mode later)
     // before resolving the process, so `ensureProcess` sees the new cwd.
@@ -400,17 +400,24 @@ export class AgentService extends Service {
       }
     }
 
-    // Clear pending state for this agent — the send consumes it.
-    await this.ctx.db.client
-      .update((root) => {
-        const pending = root.plugin.kernel.composerPending;
-        if (pending[agentId]) {
-          const next = { ...pending };
-          delete next[agentId];
-          root.plugin.kernel.composerPending = next;
-        }
-      })
-      .catch(() => {});
+    // Clear pending state for this view - the send consumes it. The caller
+    // passes `viewId` when the send originates from a known composer; if
+    // absent (e.g. external CLI sends without a UI view), there's nothing
+    // to clear.
+    if (opts?.viewId) {
+      const viewId = opts.viewId;
+      await this.ctx.db.client
+        .update((root) => {
+          const cur = root.plugin.kernel.viewState[viewId];
+          if (cur && cur.pendingCwd != null) {
+            root.plugin.kernel.viewState = {
+              ...root.plugin.kernel.viewState,
+              [viewId]: { ...cur, pendingCwd: null },
+            };
+          }
+        })
+        .catch(() => {});
+    }
 
     const agent = await this.ensureProcess(agentId);
 

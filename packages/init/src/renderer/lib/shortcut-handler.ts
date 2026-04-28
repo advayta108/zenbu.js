@@ -21,24 +21,20 @@ export interface ShortcutHandlerCtx {
   scope: string;
   originScope: string;
   windowId: string | null;
-  paneId: string | null;
 }
 
 /**
  * Resolve identity info from the current iframe's URL. Every iframe (and
- * the orchestrator) is loaded with `?windowId=`; `?paneId=` is added by
- * LeafPane when rendering view iframes. Orchestrator has windowId but no
- * paneId.
+ * the orchestrator) is loaded with `?windowId=`. Per-pane identity is gone
+ * post-refactor (focus is window-level only).
  */
 function useIframeIdentity(): {
   scope: string;
   windowId: string | null;
-  paneId: string | null;
 } {
   const ref = useRef<{
     scope: string;
     windowId: string | null;
-    paneId: string | null;
   } | null>(null);
   if (ref.current) return ref.current;
   const params = new URLSearchParams(window.location.search);
@@ -51,7 +47,6 @@ function useIframeIdentity(): {
   ref.current = {
     scope,
     windowId: params.get("windowId"),
-    paneId: params.get("paneId"),
   };
   return ref.current;
 }
@@ -59,14 +54,14 @@ function useIframeIdentity(): {
 /**
  * Read focused window id from Kyju (main-process OS-level focus). The
  * per-iframe focus check is done via `document.hasFocus()` inside
- * `matchesPredicate` — Kyju's `focusedPaneId` is just the active tab slot,
- * which isn't the same as "the user is actually typing into this iframe".
+ * `matchesPredicate` - that is the real answer for "the user is actually
+ * typing into this iframe right now".
  */
-function useFocusedIds(): { windowId: string | null; paneId: string | null } {
+function useFocusedIds(): { windowId: string | null } {
   const focusedWindowId = useDb(
     (root: any) => root.plugin.kernel.focusedWindowId,
   ) as string | null | undefined;
-  return { windowId: focusedWindowId ?? null, paneId: null };
+  return { windowId: focusedWindowId ?? null };
 }
 
 function matchesPredicate(
@@ -74,9 +69,8 @@ function matchesPredicate(
   self: {
     scope: string;
     windowId: string | null;
-    paneId: string | null;
   },
-  focused: { windowId: string | null; paneId: string | null },
+  focused: { windowId: string | null },
 ): boolean {
   if ("always" in pred && pred.always) return true;
 
@@ -87,10 +81,8 @@ function matchesPredicate(
   if ("focused" in pred && pred.focused) {
     if (!focused.windowId) return false;
     if (self.windowId !== focused.windowId) return false;
-    // The Kyju `focusedPaneId` is really "which tab slot is active" — it
-    // doesn't track whether the *OS focus* is inside the iframe or on the
-    // orchestrator shell. `document.hasFocus()` is the real answer: true iff
-    // this frame is what the user is typing into right now.
+    // `document.hasFocus()` is the real answer for OS focus: true iff this
+    // frame is what the user is typing into right now.
     if (typeof document !== "undefined" && !document.hasFocus()) return false;
     if (pred.scope && self.scope !== pred.scope) return false;
     return true;

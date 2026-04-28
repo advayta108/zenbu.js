@@ -76,9 +76,8 @@ export class ToolService extends Service {
   }
 
   private getAgentWorkspaceId(agentId: string): string | undefined {
-    const agents = this.ctx.db.client.readRoot().plugin.kernel.agents ?? [];
-    const agent = agents.find((a: any) => a.id === agentId);
-    return agent?.workspaceId;
+    const kernel = this.ctx.db.client.readRoot().plugin.kernel;
+    return kernel.agentState[agentId]?.workspaceId ?? undefined;
   }
 
   private refreshImplementation() {

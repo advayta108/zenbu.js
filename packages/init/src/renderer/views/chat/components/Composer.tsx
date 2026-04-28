@@ -21,7 +21,6 @@ import { ImagePastePlugin } from "../plugins/ImagePastePlugin";
 import {
   DraftPersistencePlugin,
   getInitialEditorState,
-  restoreChatBlobs,
 } from "../plugins/DraftPersistencePlugin";
 import { SlashCommandPlugin } from "../commands/SlashCommandPlugin";
 import { ReloadMenu } from "../commands/ReloadMenu";
@@ -347,6 +346,7 @@ function AgentConfigCombobox({
 
 export function Composer({
   agentId,
+  viewId,
   scrollToBottom,
   debugExpectedVisibleMessageRef,
   slot,
@@ -354,6 +354,7 @@ export function Composer({
   onSubmit,
 }: {
   agentId: string;
+  viewId: string;
   scrollToBottom?: () => void;
   debugExpectedVisibleMessageRef?: React.MutableRefObject<ExpectedVisibleMessage | null>;
   slot?: React.ReactNode;
@@ -394,14 +395,10 @@ export function Composer({
   }, [reloadMenuOpen]);
 
   const initialEditorConfig = useMemo(
-    () => makeEditorConfig(getInitialEditorState(client, agentId)),
+    () => makeEditorConfig(getInitialEditorState(client, viewId)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [agentId],
+    [viewId],
   );
-
-  useEffect(() => {
-    restoreChatBlobs(client, agentId);
-  }, [agentId, client]);
 
   const handleSubmit = useCallback(
     async (
@@ -409,44 +406,23 @@ export function Composer({
       images: CollectedImage[],
       editorStateJson: unknown,
     ) => {
-      // Clear draft for this agent
-      const drafts = client.plugin.kernel.composerDrafts.read() ?? {};
-      if (drafts[agentId]) {
-        const next = { ...drafts };
-        delete next[agentId];
-        client.plugin.kernel.composerDrafts.set(next);
+      // Clear draft + blobs for this view.
+      const viewStateRecord = client.plugin.kernel.viewState.read() ?? {};
+      const cur = viewStateRecord[viewId];
+      if (cur && cur.draft != null) {
+        client.plugin.kernel.viewState.set({
+          ...viewStateRecord,
+          [viewId]: { ...cur, draft: null },
+        });
       }
 
       console.log("sending", text);
-
-      // if (streaming) {
-      //   // Interrupt with prompt — server handles event log ordering
-      //   // (interrupted event, then user_prompt, then sends to agent)
-      //   try {
-      //     console.log('interrupt');
-
-      //     await rpc.agent.interrupt(
-      //       agentId,
-      //       text,
-      //       images.length > 0 ? images : undefined,
-      //     );
-      //   } catch (err) {
-      //     console.error("[composer] rpc.agent.interrupt failed", err);
-      //   }
-      //   if (images.length > 0) {
-      //     client.plugin.kernel.chatBlobs.set([]).catch(() => {});
-      //   }
-      //   return;
-      // }
 
       if (onSubmit) {
         try {
           await onSubmit(text, images, editorStateJson);
         } catch (err) {
           console.error("[composer] onSubmit override failed", err);
-        }
-        if (images.length > 0) {
-          client.plugin.kernel.chatBlobs.set([]).catch(() => {});
         }
         return;
       }
@@ -473,9 +449,6 @@ export function Composer({
           });
         } catch (err) {
           console.error("[composer] queue append failed", err);
-        }
-        if (images.length > 0) {
-          client.plugin.kernel.chatBlobs.set([]).catch(() => {});
         }
         return;
       }
@@ -518,23 +491,23 @@ export function Composer({
         });
       }
 
-      const pending = client.plugin.kernel.composerPending.read()?.[agentId];
+      const pendingCwd =
+        client.plugin.kernel.viewState.read()?.[viewId]?.pendingCwd ?? null;
       try {
         await rpc.agent.send(
           agentId,
           text,
           images.length > 0 ? images : undefined,
-          pending?.cwd ? { cwd: pending.cwd } : undefined,
+          {
+            ...(pendingCwd ? { cwd: pendingCwd } : {}),
+            viewId,
+          },
         );
       } catch (err) {
         console.error("[composer] rpc.agent.send failed", err);
       }
-
-      if (images.length > 0) {
-        client.plugin.kernel.chatBlobs.set([]).catch(() => {});
-      }
     },
-    [rpc, agentId, client, streaming, debugExpectedVisibleMessageRef, onSubmit],
+    [rpc, agentId, viewId, client, streaming, debugExpectedVisibleMessageRef, onSubmit],
   );
 
   const handleConfigChange = useCallback(
@@ -598,11 +571,11 @@ export function Composer({
           />
           <AutoFocusPlugin />
           <FilePickerPlugin menuOpenRef={filePickerOpenRef} agentId={agentId} />
-          <ImagePastePlugin agentId={agentId} />
-          <TokenInsertPlugin agentId={agentId} />
-          <InsertBridgePlugin agentId={agentId} />
-          <DraftPersistencePlugin agentId={agentId} />
-          <RefocusRehydratePlugin agentId={agentId} />
+          <ImagePastePlugin viewId={viewId} agentId={agentId} />
+          <TokenInsertPlugin viewId={viewId} />
+          <InsertBridgePlugin viewId={viewId} agentId={agentId} />
+          <DraftPersistencePlugin viewId={viewId} />
+          <RefocusRehydratePlugin viewId={viewId} />
           <SlashCommandPlugin
             menuOpenRef={slashMenuOpenRef}
             agentId={agentId}

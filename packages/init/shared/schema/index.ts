@@ -2,7 +2,6 @@ import zod from "zod";
 import {
   createSchema,
   f,
-  makeCollection,
   type InferSchema,
   type InferRoot,
 } from "@zenbu/kyju/schema";
@@ -17,32 +16,54 @@ export type {
   ArchivedAgentRecord,
 } from "@zenbu/agent/src/schema";
 
-const paneSchema = zod.object({
+const windowSchema = zod.object({
   id: zod.string(),
-  type: zod.enum(["leaf", "split"]),
-  orientation: zod.enum(["horizontal", "vertical"]).optional(),
-  children: zod.array(zod.string()).default([]),
-  tabIds: zod.array(zod.string()).default([]),
-  activeTabId: zod.string().optional(),
-  sizes: zod.array(zod.number()).default([50, 50]),
+  persisted: zod.boolean().default(false),
 });
 
-const sessionSchema = zod.object({
+const viewSchema = zod.object({
   id: zod.string(),
-  agentId: zod.string(),
-  lastViewedAt: zod.number().nullable().default(null),
+  windowId: zod.string(),
+  parentId: zod.string().nullable().default(null),
+  scope: zod.string(),
+  params: zod.record(zod.string(), zod.string()).default({}),
+  createdAt: zod.number(),
 });
 
-const windowStateSchema = zod.object({
-  id: zod.string(),
-  sessions: zod.array(sessionSchema).default([]),
-  panes: zod.array(paneSchema).default([]),
-  rootPaneId: zod.string().nullable().default(null),
-  focusedPaneId: zod.string().nullable().default(null),
+const windowAppStateSchema = zod.object({
+  windowId: zod.string(),
+  activeViewId: zod.string().nullable().default(null),
+  activeWorkspaceId: zod.string().nullable().default(null),
+});
+
+const viewAppStateSchema = zod.object({
+  viewId: zod.string(),
+  draft: zod
+    .object({
+      editorState: zod.unknown().nullable().default(null),
+      blobs: zod
+        .array(zod.object({ blobId: zod.string(), mimeType: zod.string() }))
+        .default([]),
+    })
+    .nullable()
+    .default(null),
+  pendingCwd: zod.string().nullable().default(null),
+  order: zod.number().default(0),
   sidebarOpen: zod.boolean().default(false),
   tabSidebarOpen: zod.boolean().default(true),
   sidebarPanel: zod.string().default("overview"),
-  persisted: zod.boolean().default(false),
+  utilitySidebarSelected: zod.string().nullable().default(null),
+});
+
+const agentAppStateSchema = zod.object({
+  agentId: zod.string(),
+  lastViewedAt: zod.number().nullable().default(null),
+  workspaceId: zod.string().nullable().default(null),
+});
+
+const workspaceAppStateSchema = zod.object({
+  workspaceId: zod.string(),
+  lastViewId: zod.string().nullable().default(null),
 });
 
 const workspaceIconSchema = zod.object({
@@ -62,9 +83,6 @@ const workspaceSchema = zod.object({
 export const MAIN_WINDOW_ID = "main";
 
 export const appSchema = createSchema({
-  // Agent package owns shapes (`agentConfigs`, `agents`, `archivedAgents`,
-  // `hotAgentsCap`, `skillRoots`). Init provides host-specific defaults for
-  // `agentConfigs` by overriding the field definition after the spread.
   ...agentSchemaFragment,
   agentConfigs: f.array(agentConfigSchema).default([
     {
@@ -118,20 +136,8 @@ export const appSchema = createSchema({
   selectedConfigId: f.string().default("claude"),
   summarizationAgentConfigId: f.string().nullable().default(null),
   summarizationModel: f.string().nullable().default(null),
-  sessions: f
-    .array(
-      zod.object({
-        id: zod.string(),
-        agentId: zod.string(),
-      }),
-    )
-    .default([]),
   orchestratorViewPath: f.string().default("/views/orchestrator/index.html"),
-  sidebarOpen: f.boolean().default(false),
-  tabSidebarOpen: f.boolean().default(true),
-  sidebarPanel: f.string().default("overview"),
   viewRegistry: f
-    //
     .array(
       zod.object({
         scope: zod.string(),
@@ -148,34 +154,11 @@ export const appSchema = createSchema({
       }),
     )
     .default([]),
-  views: f
-    .array(
-      zod.object({
-        id: zod.string(),
-        type: zod.string(),
-        title: zod.string(),
-        createdAt: zod.number(),
-        active: zod.boolean(),
-        agentId: zod.string().optional(),
-        cwd: zod.string().optional(),
-      }),
-    )
-    .default([]),
-  panes: f
-    .array(
-      zod.object({
-        id: zod.string(),
-        type: zod.enum(["leaf", "split"]),
-        orientation: zod.enum(["horizontal", "vertical"]).optional(),
-        children: zod.array(zod.string()).default([]),
-        tabIds: zod.array(zod.string()).default([]),
-        activeTabId: zod.string().optional(),
-        sizes: zod.array(zod.number()).default([50, 50]),
-      }),
-    )
-    .default([]),
-  rootPaneId: f.string().default(""),
-  focusedPaneId: f.string().default(""),
+  windows: f.array(windowSchema).default([]),
+  windowState: f.record(zod.string(), windowAppStateSchema).default({}),
+  views: f.array(viewSchema).default([]),
+  viewState: f.record(zod.string(), viewAppStateSchema).default({}),
+  agentState: f.record(zod.string(), agentAppStateSchema).default({}),
   commands: f
     .array(
       zod.object({
@@ -189,34 +172,6 @@ export const appSchema = createSchema({
       }),
     )
     .default([]),
-  chatBlobs: f
-    .array(
-      zod.object({
-        blobId: zod.string(),
-        mimeType: zod.string(),
-      }),
-    )
-    .default([]),
-  composerDrafts: f
-    .record(
-      zod.string(),
-      zod.object({
-        editorState: zod.unknown(),
-        chatBlobs: zod
-          .array(zod.object({ blobId: zod.string(), mimeType: zod.string() }))
-          .default([]),
-      }),
-    )
-    .default({}),
-  composerPending: f
-    .record(
-      zod.string(),
-      zod.object({
-        cwd: zod.string().optional(),
-      }),
-    )
-    .default({}),
-  windowStates: f.array(windowStateSchema).default([]),
   majorMode: f.string().default("fundamental-mode"),
   minorModes: f.array(zod.string()).default([]),
   focusedWindowId: f.string().nullable().default(null),
@@ -232,13 +187,9 @@ export const appSchema = createSchema({
     .default([]),
   shortcutOverrides: f.record(zod.string(), zod.string()).default({}),
   shortcutDisabled: f.array(zod.string()).default([]),
-  // Declarative focus-request channel. Writers set target + windowId + nonce;
-  // views subscribe via `useFocusOnRequest` and focus their own DOM when a
-  // request matches them. Nonce ensures repeated requests re-trigger even
-  // when target/windowId are unchanged.
   focusRequestTarget: f.string().nullable().default(null),
   focusRequestWindowId: f.string().nullable().default(null),
-  focusRequestNonce: f.string().default(""), // empty string fixme
+  focusRequestNonce: f.string().default(""),
   updateState: f
     .object({
       status: zod
@@ -271,19 +222,11 @@ export const appSchema = createSchema({
       dismissedVersion: null,
     }),
   workspaces: f.array(workspaceSchema).default([]),
-  activeWorkspaceByWindow: f.record(zod.string(), zod.string()).default({}),
-  sidebarOpenByWindow: f.record(zod.string(), zod.boolean()).default({}),
-  lastTabByWorkspace: f.record(zod.string(), zod.string()).default({}),
-  utilitySidebarSelectedByWindow: f.record(zod.string(), zod.string()).default({}),
-  // Warm pool of pre-created agent rows. `NewAgentService.promoteNewAgentTab`
-  // consumes the head entry on submit so the user gets a ready agent instead
-  // of waiting on a fresh `agent.init`. `PooledAgentService` keeps
-  // `pool.length === poolSize` by subscribing to the field.
+  workspaceState: f.record(zod.string(), workspaceAppStateSchema).default({}),
   pool: f
     .array(
       zod.object({
         agentId: zod.string(),
-        sessionId: zod.string(),
       }),
     )
     .default([]),
@@ -294,3 +237,10 @@ export const schema = appSchema;
 
 export type AppSchema = InferSchema<typeof appSchema>;
 export type SchemaRoot = InferRoot<AppSchema>;
+
+export type Window = zod.infer<typeof windowSchema>;
+export type View = zod.infer<typeof viewSchema>;
+export type WindowAppState = zod.infer<typeof windowAppStateSchema>;
+export type ViewAppState = zod.infer<typeof viewAppStateSchema>;
+export type AgentAppState = zod.infer<typeof agentAppStateSchema>;
+export type WorkspaceAppState = zod.infer<typeof workspaceAppStateSchema>;

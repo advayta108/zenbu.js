@@ -28,13 +28,13 @@ export class PooledAgentService extends Service {
 
   evaluate() {
     this.setup("pool-subscribe", () => {
-      const effectClient = this.ctx.db.effectClient as any
+      const effectClient = this.ctx.db.effectClient 
 
       // Prune orphaned pool entries (their agent row may have been
       // evicted by `hotAgentsCap`), then kick one refill. Further
       // refills are driven by the subscriptions below: whenever the DB
       // reports a new value and we're below poolSize, we add one. Don't
-      // loop in-memory — we must wait for each update's new state to
+      // loop in-memory - we must wait for each update's new state to
       // propagate before deciding whether to add another.
       void (async () => {
         await this.pruneOrphans()
@@ -68,7 +68,7 @@ export class PooledAgentService extends Service {
   /**
    * Adds at most one pool entry per call, gated by an in-flight promise.
    * After the entry lands in the DB, the `pool` subscribe callback fires
-   * again — if we're still below `poolSize`, that triggers the next add.
+   * again - if we're still below `poolSize`, that triggers the next add.
    * Never loops in-memory: two reads of `pool.length` after an update
    * can disagree until the kyju client has applied the write locally,
    * which is what caused a previous infinite-spawn bug in agent-sidebar.
@@ -103,31 +103,29 @@ export class PooledAgentService extends Service {
       return
     }
 
-    // Seed cwd from the focused window's active session's agent, falling
+    // Seed cwd from the focused window's active view's agent, falling
     // back to the active workspace's first cwd, then `~/.zenbu`. Never
-    // default to `$HOME` — FileScannerService installs a recursive
+    // default to `$HOME` - FileScannerService installs a recursive
     // fs.watch and watching home pegs CPU. The user's pick at promote
     // time runs through `changeCwd` so a wrong seed is recoverable.
     const focusedWindowId = kernel.focusedWindowId
-    const focusedWin = focusedWindowId
-      ? kernel.windowStates.find((w) => w.id === focusedWindowId)
+    const focusedWs = focusedWindowId
+      ? kernel.windowState[focusedWindowId]
       : undefined
-    const focusedPane = focusedWin?.focusedPaneId
-      ? focusedWin.panes.find((p) => p.id === focusedWin.focusedPaneId)
+    const focusedActiveViewId = focusedWs?.activeViewId ?? null
+    const focusedView = focusedActiveViewId
+      ? kernel.views.find((v) => v.id === focusedActiveViewId)
       : undefined
-    const focusedSession = focusedPane?.activeTabId
-      ? focusedWin?.sessions.find((s) => s.id === focusedPane.activeTabId)
-      : undefined
-    const focusedAgent = focusedSession
-      ? kernel.agents.find((a) => a.id === focusedSession.agentId)
+    const focusedAgentId =
+      focusedView?.scope === "chat" ? focusedView.params.agentId : undefined
+    const focusedAgent = focusedAgentId
+      ? kernel.agents.find((a) => a.id === focusedAgentId)
       : undefined
     const focusedAgentCwd =
       typeof focusedAgent?.metadata?.cwd === "string"
         ? focusedAgent.metadata.cwd
         : undefined
-    const activeWorkspaceId = focusedWindowId
-      ? kernel.activeWorkspaceByWindow?.[focusedWindowId]
-      : undefined
+    const activeWorkspaceId = focusedWs?.activeWorkspaceId ?? null
     const activeWorkspace = activeWorkspaceId
       ? kernel.workspaces.find((w) => w.id === activeWorkspaceId)
       : undefined
@@ -137,7 +135,6 @@ export class PooledAgentService extends Service {
       path.join(os.homedir(), ".zenbu")
 
     const agentId = nanoid()
-    const sessionId = nanoid()
     const seeded = validSelectionFromTemplate(selectedConfig)
 
     let evicted: ArchivedAgent[] = []
@@ -164,7 +161,7 @@ export class PooledAgentService extends Service {
       } as any)
       // Append to pool AFTER the row exists so subscribers never see a
       // dangling id.
-      k.pool = [...k.pool, { agentId, sessionId }]
+      k.pool = [...k.pool, { agentId }]
     })
 
     if (evicted.length > 0) {

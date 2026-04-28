@@ -12,7 +12,7 @@
  * Round-trip invariant: this object is plain JSON. It is stored verbatim
  * inside a Lexical TokenNode, serialized by that node's exportJSON, and
  * re-imported by importJSON into an identical TokenNode. This is how
- * cross-session inserts survive being written to `composerDrafts` while
+ * cross-view inserts survive being written to `viewState[viewId].draft` while
  * the target composer is not live.
  */
 export type TokenBlob = {

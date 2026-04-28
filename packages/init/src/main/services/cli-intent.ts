@@ -3,6 +3,7 @@ import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { WorkspaceService } from "./workspace";
 import { MAIN_WINDOW_ID } from "../../../shared/schema";
+import { makeWindowAppState } from "../../../shared/agent-ops";
 
 type WindowMode = "default" | "reuse" | "new";
 
@@ -32,6 +33,7 @@ export class CliIntentService extends Service {
   declare ctx: {
     db: DbService;
     workspace: WorkspaceService;
+    // todo: why is this an any and not an import ref
     baseWindow: any;
   };
 
@@ -49,54 +51,88 @@ export class CliIntentService extends Service {
       client.update((root) => {
         const kernel = root.plugin.kernel;
 
-        // Prune orphaned windowStates (from prior cold-started sessions with
+        // Prune orphaned windows (from prior cold-started sessions with
         // no matching live Electron window). Persisted entries (e.g. the
         // main window) are the source of truth across processes and must
         // survive the prune even when no Electron window has adopted them
         // yet.
-        const liveWindowIds = new Set(this.ctx.baseWindow.windows.keys());
-        const prunedCount = kernel.windowStates.filter(
-          (ws) => !liveWindowIds.has(ws.id) && !ws.persisted,
-        ).length;
-        if (prunedCount > 0) {
-          kernel.windowStates = kernel.windowStates.filter(
-            (ws) => liveWindowIds.has(ws.id) || ws.persisted,
+        const liveWindowIds = new Set<string>(
+          this.ctx.baseWindow.windows.keys() as Iterable<string>,
+        );
+        const prunedWindows = kernel.windows.filter(
+          (w) => !liveWindowIds.has(w.id) && !w.persisted,
+        );
+        if (prunedWindows.length > 0) {
+          const droppedIds = new Set<string>(prunedWindows.map((w) => w.id));
+          kernel.windows = kernel.windows.filter((w) => !droppedIds.has(w.id));
+          // Drop their windowState rows.
+          const nextWindowState = { ...kernel.windowState };
+          for (const id of droppedIds) delete nextWindowState[id];
+          kernel.windowState = nextWindowState;
+          // Drop the views in those windows + their viewState rows.
+          const droppedViewIds = new Set<string>(
+            kernel.views.filter((v) => droppedIds.has(v.windowId)).map((v) => v.id),
           );
+          if (droppedViewIds.size > 0) {
+            kernel.views = kernel.views.filter(
+              (v) => !droppedIds.has(v.windowId),
+            );
+            const nextViewState = { ...kernel.viewState };
+            for (const id of droppedViewIds) delete nextViewState[id];
+            kernel.viewState = nextViewState;
+          }
           console.log(
-            `[cli-intent] pruned ${prunedCount} orphaned windowStates`,
+            `[cli-intent] pruned ${prunedWindows.length} orphaned windows`,
           );
         }
 
-        // Ensure the persisted main windowState exists. On first ever boot,
+        // Ensure the persisted main window exists. On first ever boot,
         // create it; on upgrade from pre-`persisted` DBs, self-heal the
-        // flag; always prune sessions whose agentId no longer exists.
-        let mainWs = kernel.windowStates.find((ws) => ws.id === MAIN_WINDOW_ID);
-        if (!mainWs) {
-          kernel.windowStates = [
-            ...kernel.windowStates,
-            {
-              id: MAIN_WINDOW_ID,
-              sessions: [],
-              panes: [],
-              rootPaneId: null,
-              focusedPaneId: null,
-              sidebarOpen: false,
-              tabSidebarOpen: true,
-              sidebarPanel: "overview",
-              persisted: true,
-            },
+        // flag; always prune chat views whose agentId no longer exists.
+        let mainWindow = kernel.windows.find((w) => w.id === MAIN_WINDOW_ID);
+        if (!mainWindow) {
+          kernel.windows = [
+            ...kernel.windows,
+            { id: MAIN_WINDOW_ID, persisted: true },
           ];
-        } else {
-          if (!mainWs.persisted) mainWs.persisted = true;
-          mainWs.sessions = mainWs.sessions.filter((s) =>
-            kernel.agents.some((a) => a.id === s.agentId),
+          kernel.windowState = {
+            ...kernel.windowState,
+            [MAIN_WINDOW_ID]:
+              kernel.windowState[MAIN_WINDOW_ID] ??
+              makeWindowAppState(MAIN_WINDOW_ID),
+          };
+          mainWindow = { id: MAIN_WINDOW_ID, persisted: true };
+        } else if (!mainWindow.persisted) {
+          kernel.windows = kernel.windows.map((w) =>
+            w.id === MAIN_WINDOW_ID ? { ...w, persisted: true } : w,
           );
+        }
+
+        // Prune chat views in the main window whose agentId no longer
+        // exists in kernel.agents.
+        const agentIds = new Set<string>(kernel.agents.map((a) => a.id));
+        const orphanedViewIds = new Set<string>(
+          kernel.views
+            .filter(
+              (v) =>
+                v.windowId === MAIN_WINDOW_ID &&
+                v.scope === "chat" &&
+                v.params.agentId &&
+                !agentIds.has(v.params.agentId),
+            )
+            .map((v) => v.id),
+        );
+        if (orphanedViewIds.size > 0) {
+          kernel.views = kernel.views.filter((v) => !orphanedViewIds.has(v.id));
+          const nextViewState = { ...kernel.viewState };
+          for (const id of orphanedViewIds) delete nextViewState[id];
+          kernel.viewState = nextViewState;
         }
       }),
     )
       .then(async () => {
         // Cold-boot only ever has one live window (the main one). `mode`
-        // doesn't matter here — there's nothing to reuse vs. new against.
+        // doesn't matter here - there's nothing to reuse vs. new against.
         // If the CLI passed a cwd, find/create its workspace and activate
         // it on main. Otherwise leave whatever was last active in place.
         if (cwd) {

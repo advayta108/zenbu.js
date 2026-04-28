@@ -4,8 +4,9 @@ import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { RpcService } from "./rpc";
 import {
-  findLiveSessionTab,
-  findAgentIdForSession,
+  findLiveViewTab,
+  findAgentIdForView,
+  makeViewAppState,
 } from "../../../shared/agent-ops";
 import { appendTokenToEditorState } from "../../../shared/editor-state";
 import type { TokenPayload } from "../../../shared/tokens";
@@ -16,20 +17,20 @@ export type InsertTokenResult = {
 };
 
 /**
- * Core-owned RPC entry point for "insert this token into that session's
+ * Core-owned RPC entry point for "insert this token into that view's
  * composer". Called by plugin callers (e.g. file-manager picker mode),
- * agents, the CLI — any code that has a sessionId + payload.
+ * agents, the CLI - any code that has a viewId + payload.
  *
- * Two paths, split by whether the session is the active tab of the focused
- * pane of the focused window:
+ * Two paths, split by whether the view is the active view of the focused
+ * window:
  *
  *  - Live: emit `insert.requested` via zenrpc. The focused composer's
  *    InsertBridgePlugin picks it up and hands it to the token-bus, which
  *    mutates the Lexical editor.
- *  - Not live (backgrounded tab / non-focused window / not mounted): write
- *    the TokenNode directly into the session's persisted draft. On next
- *    mount OR on refocus, the composer rehydrates from that draft and the
- *    pill appears.
+ *  - Not live (backgrounded view / non-focused window / not mounted): write
+ *    the TokenNode directly into the view's persisted draft on
+ *    `kernel.viewState[viewId]`. On next mount OR on refocus, the composer
+ *    rehydrates from that draft and the pill appears.
  *
  * TODO(crdt): This split exists only because we don't have a merge protocol
  * for two writers mutating editor state concurrently. With a CRDT we could
@@ -41,23 +42,20 @@ export class InsertService extends Service {
   declare ctx: { db: DbService; rpc: RpcService };
 
   async insertToken(args: {
-    sessionId: string;
+    viewId: string;
     payload: TokenPayload;
   }): Promise<InsertTokenResult> {
     const client = this.ctx.db.effectClient;
     const kernel = client.readRoot().plugin.kernel;
 
-    const live = findLiveSessionTab(kernel, args.sessionId);
+    const live = findLiveViewTab(kernel, args.viewId);
     if (live) {
-      const agentId = findAgentIdForSession(
-        kernel.windowStates,
-        args.sessionId,
-      );
+      const agentId = findAgentIdForView(kernel.views, args.viewId);
       const requestId = nanoid();
       this.ctx.rpc.emit.insert.requested({
         requestId,
         windowId: live.windowId,
-        sessionId: args.sessionId,
+        viewId: args.viewId,
         agentId: agentId ?? "",
         payload: args.payload,
         ts: Date.now(),
@@ -65,40 +63,45 @@ export class InsertService extends Service {
       return { delivered: "live", requestId };
     }
 
-    const agentId = findAgentIdForSession(kernel.windowStates, args.sessionId);
-    if (!agentId) {
-      // No such session. Caller gave us a stale id — fail quietly; there's
-      // no UI to surface it on.
-      console.warn(`[insert] insertToken: unknown sessionId ${args.sessionId}`);
-      return { delivered: "persisted" };
-    }
-
-    // TODO(crdt): Keyed by agentId today (matches DraftPersistencePlugin);
-    // when we migrate to sessionId keys (plan Phase 7), swap this key.
-    const draftKey = agentId;
-
+    // Persisted path: write directly into viewState[viewId].draft.
     await Effect.runPromise(
       client.update((root) => {
-        const drafts = root.plugin.kernel.composerDrafts ?? {};
-        const existing = drafts[draftKey];
+        const k = root.plugin.kernel;
+        if (!k.views.some((v) => v.id === args.viewId)) {
+          // No such view. Caller gave us a stale id - fail quietly.
+          return;
+        }
+        const existing = k.viewState[args.viewId];
+        const baseDraft = existing?.draft ?? {
+          editorState: null,
+          blobs: [],
+        };
         const nextEditorState = appendTokenToEditorState(
-          existing?.editorState,
+          baseDraft.editorState,
           args.payload,
         );
         const nextBlobs = [
-          ...(existing?.chatBlobs ?? []),
+          ...(baseDraft.blobs ?? []),
           ...(args.payload.blobs ?? []).map((b) => ({
             blobId: b.blobId,
             mimeType: b.mimeType,
           })),
         ];
-        root.plugin.kernel.composerDrafts = {
-          ...drafts,
-          [draftKey]: {
-            editorState: nextEditorState as any,
-            chatBlobs: nextBlobs,
-          },
-        };
+        const next = existing
+          ? {
+              ...existing,
+              draft: {
+                editorState: nextEditorState as unknown,
+                blobs: nextBlobs,
+              },
+            }
+          : makeViewAppState(args.viewId, {
+              draft: {
+                editorState: nextEditorState as unknown,
+                blobs: nextBlobs,
+              },
+            });
+        k.viewState = { ...k.viewState, [args.viewId]: next };
       }),
     ).catch((err) => {
       console.error("[insert] persist failed:", err);
@@ -108,49 +111,64 @@ export class InsertService extends Service {
   }
 
   /**
-   * Agent-keyed insert — no session needed. Intended for callers that
-   * target a brand-new agent (e.g., the quick-chat plugin creates a cursor
-   * agent before any session/tab wraps it). Always writes to the persisted
-   * draft so the composer picks the token up at mount time.
-   *
-   * If the agent also happens to have a live session, that composer is
-   * already listening for draft changes via the refocus-rehydrate flow;
-   * there's no benefit to the "live event" fast path here and plenty of
-   * simplicity to gain by staying single-path.
+   * Agent-keyed insert - no view needed up front. Intended for callers that
+   * target a brand-new agent (e.g. the quick-chat plugin creates a cursor
+   * agent before any view wraps it). Walks `kernel.views` for any chat
+   * view referencing this agent and writes into its persisted draft; if
+   * none exists yet, no-op (the agent will get its draft seeded once a
+   * view is created).
    */
   async insertTokenForAgent(args: {
     agentId: string;
     payload: TokenPayload;
   }): Promise<{ ok: boolean }> {
     const client = this.ctx.db.effectClient;
+    let ok = false;
     await Effect.runPromise(
       client.update((root) => {
-        const drafts = root.plugin.kernel.composerDrafts ?? {};
-        const existing = drafts[args.agentId];
+        const k = root.plugin.kernel;
+        const view = k.views.find(
+          (v) => v.scope === "chat" && v.params.agentId === args.agentId,
+        );
+        if (!view) return;
+        ok = true;
+        const existing = k.viewState[view.id];
+        const baseDraft = existing?.draft ?? {
+          editorState: null,
+          blobs: [],
+        };
         const nextEditorState = appendTokenToEditorState(
-          existing?.editorState,
+          baseDraft.editorState,
           args.payload,
         );
         const nextBlobs = [
-          ...(existing?.chatBlobs ?? []),
+          ...(baseDraft.blobs ?? []),
           ...(args.payload.blobs ?? []).map((b) => ({
             blobId: b.blobId,
             mimeType: b.mimeType,
           })),
         ];
-        root.plugin.kernel.composerDrafts = {
-          ...drafts,
-          [args.agentId]: {
-            editorState: nextEditorState as any,
-            chatBlobs: nextBlobs,
-          },
-        };
+        const next = existing
+          ? {
+              ...existing,
+              draft: {
+                editorState: nextEditorState as unknown,
+                blobs: nextBlobs,
+              },
+            }
+          : makeViewAppState(view.id, {
+              draft: {
+                editorState: nextEditorState as unknown,
+                blobs: nextBlobs,
+              },
+            });
+        k.viewState = { ...k.viewState, [view.id]: next };
       }),
     ).catch((err) => {
       console.error("[insert] insertTokenForAgent persist failed:", err);
-      return { ok: false };
+      ok = false;
     });
-    return { ok: true };
+    return { ok };
   }
 
   evaluate() {

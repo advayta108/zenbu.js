@@ -14,7 +14,10 @@ import { FolderSyncIcon } from "lucide-react";
 
 const urlParams = new URLSearchParams(window.location.search);
 const windowId = urlParams.get("windowId") ?? "";
-const sentinelTabId = urlParams.get("agentId") ?? "";
+// `viewId` is the (sentinel) view id of this new-agent slot. The
+// promote-flow uses it to find and replace the sentinel with the real
+// chat view.
+const sentinelViewId = urlParams.get("viewId") ?? "";
 
 function NewAgentScreen() {
   const rpc = useRpc();
@@ -23,7 +26,7 @@ function NewAgentScreen() {
   // Active workspace's first cwd is the default location for the new agent.
   // The user can override it via the cwd picker before submitting.
   const activeWorkspaceId = useDb(
-    (root) => root.plugin.kernel.activeWorkspaceByWindow?.[windowId],
+    (root) => root.plugin.kernel.windowState[windowId]?.activeWorkspaceId ?? null,
   );
   const workspaces = useDb((root) => root.plugin.kernel.workspaces);
   const activeWorkspace = (workspaces ?? []).find(
@@ -34,11 +37,17 @@ function NewAgentScreen() {
   // The new-chat view mounts around the head of the warm pool: a real,
   // already-spawned agent row whose model/mode/thinking selectors and
   // draft state all live on the agent itself. On submit, `promoteNewAgentTab`
-  // pops this same head and swaps the sentinel pane tab for the session id,
+  // pops this same head and swaps the sentinel view for a real chat view,
   // so the agent flows directly into the chat view with no swap mid-flight.
-  const warmAgentId = useDb(
+  const poolAgentId = useDb(
     (root) => root.plugin.kernel.pool?.[0]?.agentId,
   );
+
+  // Latch the warm agent id at submit time so the iframe doesn't flash
+  // an "invariant violated" banner during the swap (the pool head pops
+  // before the orchestrator commits the iframe-src change).
+  const [latchedAgentId, setLatchedAgentId] = useState<string | null>(null);
+  const warmAgentId = latchedAgentId ?? poolAgentId;
 
   const [pendingCwd, setPendingCwd] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -56,12 +65,16 @@ function NewAgentScreen() {
   const onSubmit = useCallback(
     async (text: string, images: any[], editorStateJson: unknown) => {
       const cwd = pendingCwd ?? workspaceCwd;
-      // Promote the sentinel tab to a real agent: kernel creates the agent +
-      // session, swaps the pane's tab id from `new-agent:<id>` to the new
-      // session id. Returns `{ agentId, sessionId }`.
+      // Latch the current pool head so subsequent renders against an empty
+      // pool don't flash the banner during the swap.
+      if (poolAgentId) setLatchedAgentId(poolAgentId);
+
+      // Promote the sentinel view to a real chat view: kernel creates the
+      // chat view referencing the warm agent and updates activeViewId.
+      // Returns `{ agentId, viewId }`.
       const { agentId } = await rpc["new-agent"].promoteNewAgentTab({
         windowId,
-        sentinelTabId,
+        sentinelViewId,
         cwd,
         workspaceId: activeWorkspaceId ?? undefined,
       });
@@ -80,7 +93,6 @@ function NewAgentScreen() {
         text,
         editorState: editorStateJson,
       };
-      // cons
       if (images.length > 0) {
         eventData.images = images.map((img: any) => ({
           blobId: img.blobId,
@@ -100,7 +112,7 @@ function NewAgentScreen() {
         cwd ? { cwd } : undefined,
       );
     },
-    [rpc, client, pendingCwd, workspaceCwd],
+    [rpc, client, pendingCwd, workspaceCwd, poolAgentId, activeWorkspaceId],
   );
 
   if (!warmAgentId) {
@@ -131,7 +143,11 @@ function NewAgentScreen() {
             <FolderSyncIcon className="size-3 opacity-70" />
           </button>
         </div>
-        <Composer agentId={warmAgentId} onSubmit={onSubmit} />
+        <Composer
+          agentId={warmAgentId}
+          viewId={sentinelViewId}
+          onSubmit={onSubmit}
+        />
       </div>
     </div>
   );

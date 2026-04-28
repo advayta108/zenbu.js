@@ -15,7 +15,7 @@ export const TOKEN_INSERT_EVENT = "zenbu-composer:insert-token"
 export type TokenInsertSource = "file-picker" | "paste" | "rpc" | "debug"
 
 export type TokenInsertDetail = {
-  sessionId: string
+  viewId: string
   agentId: string
   payload: TokenPayload
   source: TokenInsertSource
@@ -52,7 +52,7 @@ export function subscribeTokenInsert(
 export const TOKEN_UPGRADE_EVENT = "zenbu-composer:upgrade-token"
 
 export type TokenUpgradeDetail = {
-  sessionId: string
+  viewId: string
   agentId: string
   localId: string
   payload: TokenPayload

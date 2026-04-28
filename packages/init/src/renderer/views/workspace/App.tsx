@@ -18,21 +18,16 @@ import { KyjuProvider, useDb } from "@/lib/kyju-react"
 import { useKyjuClient, useRpc } from "@/lib/providers"
 import { ViewCacheSlot } from "@/lib/view-cache"
 import { AgentList } from "@/views/orchestrator/components/AgentList"
-import {
-  type PaneState,
-  initPaneState,
-  addTabToPane,
-  switchTabInPane,
-  closeTabInPane,
-} from "@/views/orchestrator/pane-ops"
+import { ActiveView } from "@/views/orchestrator/components/ActiveView"
 import {
   insertHotAgent,
   validSelectionFromTemplate,
+  makeAgentAppState,
+  makeViewAppState,
   type ArchivedAgent,
 } from "../../../../shared/agent-ops"
-import type { SchemaRoot } from "../../../../shared/schema"
+import type { SchemaRoot, View } from "../../../../shared/schema"
 
-type SessionItem = SchemaRoot["windowStates"][number]["sessions"][number]
 type AgentItem = SchemaRoot["agents"][number]
 type RegistryEntry = {
   scope: string
@@ -42,7 +37,6 @@ type RegistryEntry = {
   workspaceId?: string
   meta?: { kind?: string; sidebar?: boolean }
 }
-type WindowState = SchemaRoot["windowStates"][number]
 
 const params = new URLSearchParams(window.location.search)
 const wsPort = Number(params.get("wsPort"))
@@ -105,10 +99,24 @@ function WorkspaceContent() {
   const client = useKyjuClient()
   const rpc = useRpc()
 
-  const windowState = useDb((root) =>
-    root.plugin.kernel.windowStates?.find((w) => w.id === windowId),
+  const allViews = useDb((root) => root.plugin.kernel.views) ?? []
+  const views = useMemo(
+    () =>
+      allViews
+        .filter((v) => v.windowId === windowId)
+        .map((v) => v),
+    [allViews],
   )
-  const sessions = windowState?.sessions ?? []
+  const viewState = useDb((root) => root.plugin.kernel.viewState) ?? {}
+
+  const sortedViews = useMemo(
+    () =>
+      [...views].sort(
+        (a, b) =>
+          (viewState[a.id]?.order ?? 0) - (viewState[b.id]?.order ?? 0),
+      ),
+    [views, viewState],
+  )
 
   const agents = useDb((root) => root.plugin.kernel.agents) ?? []
 
@@ -119,218 +127,303 @@ function WorkspaceContent() {
     return m
   }, [registry])
 
-  const workspace = useDb((root) =>
-    root.plugin.kernel.workspaces?.find((w) => w.id === workspaceIdParam),
+  const activeViewId = useDb(
+    (root) => root.plugin.kernel.windowState[windowId]?.activeViewId ?? null,
   )
-  const workspaceCwds = workspace?.cwds ?? []
 
-  const sidebarOpen = useDb((root) => {
-    const map = root.plugin.kernel.sidebarOpenByWindow
-    const v = map?.[windowId]
-    return typeof v === "boolean" ? v : true
-  })
-
-  const utilSelected = useDb(
-    (root) => root.plugin.kernel.utilitySidebarSelectedByWindow?.[windowId],
-  )
+  // Per-view sidebar / utility state. Read from the active view's record;
+  // defaults if no active view.
+  const activeViewState = activeViewId ? viewState[activeViewId] : null
+  const sidebarOpen = activeViewState?.sidebarOpen ?? true
+  const utilSelected = activeViewState?.utilitySidebarSelected ?? null
 
   const sidebarEntries = useMemo<RegistryEntry[]>(() => {
     const all = registry.filter((e) => e.meta?.sidebar === true)
     const filtered = all.filter((e) =>
       !e.workspaceId || e.workspaceId === workspaceIdParam,
     )
-    console.log(
-      `[workspace-view] sidebar filter: wsId=${workspaceIdParam} allSidebar=[${all.map(e => `${e.scope}(ws=${e.workspaceId ?? "global"})`).join(",")}] shown=[${filtered.map(e => e.scope).join(",")}]`,
-    )
     return filtered
-  }, [registry, workspaceIdParam])
+  }, [registry])
   const selectedUtilEntry = useMemo(
     () => sidebarEntries.find((e) => e.scope === utilSelected),
     [sidebarEntries, utilSelected],
   )
 
-  const paneState: PaneState = useMemo(
-    () => ({
-      panes: windowState?.panes ?? [],
-      rootPaneId: windowState?.rootPaneId ?? null,
-      focusedPaneId: windowState?.focusedPaneId ?? null,
-    }),
-    [windowState?.panes, windowState?.rootPaneId, windowState?.focusedPaneId],
-  )
-  const rootPane = useMemo(
-    () =>
-      paneState.panes.find(
-        (p) => p.id === paneState.rootPaneId && p.type === "leaf",
-      ) ?? null,
-    [paneState],
-  )
-
-  const updateWindowState = useCallback(
-    async (updater: (ws: WindowState) => void) => {
-      const root = client.readRoot()
-      const states = root.plugin.kernel.windowStates ?? []
-      const idx = states.findIndex((w) => w.id === windowId)
-      if (idx < 0) return
-      const updated = [...states]
-      updated[idx] = { ...updated[idx] }
-      updater(updated[idx])
-      await client.plugin.kernel.windowStates.set(updated)
-    },
-    [client],
-  )
-
-  const writePaneState = useCallback(
-    async (next: PaneState) => {
-      await updateWindowState((ws) => {
-        ws.panes = next.panes
-        ws.rootPaneId = next.rootPaneId
-        ws.focusedPaneId = next.focusedPaneId
+  const updateActiveViewState = useCallback(
+    (updater: (cur: SchemaRoot["viewState"][string]) => SchemaRoot["viewState"][string]) => {
+      if (!activeViewId) return
+      const all = client.plugin.kernel.viewState.read() ?? {}
+      const cur = all[activeViewId]
+      if (!cur) return
+      void client.plugin.kernel.viewState.set({
+        ...all,
+        [activeViewId]: updater(cur),
       })
     },
-    [updateWindowState],
+    [client, activeViewId],
   )
 
   // ---- handlers ----
 
-  const handleNewAgent = useCallback(async () => {
-    const tabId = `new-agent:${nanoid()}`
-    if (paneState.rootPaneId) {
-      const next = addTabToPane(paneState, paneState.rootPaneId, tabId)
-      await writePaneState(next)
-    } else {
-      await writePaneState(initPaneState([tabId], tabId))
+  const seedSidebarFromActive = useCallback(() => {
+    const cur = activeViewId ? viewState[activeViewId] : null
+    return {
+      sidebarOpen: cur?.sidebarOpen ?? false,
+      tabSidebarOpen: cur?.tabSidebarOpen ?? true,
+      sidebarPanel: cur?.sidebarPanel ?? "overview",
+      utilitySidebarSelected: cur?.utilitySidebarSelected ?? null,
     }
-  }, [paneState, writePaneState])
+  }, [activeViewId, viewState])
+
+  const nextOrder = useCallback((): number => {
+    const k = client.readRoot().plugin.kernel
+    let max = -1
+    for (const v of k.views) {
+      if (v.windowId !== windowId) continue
+      const o = k.viewState[v.id]?.order ?? 0
+      if (o > max) max = o
+    }
+    return max + 1
+  }, [client])
+
+  const activeWorkspaceId = useDb(
+    (root) => root.plugin.kernel.windowState[windowId]?.activeWorkspaceId ?? null,
+  )
+
+  const handleNewAgent = useCallback(async () => {
+    const newViewId = nanoid()
+    const order = nextOrder()
+    const sidebarSeed = seedSidebarFromActive()
+    await client.update((root) => {
+      const k = root.plugin.kernel
+      k.views = [
+        ...k.views,
+        {
+          id: newViewId,
+          windowId,
+          parentId: activeViewId ?? null,
+          scope: "new-agent",
+          params: {},
+          createdAt: Date.now(),
+        },
+      ]
+      k.viewState = {
+        ...k.viewState,
+        [newViewId]: makeViewAppState(newViewId, {
+          order,
+          ...sidebarSeed,
+        }),
+      }
+      const ws = k.windowState[windowId]
+      if (ws) {
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: { ...ws, activeViewId: newViewId },
+        }
+      }
+    })
+  }, [client, nextOrder, seedSidebarFromActive, activeViewId])
 
   const handleOpenPlugins = useCallback(async () => {
-    const paneId = paneState.rootPaneId
-    const pane = paneId
-      ? paneState.panes.find((p) => p.id === paneId)
-      : null
-    const existing = pane?.tabIds.find((t) => t.startsWith("scope:plugins:"))
+    // Reuse an existing plugins view in this window if one exists, otherwise
+    // create a fresh one.
+    const existing = sortedViews.find((v) => v.scope === "plugins")
     if (existing) {
-      await writePaneState(switchTabInPane(paneState, paneId!, existing))
-      return
-    }
-    const tabId = `scope:plugins:${nanoid()}`
-    await updateWindowState((ws) => {
-      ws.sessions = [
-        ...ws.sessions,
-        { id: tabId, agentId: "", lastViewedAt: null },
-      ]
-    })
-    if (paneId) {
-      await writePaneState(addTabToPane(paneState, paneId, tabId))
-    } else {
-      await writePaneState(initPaneState([tabId], tabId))
-    }
-  }, [paneState, writePaneState, updateWindowState])
-
-  const handleSwitchTab = useCallback(
-    async (tabId: string) => {
-      const paneId = paneState.rootPaneId
-      if (!paneId) return
-      const pane = paneState.panes.find((p) => p.id === paneId)
-      const oldActive = pane?.activeTabId
-      await writePaneState(switchTabInPane(paneState, paneId, tabId))
-      if (oldActive !== tabId) {
-        await updateWindowState((ws) => {
-          const now = Date.now()
-          for (const s of ws.sessions) {
-            if (s.id === oldActive) s.lastViewedAt = now
-            if (s.id === tabId) s.lastViewedAt = null
+      const k = client.readRoot().plugin.kernel
+      const ws = k.windowState[windowId]
+      if (ws && ws.activeViewId !== existing.id) {
+        await client.update((root) => {
+          const wss = root.plugin.kernel.windowState[windowId]
+          if (!wss) return
+          root.plugin.kernel.windowState = {
+            ...root.plugin.kernel.windowState,
+            [windowId]: { ...wss, activeViewId: existing.id },
           }
         })
       }
-    },
-    [paneState, writePaneState, updateWindowState],
-  )
+      return
+    }
+    const newViewId = nanoid()
+    const order = nextOrder()
+    const sidebarSeed = seedSidebarFromActive()
+    await client.update((root) => {
+      const k = root.plugin.kernel
+      k.views = [
+        ...k.views,
+        {
+          id: newViewId,
+          windowId,
+          parentId: activeViewId ?? null,
+          scope: "plugins",
+          params: {},
+          createdAt: Date.now(),
+        },
+      ]
+      k.viewState = {
+        ...k.viewState,
+        [newViewId]: makeViewAppState(newViewId, {
+          order,
+          ...sidebarSeed,
+        }),
+      }
+      const ws = k.windowState[windowId]
+      if (ws) {
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: { ...ws, activeViewId: newViewId },
+        }
+      }
+    })
+  }, [client, sortedViews, nextOrder, seedSidebarFromActive, activeViewId])
 
-  const removeSession = useCallback(
-    async (sessionId: string) => {
-      await updateWindowState((ws) => {
-        ws.sessions = ws.sessions.filter((s) => s.id !== sessionId)
+  const handleSwitchTab = useCallback(
+    async (viewId: string) => {
+      await client.update((root) => {
+        const k = root.plugin.kernel
+        const ws = k.windowState[windowId]
+        if (!ws) return
+        const oldActiveId = ws.activeViewId
+        if (oldActiveId === viewId) return
+        const now = Date.now()
+
+        // Update unread state on the old active chat view's agent.
+        if (oldActiveId) {
+          const oldView = k.views.find((v) => v.id === oldActiveId)
+          const oldAgentId =
+            oldView?.scope === "chat" ? oldView.params.agentId : undefined
+          if (oldAgentId) {
+            const cur = k.agentState[oldAgentId]
+            k.agentState = {
+              ...k.agentState,
+              [oldAgentId]: cur
+                ? { ...cur, lastViewedAt: now }
+                : makeAgentAppState(oldAgentId, { lastViewedAt: now }),
+            }
+          }
+        }
+
+        // Clear unread on the newly-active chat view's agent.
+        const newView = k.views.find((v) => v.id === viewId)
+        const newAgentId =
+          newView?.scope === "chat" ? newView.params.agentId : undefined
+        if (newAgentId) {
+          const cur = k.agentState[newAgentId]
+          k.agentState = {
+            ...k.agentState,
+            [newAgentId]: cur
+              ? { ...cur, lastViewedAt: null }
+              : makeAgentAppState(newAgentId, { lastViewedAt: null }),
+          }
+        }
+
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: { ...ws, activeViewId: viewId },
+        }
       })
     },
-    [updateWindowState],
+    [client],
+  )
+
+  const removeView = useCallback(
+    async (viewId: string) => {
+      await client.update((root) => {
+        const k = root.plugin.kernel
+        k.views = k.views.filter((v) => v.id !== viewId)
+        const nextVS = { ...k.viewState }
+        delete nextVS[viewId]
+        k.viewState = nextVS
+        // If the closed view was active, fall back to the highest-order
+        // remaining view in this window (or null).
+        const ws = k.windowState[windowId]
+        if (ws && ws.activeViewId === viewId) {
+          let fallback: string | null = null
+          let maxOrder = -1
+          for (const v of k.views) {
+            if (v.windowId !== windowId) continue
+            const o = k.viewState[v.id]?.order ?? 0
+            if (o > maxOrder) {
+              maxOrder = o
+              fallback = v.id
+            }
+          }
+          k.windowState = {
+            ...k.windowState,
+            [windowId]: { ...ws, activeViewId: fallback },
+          }
+        }
+      })
+    },
+    [client],
   )
 
   const handleCloseTab = useCallback(
-    async (tabId: string) => {
-      const paneId = paneState.rootPaneId
-      if (!paneId) return
-      const confirmed = await rpc.window.confirm({
-        title: "Close chat?",
-        message: "You can always re-open this chat later.",
-        confirmLabel: "Close",
-        windowId,
-      })
-      if (!confirmed) return
-      await removeSession(tabId)
-      await writePaneState(closeTabInPane(paneState, paneId, tabId))
+    async (viewId: string) => {
+      const view = views.find((v) => v.id === viewId)
+      // Only ask for confirmation if it's a chat view with conversation
+      // history; sentinels and empty views close quietly.
+      const agentId = view?.scope === "chat" ? view.params.agentId : undefined
+      const hasMessages = agentId
+        ? (() => {
+            const a = client.readRoot().plugin.kernel.agents.find(
+              (x) => x.id === agentId,
+            )
+            return (a?.lastUserMessageAt ?? null) != null
+          })()
+        : false
+      if (hasMessages) {
+        const confirmed = await rpc.window.confirm({
+          title: "Close chat?",
+          message: "You can always re-open this chat later.",
+          confirmLabel: "Close",
+          windowId,
+        })
+        if (!confirmed) return
+      }
+      await removeView(viewId)
     },
-    [paneState, removeSession, writePaneState, rpc],
+    [removeView, rpc, views, client],
   )
 
   const handleCloseTabQuiet = useCallback(
-    async (tabId: string) => {
-      const paneId = paneState.rootPaneId
-      if (!paneId) return
-      await removeSession(tabId)
-      await writePaneState(closeTabInPane(paneState, paneId, tabId))
+    async (viewId: string) => {
+      await removeView(viewId)
     },
-    [paneState, removeSession, writePaneState],
+    [removeView],
   )
 
   const onUtilIconClick = useCallback(
     (scope: string) => {
-      const next = scope === utilSelected ? "" : scope
-      client.plugin.kernel.utilitySidebarSelectedByWindow.set({
-        ...(client.plugin.kernel.utilitySidebarSelectedByWindow.read() ?? {}),
-        [windowId]: next,
-      })
+      const next = scope === utilSelected ? null : scope
+      updateActiveViewState((cur) => ({
+        ...cur,
+        utilitySidebarSelected: next,
+      }))
     },
-    [client, utilSelected],
+    [updateActiveViewState, utilSelected],
   )
 
-  // Track lastTabByWorkspace whenever the active tab changes — used to
-  // restore the last-viewed agent when the workspace becomes active again.
+  // Track lastViewId on the workspace whenever the active view changes.
+  // Used to restore the last-viewed view when the workspace becomes active
+  // again on this (or any) window.
   useEffect(() => {
-    const id = rootPane?.activeTabId
-    if (!id || !workspaceIdParam) return
-    if (id.startsWith("new-agent:") || id.startsWith("scope:")) return
-    const cur = client.plugin.kernel.lastTabByWorkspace.read() ?? {}
-    if (cur[workspaceIdParam] === id) return
-    client.plugin.kernel.lastTabByWorkspace.set({
+    if (!activeViewId || !workspaceIdParam) return
+    const cur = client.plugin.kernel.workspaceState.read() ?? {}
+    const existing = cur[workspaceIdParam]
+    if (existing?.lastViewId === activeViewId) return
+    void client.plugin.kernel.workspaceState.set({
       ...cur,
-      [workspaceIdParam]: id,
+      [workspaceIdParam]: existing
+        ? { ...existing, lastViewId: activeViewId }
+        : { workspaceId: workspaceIdParam, lastViewId: activeViewId },
     })
-  }, [rootPane?.activeTabId, client])
-
-  // Lazy iframe mounting — only mount iframes for visited tabs.
-  const [visitedTabIds, setVisitedTabIds] = useState<Set<string>>(new Set())
-  useEffect(() => {
-    if (!rootPane?.activeTabId) return
-    setVisitedTabIds((prev) => {
-      if (prev.has(rootPane.activeTabId!)) return prev
-      const next = new Set(prev)
-      next.add(rootPane.activeTabId!)
-      return next
-    })
-  }, [rootPane?.activeTabId])
-  const tabsToRender = useMemo(
-    () =>
-      (rootPane?.tabIds ?? []).filter((id) => visitedTabIds.has(id)),
-    [rootPane?.tabIds, visitedTabIds],
-  )
+  }, [activeViewId, client])
 
   // ---- iframe srcs ----
 
   const wsParam = workspaceIdParam
     ? `&workspaceId=${encodeURIComponent(workspaceIdParam)}`
     : ""
-
-  const chatEntry = registryMap.get("chat")
 
   const utilPanelVisible = selectedUtilEntry != null
   const utilPanelSrc = useMemo(() => {
@@ -347,7 +440,7 @@ function WorkspaceContent() {
     )}&windowId=${encodeURIComponent(
       windowId,
     )}&scope=${encodeURIComponent(selectedUtilEntry.scope)}${wsParam}`
-  }, [selectedUtilEntry, wsParam, wsToken])
+  }, [selectedUtilEntry, wsParam])
 
   // ---- layout state ----
 
@@ -355,6 +448,15 @@ function WorkspaceContent() {
   const utilWidth = utilWidthStore.useWidth()
   const [agentResizing, setAgentResizing] = useState(false)
   const [utilResizing, setUtilResizing] = useState(false)
+
+  // Defensive: agents/insertHotAgent/validSelectionFromTemplate/ArchivedAgent/
+  // makeCollection are kept available for the future inline-create path.
+  void agents
+  void insertHotAgent
+  void validSelectionFromTemplate
+  void makeCollection
+  void activeWorkspaceId
+  type _Unused = ArchivedAgent
 
   return (
     <div className="flex flex-row h-full min-h-0 min-w-0">
@@ -368,9 +470,9 @@ function WorkspaceContent() {
         >
           <AgentList
             agents={agents}
-            sessions={sessions}
-            activeTabId={rootPane?.activeTabId}
-            workspaceCwds={workspaceCwds}
+            views={sortedViews as View[]}
+            activeViewId={activeViewId}
+            currentWorkspaceId={workspaceIdParam || null}
             windowId={windowId}
             onSwitchTab={handleSwitchTab}
             onCloseTab={handleCloseTab}
@@ -390,47 +492,15 @@ function WorkspaceContent() {
       {agentResizing && <ResizeOverlay />}
 
       <div className="flex-1 min-w-0 min-h-0 relative">
-        {rootPane?.activeTabId ? (
-          tabsToRender.map((tabId) => {
-            const session = sessions.find((s) => s.id === tabId)
-            const scopeMatch =
-              /^scope:([^:]+):/.exec(tabId) ??
-              (tabId.startsWith("new-agent:") ? ["", "new-agent"] : null)
-            const scope = scopeMatch?.[1] ?? "chat"
-            const entry = scope === "chat" ? chatEntry : registryMap.get(scope)
-            if (!entry) return null
-            let entryPath = new URL(entry.url).pathname
-            const ownsServer = entryPath === "/" || entryPath === ""
-            if (ownsServer) entryPath = ""
-            else if (entryPath.endsWith("/"))
-              entryPath = entryPath.slice(0, -1)
-            const targetPort = ownsServer ? entry.port : wsPort
-            const agentId = session?.agentId ?? tabId
-            const hostname = tabId.toLowerCase().replace(/[^a-z0-9]/g, "")
-            const src = `http://${hostname}.localhost:${targetPort}${entryPath}/index.html?agentId=${encodeURIComponent(
-              agentId,
-            )}&wsPort=${wsPort}&wsToken=${encodeURIComponent(
-              wsToken,
-            )}&windowId=${encodeURIComponent(
-              windowId,
-            )}&paneId=${encodeURIComponent(rootPane.id)}${wsParam}`
-            const isActive = tabId === rootPane.activeTabId
-            return (
-              <ViewCacheSlot
-                key={tabId}
-                cacheKey={tabId}
-                src={src}
-                hidden={!isActive}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  display: isActive ? "block" : "none",
-                }}
-              />
-            )
-          })
+        {sortedViews.length > 0 ? (
+          <ActiveView
+            views={sortedViews as View[]}
+            activeViewId={activeViewId}
+            registryMap={registryMap}
+            wsPort={wsPort}
+            wsToken={wsToken}
+            windowId={windowId}
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-muted-foreground text-xs">
             <button
@@ -650,10 +720,6 @@ function ConnectedApp({
   )
 }
 
-/**
- * 
- * we need to abstract this already
- */
 export function App() {
   const connection = useWsConnection()
   if (connection.status === "connecting") return <div className="h-full" />

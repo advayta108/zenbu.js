@@ -163,6 +163,7 @@ function ErrorFallback({
 
 const searchParams = new URLSearchParams(window.location.search);
 const agentId = searchParams.get("agentId") ?? "";
+const viewId = searchParams.get("viewId") ?? "";
 const isMinimap = searchParams.get("minimap") === "true";
 
 let triggerExplosion: (() => void) | null = null;
@@ -215,6 +216,7 @@ function ChatContent() {
         />
         <ComposerPanel
           agentId={agentId}
+          viewId={viewId}
           scrollToBottom={() => scrollToBottomRef.current?.()}
           debugExpectedVisibleMessageRef={expectedVisibleMessageRef}
         />

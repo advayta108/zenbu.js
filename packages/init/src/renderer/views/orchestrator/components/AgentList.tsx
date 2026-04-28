@@ -8,6 +8,7 @@ import {
 } from "react"
 import { useCollection, useDb } from "../../../lib/kyju-react"
 import { useKyjuClient, useRpc } from "../../../lib/providers"
+import type { View } from "../../../../../shared/schema"
 
 const SettingsDialog = lazy(() =>
   import("./SettingsDialog").then((m) => ({ default: m.SettingsDialog })),
@@ -28,19 +29,11 @@ type AgentItem = {
   eventLog?: any
 }
 
-type SessionItem = {
-  id: string
-  agentId: string
-  lastViewedAt: number | null
-}
-
-const PLUGINS_TAB_PREFIX = "scope:plugins:"
-
 export function AgentList({
   agents,
-  sessions,
-  activeTabId,
-  workspaceCwds,
+  views,
+  activeViewId,
+  currentWorkspaceId,
   windowId,
   onSwitchTab,
   onCloseTab,
@@ -49,34 +42,40 @@ export function AgentList({
   onOpenPlugins,
 }: {
   agents: AgentItem[]
-  sessions: SessionItem[]
-  activeTabId: string | undefined
-  workspaceCwds: string[]
+  views: View[]
+  activeViewId: string | null
+  currentWorkspaceId: string | null
   windowId: string
-  onSwitchTab: (tabId: string) => void
-  onCloseTab: (tabId: string) => void
-  onCloseTabQuiet: (tabId: string) => void
+  onSwitchTab: (viewId: string) => void
+  onCloseTab: (viewId: string) => void
+  onCloseTabQuiet: (viewId: string) => void
   onNewAgent: () => void
   onOpenPlugins: () => void
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  const cwdSet = useMemo(() => new Set(workspaceCwds), [workspaceCwds])
+  const agentState = useDb((root) => root.plugin.kernel.agentState)
 
   const items = useMemo(() => {
     const out: Array<{
-      tabId: string
+      viewId: string
       agent: AgentItem | undefined
-      session: SessionItem | undefined
     }> = []
-    for (const session of sessions) {
-      // Skip sentinel/scope tabs — they don't represent agents.
-      if (session.id.startsWith("scope:")) continue
-      if (session.id.startsWith("new-agent:")) continue
-      const agent = agents.find((a) => a.id === session.agentId)
-      const agentCwd = agent?.metadata?.cwd ?? ""
-      if (cwdSet.size > 0 && agentCwd && !cwdSet.has(agentCwd)) continue
-      out.push({ tabId: session.id, agent, session })
+    for (const view of views) {
+      if (view.windowId !== windowId) continue
+      if (view.scope !== "chat") continue
+      const agentId = view.params.agentId
+      const agent = agentId ? agents.find((a) => a.id === agentId) : undefined
+      if (!agent) continue
+      // Explicit workspace binding (not cwd-derived). An agent shows in
+      // the sidebar if it's bound to the current workspace OR if it has
+      // no binding (warm-pool agents pre-promote, agents pre-dating the
+      // workspace concept).
+      if (currentWorkspaceId) {
+        const bound = agentState[agent.id]?.workspaceId ?? null
+        if (bound != null && bound !== currentWorkspaceId) continue
+      }
+      out.push({ viewId: view.id, agent })
     }
     out.sort(
       (a, b) =>
@@ -84,10 +83,13 @@ export function AgentList({
         (a.agent?.lastUserMessageAt ?? a.agent?.createdAt ?? 0),
     )
     return out
-  }, [sessions, agents, cwdSet])
+  }, [views, agents, agentState, currentWorkspaceId, windowId])
 
-  const pluginsTabActive =
-    typeof activeTabId === "string" && activeTabId.startsWith(PLUGINS_TAB_PREFIX)
+  const pluginsTabActive = useMemo(() => {
+    if (!activeViewId) return false
+    const v = views.find((v) => v.id === activeViewId)
+    return v?.scope === "plugins"
+  }, [activeViewId, views])
 
   return (
     <>
@@ -133,14 +135,14 @@ export function AgentList({
             <div className="px-1.5 pt-1">
               {items.map((item) => (
                 <SidebarRow
-                  key={item.tabId}
+                  key={item.viewId}
                   item={item}
-                  isActive={item.tabId === activeTabId}
-                  onClick={() => onSwitchTab(item.tabId)}
+                  isActive={item.viewId === activeViewId}
+                  onClick={() => onSwitchTab(item.viewId)}
                   onClose={(quiet) =>
                     quiet
-                      ? onCloseTabQuiet(item.tabId)
-                      : onCloseTab(item.tabId)
+                      ? onCloseTabQuiet(item.viewId)
+                      : onCloseTab(item.viewId)
                   }
                 />
               ))}
@@ -183,9 +185,8 @@ function SidebarRow({
   onClose,
 }: {
   item: {
-    tabId: string
+    viewId: string
     agent: AgentItem | undefined
-    session: SessionItem | undefined
   }
   isActive: boolean
   onClick: () => void
@@ -212,11 +213,15 @@ function SidebarRow({
       : lastUserPrompt?.replace(/\s+/g, " ").trim() || "New Chat"
 
   const isStreaming = item.agent?.status === "streaming"
+  const lastViewedAt = useDb(
+    (root) =>
+      root.plugin.kernel.agentState[item.agent?.id ?? ""]?.lastViewedAt ?? null,
+  )
   const hasUnread =
     !isActive &&
-    item.session?.lastViewedAt != null &&
+    lastViewedAt != null &&
     item.agent?.lastFinishedAt != null &&
-    (item.agent.lastFinishedAt as number) > item.session.lastViewedAt
+    (item.agent.lastFinishedAt as number) > lastViewedAt
 
   const ts = item.agent?.lastUserMessageAt ?? item.agent?.createdAt
   const timeLabel = useLiveTimeAgo(ts)
