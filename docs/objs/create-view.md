@@ -1,81 +1,74 @@
-# Create a New Frontend View
+# Create a View
 
 ## What You're Doing
 
-Creating a view—a frontend UI that runs in an iframe inside the Zenbu orchestrator. Views are isolated React applications served by Vite with full HMR and React Refresh. Each view gets its own WebSocket connection to the main process for RPC and database access.
+Creating a view — a frontend UI that runs as an iframe inside Zenbu. Each view is a tiny React app served by its own Vite dev server with full HMR. The view connects to the main process via WebSocket for RPC and Kyju (database) access.
+
+The same template works for both kernel views (chat, workspace, orchestrator, …) and plugin views. Plugins live outside the kernel monorepo but share the kernel's Vite stack via a one-line config.
 
 ## Background
 
-### How Views Work
+### What you get for free
 
-The orchestrator (the root Electron UI) reads the `viewRegistry` from the Kyju database. For each open tab, it renders an iframe pointing to the view's Vite URL:
+Calling `defineZenbuViewConfig()` from the kernel (`packages/init/src/renderer/view-config.ts`) injects every plugin a view needs. There is **one** injection site for everything; the kernel-side `startRendererServer` only handles per-renderer runtime config (port, cacheDir, fs).
 
-```
-${viewUrl}/index.html?id=${viewId}&wsPort=${wsPort}
-```
+Each renderer (kernel + plugin) gets, automatically:
 
-Each view is a separate Vite multi-page entry. The "core" Vite dev server (created by `CoreRendererService`) serves all kernel views from `packages/init/src/renderer/`.
+- **Tailwind v4** + shadcn theme variables + chat animations (via `@import "#zenbu/init/src/renderer/styles/app.css"` in your `app.css`).
+- **Workspace theme support** — when the iframe URL has `?workspaceId=…` (which `<View>` always sets when mounting plugin iframes from inside a workspace), the workspace's `.zenbu/theme.css` is auto-injected as a `<link>` tag and overrides the shadcn defaults via cascade.
+- **Advice + content scripts** — `advicePreludePlugin` injects the per-iframe prelude that wires up registered advice/content-script paths. `zenbuAdviceTransform` runs the babel transform on this renderer's source files. `resolveAdviceRuntime` aliases `@zenbu/advice/runtime` to the kernel source. You don't configure any of these.
+- **Standard aliases**: `@` → kernel renderer dir, `#zenbu` → kernel packages dir.
+- **`@vitejs/plugin-react` + `@tailwindcss/vite`** — resolved transitively from the kernel's `node_modules`. You do not install them in your plugin.
 
-### The Registration Chain
-
-1. A **service** in the main process calls `ViewRegistryService.registerAlias()` to map a scope name to a URL path on the core Vite server.
-2. The view registry syncs to the **Kyju database** (`root.viewRegistry`).
-3. The **orchestrator** reads `viewRegistry` reactively and shows available scopes in the TabBar "+" menu.
-4. When the user creates a tab, the orchestrator writes to `root.views` and renders an iframe for that view.
-
-### What Files You Need
-
-Adding a view touches up to 8 files across the codebase:
+### Files you write
 
 | File | Purpose |
 |------|---------|
-| `shared/schema/index.ts` | Add your type to the view type enum |
-| `src/renderer/vite.config.ts` | Add Vite MPA entry |
-| `src/renderer/views/<name>/index.html` | HTML entry point |
-| `src/renderer/views/<name>/main.tsx` | React bootstrap |
-| `src/renderer/views/<name>/App.tsx` | View component with WS/DB/RPC providers |
-| `src/renderer/views/<name>/app.css` | Styles |
-| `src/main/services/view-<name>.ts` | Service that registers the view alias |
-| `src/renderer/orchestrator/components/TabBar.tsx` | (Optional) icon and label |
+| `vite.config.ts` | One line. Imports `defineZenbuViewConfig` from the kernel. |
+| `src/view/index.html` | Mount point + `<script src="/main.tsx">`. |
+| `src/view/main.tsx` | `createRoot(...).render(<App />)`. |
+| `src/view/App.tsx` | The view UI. Wraps in `<ViewProvider>` for WS/RPC/Kyju setup. |
+| `src/view/app.css` | One line: imports the kernel preset. Plugin-specific styles below. |
+| `src/services/<name>.ts` | Service that registers the view scope with `ViewRegistryService`. |
 
-All paths are relative to `packages/init/`.
+### How a view is mounted
+
+1. A service registers the view's scope with `ViewRegistryService.register(scope, viewRoot, configFile)`.
+2. The kernel's `ReloaderService` spins up a Vite dev server rooted at `viewRoot`. It always injects `themeStylesheetPlugin`, `advicePreludePlugin`, and the advice runtime/transform.
+3. Some other view (orchestrator, workspace, …) mounts `<View id="…" scope="<scope>" props={{…}} />`. The `<View>` primitive looks up the scope in `viewRegistry`, builds the iframe URL with `?wsPort=…&wsToken=…&windowId=…&workspaceId=…&viewId=…&<your props>`, and mounts the iframe.
+4. The iframe's React tree wraps everything in `<ViewProvider>`, which gates rendering on the WS connection and gives the subtree access to `useRpc()` / `useDb()` / `useKyjuClient()` / `useViewProps()`.
 
 ## Steps
 
-### 1. Add the View Type to the Schema
+### 1. `vite.config.ts`
 
-In `packages/init/shared/schema/index.ts`, add your scope name to the `type` enum:
+```ts
+import { defineZenbuViewConfig } from "../zenbu/packages/init/src/renderer/view-config"
 
-```typescript
-type: zod.enum(["chat", "quiz", "flashcard", "heatmap", "my-view"]),
+export default defineZenbuViewConfig()
 ```
 
-This validates that stored view entries have a recognized type.
+That's the whole file. The relative path is correct for any plugin sitting at `~/.zenbu/plugins/<name>/`. If your `index.html` lives in a subdir, add `root`:
 
-### 2. Add a Vite Multi-Page Entry
+```ts
+import path from "node:path"
+import { defineZenbuViewConfig } from "../zenbu/packages/init/src/renderer/view-config"
 
-In `packages/init/src/renderer/vite.config.ts`, add your view to `build.rollupOptions.input`:
-
-```typescript
-build: {
-  rollupOptions: {
-    input: {
-      orchestrator: resolve(__dirname, "orchestrator/index.html"),
-      chat: resolve(__dirname, "views/chat/index.html"),
-      // ... existing entries ...
-      "my-view": resolve(__dirname, "views/my-view/index.html"),
-    },
-  },
-},
+export default defineZenbuViewConfig({
+  root: path.join(import.meta.dirname, "src", "view"),
+})
 ```
 
-### 3. Create the View Directory
+`defineZenbuViewConfig({ ... })` accepts:
+- `root?: string` — Vite project root.
+- `plugins?: Plugin[]` — extra Vite plugins.
+- `aliases?: Array<{ find, replacement }>` — extra resolve aliases (e.g. cross-plugin imports).
+- `overrides?: UserConfig` — anything else (`optimizeDeps`, `build`, custom `dedupe`, …).
 
-Create `packages/init/src/renderer/views/my-view/` with these files:
+### 2. `src/view/index.html`
 
-**`index.html`**:
 ```html
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -84,13 +77,14 @@ Create `packages/init/src/renderer/views/my-view/` with these files:
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="./main.tsx"></script>
+    <script type="module" src="/main.tsx"></script>
   </body>
 </html>
 ```
 
-**`main.tsx`**:
-```typescript
+### 3. `src/view/main.tsx`
+
+```tsx
 import { createRoot } from "react-dom/client"
 import { App } from "./App"
 import "./app.css"
@@ -98,155 +92,136 @@ import "./app.css"
 createRoot(document.getElementById("root")!).render(<App />)
 ```
 
-**`app.css`**:
-```css
-@import "tailwindcss";
+### 4. `src/view/app.css`
 
-html, body, #root {
-  height: 100%;
-  margin: 0;
-}
+```css
+@import "#zenbu/init/src/renderer/styles/app.css";
 ```
 
-**`App.tsx`**:
-```typescript
-import {
-  useWsConnection,
-  RpcProvider,
-  KyjuClientProvider,
-} from "../../lib/ws-connection"
-import { KyjuProvider } from "../../lib/kyju-react"
-import type { WsConnectionState } from "../../lib/ws-connection"
+That import gives you Tailwind v4, the shadcn theme variables, the chat animations, and the shared `@source` rules for utility scanning. Workspace `theme.css` overrides cascade in via the `<link>` tag the kernel injects. Add plugin-specific styles below the import.
 
-const viewId = new URLSearchParams(window.location.search).get("id") ?? ""
+If your view imports kernel React components that use Tailwind utilities, add `@source` lines pointing at those kernel dirs so their classes survive Tailwind's tree-shake:
+
+```css
+@import "#zenbu/init/src/renderer/styles/app.css";
+
+@source "../../../zenbu/packages/init/src/renderer/components";
+@source "../../../zenbu/packages/init/src/renderer/lib";
+```
+
+### 5. `src/view/App.tsx`
+
+```tsx
+import { ViewProvider, useViewProps } from "#zenbu/init/src/renderer/lib/View"
+import { useDb } from "#zenbu/init/src/renderer/lib/kyju-react"
+import { useRpc } from "#zenbu/init/src/renderer/lib/providers"
 
 function MyViewContent() {
+  const props = useViewProps()
+  const rpc = useRpc()
+  const things = useDb((root) => root.plugin["my-view"]?.things ?? [])
+
   return (
-    <div className="flex h-full items-center justify-center">
-      <p>My View (id: {viewId})</p>
+    <div className="flex h-full items-center justify-center bg-(--zenbu-panel) text-(--foreground)">
+      <p>workspace: {props.workspaceId} — {things.length} things</p>
     </div>
   )
 }
 
-function ConnectedApp({
-  connection,
-}: {
-  connection: Extract<WsConnectionState, { status: "connected" }>
-}) {
-  return (
-    <RpcProvider value={connection.rpc}>
-      <KyjuClientProvider value={connection.kyjuClient}>
-        <KyjuProvider
-          client={connection.kyjuClient}
-          replica={connection.replica}
-        >
-          <MyViewContent />
-        </KyjuProvider>
-      </KyjuClientProvider>
-    </RpcProvider>
-  )
-}
-
 export function App() {
-  const connection = useWsConnection()
-
-  if (connection.status === "connecting") {
-    return (
-      <div className="flex h-full items-center justify-center text-neutral-400 text-sm">
-        
-      </div>
-    )
-  }
-
-  if (connection.status === "error") {
-    return (
-      <div className="flex h-full items-center justify-center text-red-400 text-sm">
-        {connection.error}
-      </div>
-    )
-  }
-
-  return <ConnectedApp connection={connection} />
+  return (
+    <ViewProvider fallback={<div className="h-full bg-(--zenbu-panel)" />}>
+      <MyViewContent />
+    </ViewProvider>
+  )
 }
 ```
 
-This pattern:
-- Reads `viewId` from `?id=` query param (set by the orchestrator)
-- Connects to the main process via WebSocket using `?wsPort=`
-- Sets up RPC, Kyju client, and Kyju replica providers
-- Your content component (`MyViewContent`) has access to `useRpc()`, `useDb()`, and `useKyjuClient()`
+What `<ViewProvider>` does:
+- Opens a WebSocket using `?wsPort=` + `?wsToken=` from the URL.
+- Provides `RpcProvider`, `EventsProvider`, `KyjuClientProvider`, `KyjuProvider` to children.
+- Reads `?viewId=` from the URL and exposes the view's full props bag (URL query + Kyju row override) via `useViewProps()`. The bag includes `windowId`, `workspaceId`, `viewId`, plus any caller-passed props.
 
-### 4. Create the View Service
+### 6. `src/services/<name>.ts`
 
-Create `packages/init/src/main/services/view-my-view.ts`:
-
-```typescript
-import { Service, runtime } from "../runtime"
-import { ViewRegistryService } from "./view-registry"
-import { CoreRendererService } from "./core-renderer"
+```ts
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { Service, runtime } from "#zenbu/init/src/main/runtime"
+import { ViewRegistryService } from "#zenbu/init/src/main/services/view-registry"
 
 export class MyViewService extends Service {
-  static key = "view-my-view"
-  static deps = { viewRegistry: ViewRegistryService, coreRenderer: CoreRendererService }
-  declare ctx: { viewRegistry: ViewRegistryService; coreRenderer: CoreRendererService }
+  static key = "my-view"
+  static deps = { viewRegistry: ViewRegistryService }
+  declare ctx: { viewRegistry: ViewRegistryService }
 
   evaluate() {
-    this.ctx.viewRegistry.registerAlias("my-view", "core", "/views/my-view")
+    this.setup("register-view", () => {
+      const serviceDir = path.dirname(fileURLToPath(import.meta.url))
+      const viewRoot = path.resolve(serviceDir, "..", "view")
+      const configFile = path.resolve(serviceDir, "..", "..", "vite.config.ts")
+
+      this.ctx.viewRegistry.register("my-view", viewRoot, configFile, {
+        sidebar: true,           // appear in the workspace's util sidebar rail
+        // bottomPanel: true,    // appear in the workspace's bottom panel
+        // workspaceId: "<id>"   // restrict to one workspace; usually omit
+      })
+
+      return () => this.ctx.viewRegistry.unregister("my-view")
+    })
   }
 }
 
 runtime.register(MyViewService, (import.meta as any).hot)
 ```
 
-`registerAlias("my-view", "core", "/views/my-view")` tells the system: the `"my-view"` scope is served by the `"core"` Vite dev server at the subpath `/views/my-view`. The orchestrator loads `${coreUrl}/views/my-view/index.html?id=...&wsPort=...`.
+`register(scope, viewRoot, configFile, meta?)` boots a Vite dev server rooted at `viewRoot` using the plugin's `vite.config.ts`, then writes a row into `kernel.viewRegistry` so other views can mount this scope via `<View scope="my-view" />`.
 
-The `coreRenderer` dependency ensures the core Vite server is running before this service evaluates. The file is auto-discovered by the `src/main/services/*.ts` glob.
+### 7. `package.json`
 
-### 5. (Optional) Add Icon and Label to TabBar
+The plugin's `package.json` only declares its **runtime** deps (react, react-dom, anything you actually import in the view). Config-time tools (`vite`, `@vitejs/plugin-react`, `@tailwindcss/vite`, `tailwindcss`) come from the kernel's `node_modules` via `defineZenbuViewConfig` — do **not** add them here.
 
-In `packages/init/src/renderer/orchestrator/components/TabBar.tsx`, add to `builtinViewTypes`:
-
-```typescript
-const builtinViewTypes = {
-  chat: { icon: ChatIcon, label: "Chat", defaultTitle: "New Chat" },
-  // ... existing entries ...
-  "my-view": { icon: DefaultViewIcon, label: "My View", defaultTitle: "My View" },
-}
-```
-
-If you skip this, the TabBar still shows the view in the "+" menu using a default icon and the scope string as the label.
-
-## How the View Gets Data
-
-Inside `MyViewContent` (or any descendant):
-
-```typescript
-import { useDb } from "../../lib/kyju-react"
-import { useRpc } from "../../lib/providers"
-
-function MyViewContent() {
-  const views = useDb((root) => root.views)
-  const rpc = useRpc()
-
-  const handleClick = async () => {
-    await rpc.send(viewId, "hello from my view")
+```json
+{
+  "name": "my-plugin",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0"
   }
-
-  return <button onClick={handleClick}>Send</button>
 }
 ```
 
-- `useDb(selector)` — reactive read from the Kyju database replica
-- `useRpc()` — typed RPC proxy to call main-process procedures
-- `useKyjuClient()` — direct Kyju client for writes (e.g. `client.views.set(...)`)
+## Mounting Your View From the Workspace
+
+Most views just need to be registered — the `workspace` iframe's util-sidebar rail (or the bottom panel, depending on what you set in `meta`) auto-includes them.
+
+To mount a view from your own UI (e.g. tying it to a specific row in your data), use the `<View>` primitive:
+
+```tsx
+import { View } from "#zenbu/init/src/renderer/lib/View"
+
+<View
+  id={`my-view:${someId}`}    // stable cache key + (with persisted) kyju row id
+  scope="my-view"
+  props={{ thingId: someId }} // becomes useViewProps().thingId in the child
+  pinned                       // immune from LRU eviction while visible
+  // persisted                  // also write a row to kernel.views for restoration
+/>
+```
 
 ## Checklist
 
-- [ ] View type added to `zod.enum` in `shared/schema/index.ts`
-- [ ] Vite MPA entry added in `src/renderer/vite.config.ts`
-- [ ] `views/<name>/index.html` created
-- [ ] `views/<name>/main.tsx` created
-- [ ] `views/<name>/App.tsx` created with WS + provider pattern
-- [ ] `views/<name>/app.css` created
-- [ ] `src/main/services/view-<name>.ts` created with `registerAlias`
-- [ ] View appears in TabBar "+" menu when running
+- [ ] `vite.config.ts` — one-line `defineZenbuViewConfig()` (with `root` if your `index.html` is in a subdir)
+- [ ] `src/view/index.html` — `#root` div + `<script src="/main.tsx">`
+- [ ] `src/view/main.tsx` — `createRoot(...).render(<App />)`
+- [ ] `src/view/app.css` — `@import "#zenbu/init/src/renderer/styles/app.css"` (+ any plugin-specific styles below)
+- [ ] `src/view/App.tsx` — wraps content in `<ViewProvider>`
+- [ ] `src/services/<name>.ts` — `ViewRegistryService.register(scope, viewRoot, configFile, meta)`
+- [ ] `package.json` — runtime deps only; no `vite`/`tailwindcss`/`@vitejs/plugin-react`/`@tailwindcss/vite`

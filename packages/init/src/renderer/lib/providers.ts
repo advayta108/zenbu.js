@@ -3,7 +3,7 @@ import type { ClientProxy, SchemaShape } from "@zenbu/kyju";
 import type { RouterProxy, EventProxy } from "@zenbu/zenrpc";
 import type { ServiceRouter } from "#registry/services";
 import type { SectionedClient } from "./kyju-react";
-import type { ZenbuEvents } from "../../../shared/events";
+import type { PluginEvents } from "#registry/events";
 
 export type RpcType = RouterProxy<ServiceRouter> & {
   [service: string]: { [method: string]: (...args: any[]) => Promise<any> }
@@ -18,10 +18,10 @@ export function useRpc(): RpcType {
   return rpc;
 }
 
-const EventsContext = React.createContext<EventProxy<ZenbuEvents> | null>(null);
+const EventsContext = React.createContext<EventProxy<PluginEvents> | null>(null);
 export const EventsProvider = EventsContext.Provider;
 
-export function useEvents(): EventProxy<ZenbuEvents> {
+export function useEvents(): EventProxy<PluginEvents> {
   const events = useContext(EventsContext);
   if (!events) throw new Error("useEvents must be used inside EventsProvider");
   return events;

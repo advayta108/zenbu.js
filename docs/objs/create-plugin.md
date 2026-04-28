@@ -175,9 +175,13 @@ See the `install-plugin` command. The short version: add the absolute path to yo
 
 ### Adding Views from a Plugin
 
-A plugin can register views by depending on `ViewRegistryService`. For a view with its own Vite server (not sharing the kernel's core server):
+See [`create-view`](./create-view.md) for the full template. The short version: plugins use `defineZenbuViewConfig()` to inherit the kernel's Vite stack (Tailwind, React, aliases) without installing those tools themselves, and `@import "#zenbu/init/src/renderer/styles/app.css"` in their CSS to inherit theme variables.
+
+The view-registration service looks like:
 
 ```typescript
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { Service, runtime } from "#zenbu/init/src/main/runtime"
 import { ViewRegistryService } from "#zenbu/init/src/main/services/view-registry"
 
@@ -186,61 +190,55 @@ export class MyViewService extends Service {
   static deps = { viewRegistry: ViewRegistryService }
   declare ctx: { viewRegistry: ViewRegistryService }
 
-  async evaluate() {
-    this.effect("view", () => {
-      const entry = this.ctx.viewRegistry.register(
-        "my-plugin-view",
-        "/path/to/my-plugin/src/renderer",
-      )
+  evaluate() {
+    this.setup("register-view", () => {
+      const serviceDir = path.dirname(fileURLToPath(import.meta.url))
+      const viewRoot = path.resolve(serviceDir, "..", "view")
+      const configFile = path.resolve(serviceDir, "..", "..", "vite.config.ts")
+      this.ctx.viewRegistry.register("my-plugin-view", viewRoot, configFile, {
+        sidebar: true,
+      })
+      return () => this.ctx.viewRegistry.unregister("my-plugin-view")
     })
   }
 }
 ```
 
-`register()` (not `registerAlias()`) creates a new Vite dev server for this view's source directory.
+`register()` boots a Vite dev server rooted at `viewRoot`. The kernel's `themeStylesheetPlugin`, `advicePreludePlugin`, and advice runtime/transform are injected automatically into every plugin's Vite server — you don't add them yourself.
 
 ### Portable Resolution: How `#zenbu/` Works
 
 Plugins are fully portable — they can live anywhere on the filesystem and work on any computer. This is achieved through three resolution layers:
 
-**Main process (services):** The shell's alias loader intercepts `#zenbu/*` imports and resolves them to `~/.zenbu/plugins/zenbu/packages/*`. It also intercepts `#zenbu/*` imports and resolves them using each package's `exports` map. No hardcoded paths needed in plugin source.
+**Main process (services):** The shell's alias loader intercepts `#zenbu/*` imports and resolves them to `~/.zenbu/plugins/zenbu/packages/*`. No hardcoded paths needed in plugin source.
 
-**Renderer (views):** Each plugin's `vite.config.ts` sets a resolve alias using `os.homedir()`:
+**Renderer (views):** Plugins use [`defineZenbuViewConfig`](../../packages/init/src/renderer/view-config.ts) which provides the `@` and `#zenbu` aliases automatically. The whole `vite.config.ts` is two lines:
 
 ```typescript
-import os from "node:os"
-import path from "node:path"
+import { defineZenbuViewConfig } from "../zenbu/packages/init/src/renderer/view-config"
 
-const packagesDir = path.join(os.homedir(), ".zenbu", "plugins", "zenbu", "packages")
-
-export default defineConfig({
-  resolve: {
-    alias: {
-      "@zenbu": packagesDir,
-      "@": path.join(packagesDir, "init", "src", "renderer"),
-    },
-  },
-})
+export default defineZenbuViewConfig()
 ```
 
-**CSS (shadcn/UI components):** Import the shared stylesheet in your plugin's `app.css`:
+The helper resolves `@vitejs/plugin-react` and `@tailwindcss/vite` from the kernel's `node_modules` (via `createRequire` rooted at the kernel's `package.json`), so plugins don't install them.
+
+**CSS (shadcn / theme vars):** Import the kernel's shared preset in your `app.css`:
 
 ```css
-@import "tailwindcss";
-@import "#zenbu/init/src/renderer/styles/shadcn.css";
+@import "#zenbu/init/src/renderer/styles/app.css";
 ```
 
-This single import gives you CSS variables, base styles, and Tailwind class scanning for all UI components — the `@source` directives inside `shadcn.css` use relative paths that resolve correctly regardless of where your plugin lives.
+That gives you Tailwind v4, all the `--zenbu-*` and shadcn theme vars, the chat animations, and the streamdown source scan. Workspace `theme.css` overrides cascade in via the `<link>` tag injected by `themeStylesheetPlugin`.
 
 **TypeScript (IDE):** `tsconfig.local.json` is gitignored and generated per machine (by `setup.ts` or manually). It maps `#zenbu/*` to the local monorepo path for IDE type-checking.
 
 ## Checklist
 
 - [ ] `zenbu.plugin.json` with `services` array
-- [ ] `package.json` at the plugin root
+- [ ] `package.json` at the plugin root (runtime deps only — no `vite`/`tailwindcss`/`@vitejs/plugin-react`/`@tailwindcss/vite`)
 - [ ] `tsconfig.json` extending `./tsconfig.local.json`
 - [ ] `tsconfig.local.json` (gitignored, generated per machine)
-- [ ] `vite.config.ts` with `@zenbu` alias via `os.homedir()` (if plugin has views)
-- [ ] `app.css` importing `#zenbu/init/src/renderer/styles/shadcn.css` (if using UI components)
+- [ ] `vite.config.ts` — `defineZenbuViewConfig()` one-liner (only if plugin has views)
+- [ ] `app.css` — `@import "#zenbu/init/src/renderer/styles/app.css"` (only if plugin has views)
 - [ ] Service files that import from `#zenbu/init/...` and call `runtime.register()`
 - [ ] Plugin manifest path added to `~/.zenbu/config.json`

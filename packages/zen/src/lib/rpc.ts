@@ -1,10 +1,10 @@
 import { connectRpc, type EventProxy, type RouterProxy } from "@zenbu/zenrpc"
 import type { ServiceRouter } from "#registry/services"
-import type { ZenbuEvents } from "@zenbu/init/shared/events"
+import type { PluginEvents } from "#registry/events"
 import { readRuntimeConfig, type RuntimeConfig } from "./runtime"
 
 export type CliRpc = RouterProxy<ServiceRouter>
-export type CliEvents = EventProxy<ZenbuEvents>
+export type CliEvents = EventProxy<PluginEvents>
 
 export type CliConnection = {
   rpc: CliRpc
@@ -54,7 +54,7 @@ export async function connectCli(): Promise<CliConnection | null> {
     return null
   }
 
-  const { server, events, disconnect } = await connectRpc<ServiceRouter, ZenbuEvents>({
+  const { server, events, disconnect } = await connectRpc<ServiceRouter, PluginEvents>({
     version: "0",
     send: (data) => {
       if (ws.readyState === WebSocket.OPEN) {

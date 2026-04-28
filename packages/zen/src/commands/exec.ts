@@ -30,7 +30,7 @@ Usage:
 
 Available in scope:
   rpc                             typed RouterProxy<ServiceRouter>
-  events                          EventProxy<ZenbuEvents>
+  events                          EventProxy<PluginEvents>
   close()                         close the connection early (auto-closed at end)
 
 Examples:

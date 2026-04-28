@@ -6,6 +6,15 @@ export type Manifest = {
   services?: string[]
   schema?: string
   migrations?: string
+  /**
+   * Path to a `.ts` file that `export type Events = { ... }`. zen-link
+   * intersects every plugin's Events into a single `PluginEvents` type
+   * in `~/.zenbu/registry/events.ts`, which the rpc/event glue uses as
+   * the `TEvents` parameter for `createServer<TEvents>` and
+   * `connectRpc<_, TEvents>`. Lets plugins emit/subscribe to typed
+   * events without touching the kernel.
+   */
+  events?: string
   setup?: { script?: string; version?: number }
   /**
    * Minimum kernel version required, as a semver range.

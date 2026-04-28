@@ -6,6 +6,7 @@
   ],
   "schema": "./shared/schema/index.ts",
   "migrations": "./kyju/index.ts",
+  "events": "./shared/events.ts",
   "preload": "./src/main/preload.ts",
   "setup": {
     "script": "./setup.ts",

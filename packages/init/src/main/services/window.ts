@@ -30,6 +30,7 @@ import {
   makeWindowAppState,
   type ArchivedAgent,
 } from "../../../shared/agent-ops";
+import { MAIN_WINDOW_ID } from "../../../shared/schema";
 import { bootBus } from "../../../shared/boot-bus";
 import { mark } from "../../../shared/tracer";
 
@@ -752,6 +753,9 @@ export class WindowService extends Service {
           url = `${base}${viewPath}?${qs}`;
         }
         mark("orchestrator-load-start", { windowId });
+        if (windowId === MAIN_WINDOW_ID) {
+          console.log(`[zenbu] open in browser: ${url}`);
+        }
         view.webContents.loadURL(url);
 
         viewEntries.set(windowId, { win, view });

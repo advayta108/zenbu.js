@@ -1,6 +1,15 @@
 import type { TokenPayload } from "./tokens"
 
-export type ZenbuEvents = {
+/**
+ * The kernel's contribution to `PluginEvents`. zen-link picks this up via
+ * `events: "./shared/events.ts"` in [zenbu.plugin.json](./zenbu.plugin.json)
+ * and intersects it with every other plugin's `Events` type into
+ * `~/.zenbu/registry/events.ts`. Consumers (`createServer<TEvents>`,
+ * `connectRpc<_, TEvents>`) take `PluginEvents` from that registry, not
+ * this file directly — that's how plugins extend the event surface
+ * without editing core.
+ */
+export type Events = {
   advice: {
     reload: { scope: string }
   }
@@ -24,17 +33,6 @@ export type ZenbuEvents = {
     scrollTouch: { webContentsId: number; phase: "begin" | "end" }
   }
   pty: {
-    data: { sessionId: string; data: string }
-    exit: { sessionId: string; exitCode: number }
-  }
-  bottomTerminal: {
-    /**
-     * Emitted by the bottom-terminal plugin's pty service when the spawned
-     * shell produces output. Each bottom-panel iframe owns a sessionId
-     * (assigned when it calls `createSession`) and filters incoming events
-     * locally by sessionId — i.e., one panel's output never lands in a
-     * different panel.
-     */
     data: { sessionId: string; data: string }
     exit: { sessionId: string; exitCode: number }
   }

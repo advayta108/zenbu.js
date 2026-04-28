@@ -1,9 +1,9 @@
 import type { WebSocket } from "ws";
 import { createServer, createRpcRouter } from "@zenbu/zenrpc";
-import type { AnyRouter, EventProxy } from "@zenbu/zenrpc";
+import type { AnyRouter } from "@zenbu/zenrpc";
 import { Service, runtime } from "../runtime";
 import { HttpService } from "./http";
-import type { ZenbuEvents } from "../../../shared/events";
+import type { PluginEvents } from "#registry/events";
 /**
  * not great come back to this
  */
@@ -19,9 +19,9 @@ export class RpcService extends Service {
   static deps = { http: HttpService };
   declare ctx: { http: HttpService };
 
-  private _emit: EmitProxy<ZenbuEvents> | null = null;
+  private _emit: EmitProxy<PluginEvents> | null = null;
 
-  get emit(): EmitProxy<ZenbuEvents> {
+  get emit(): EmitProxy<PluginEvents> {
     if (!this._emit) throw new Error("RpcService not yet evaluated");
     return this._emit;
   }
@@ -32,7 +32,7 @@ export class RpcService extends Service {
     this.setup("rpc-wiring", () => {
       const rpcRouter = createRpcRouter();
 
-      const rpcServer = createServer<ZenbuEvents>({
+      const rpcServer = createServer<PluginEvents>({
         router: () => runtime.buildRouter() as AnyRouter,
         version: "0",
         send: rpcRouter.send,

@@ -13,9 +13,10 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/renderer/*"],
-      "#zenbu/*": ["../*"]
+      "#zenbu/*": ["../*"],
+      "#registry/*": ["/Users/robby/.zenbu/registry/*"]
     },
     "types": ["node", "bun"]
   },
-  "include": ["src", "shared", "test", "setup.ts"]
+  "include": ["src", "shared", "test", "setup.ts", "/Users/robby/.zenbu/registry"]
 }

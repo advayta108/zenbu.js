@@ -6,7 +6,7 @@ import type { ServiceRouter } from "#registry/services";
 import type { EventProxy } from "@zenbu/zenrpc";
 import type { createReplica } from "@zenbu/kyju";
 import type { RpcType } from "./providers";
-import type { ZenbuEvents } from "../../../shared/events";
+import type { PluginEvents } from "#registry/events";
 
 export {
   RpcProvider,
@@ -17,7 +17,7 @@ export {
   useKyjuClient,
 } from "./providers";
 
-export type ZenbuEventProxy = EventProxy<ZenbuEvents>;
+export type ZenbuEventProxy = EventProxy<PluginEvents>;
 
 type Replica = ReturnType<typeof createReplica>;
 
@@ -78,7 +78,7 @@ export function useWsConnection(): WsConnectionState {
           retriesRef.current = 0;
 
           const { server: rpc, events, disconnect: disconnectRpc } =
-            await connectRpc<ServiceRouter, ZenbuEvents>({
+            await connectRpc<ServiceRouter, PluginEvents>({
               version: "0",
               send: (data) => {
                 if (ws.readyState === WebSocket.OPEN) {
