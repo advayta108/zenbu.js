@@ -1,3 +1,6 @@
+> [!WARNING]
+> Zenbu is under active construction. It may break and is not ready for general usage.
+
 <p align="center">
   <img src="./assets/logo.png" alt="Zenbu" width="100" />
 </p>
@@ -12,11 +15,6 @@
 <p align="center">
   <img src="./assets/screenshot.webp" width="640" style="background: transparent;" />
 </p>
-
-## Status
-
-Zenbu is under active construction. It may break and is not ready for general usage.
-
 ## Codebase pointers
 
 Main app:
