@@ -12,6 +12,7 @@ import { runSetup } from "./commands/setup"
 import { runInit } from "./commands/init"
 import { runExec } from "./commands/exec"
 import { runProfile } from "./commands/profile"
+import { runDb } from "./commands/db"
 
 const SUBCOMMANDS = new Set([
   "kyju",
@@ -22,6 +23,7 @@ const SUBCOMMANDS = new Set([
   "init",
   "exec",
   "profile",
+  "db",
   "help",
   "--help",
   "-h",
@@ -32,12 +34,13 @@ function printUsage() {
 zen — Zenbu CLI
 
 Usage:
-  zen [path] [-r|-n] [--blocking]                Open a workspace at path (default: cwd)
+  zen [path] [-r|-n] [-d <path>] [--blocking]    Open a workspace at path (default: cwd)
   zen kyju <generate|db> [...]                   Run the kyju CLI
   zen link                                       Regenerate registry types
   zen doctor                                     Re-run kernel setup.ts
   zen setup [--dir <path>]                       Run a plugin's setup.ts
   zen config <get|set> <key> [value]             Read/write CLI config
+  zen db [list|add|default|remove] [...]         Manage DB paths (no args = interactive picker)
   zen init <plugin-name> [--dir <path>]          Scaffold a new plugin
   zen exec -e '<ts>' | zen exec <file.ts>        Run TS with rpc/events pre-opened
   zen profile [--duration <ms>] [--out <path>]   CPU profile the kernel main process
@@ -46,6 +49,7 @@ Usage:
 Open flags:
   -r, --reuse-window   Swap workspace on the last focused window
   -n, --new-window     Always open a new window
+  -d, --db <path>      Use the DB at <path> for this launch (creates if missing)
 `)
 }
 
@@ -84,6 +88,9 @@ async function main() {
       return
     case "profile":
       await runProfile(rest)
+      return
+    case "db":
+      await runDb(rest)
       return
     case "help":
     case "--help":

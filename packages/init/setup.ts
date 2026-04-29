@@ -506,15 +506,64 @@ async function ensureRegistryTypes(): Promise<void> {
 async function ensureDbConfig(): Promise<void> {
   const dbPath = path.join(REPO_DIR, "packages/init/.zenbu/db")
   const dbJson = path.join(INTERNAL_DIR, "db.json")
-  let prev: { dbPath?: string } = {}
+
+  type Entry = { path: string; lastUsedAt: number }
+  type Reg = { defaultDbPath: string | null; dbs: Entry[] }
+
+  let prev: any = {}
   try {
     prev = JSON.parse(await fsp.readFile(dbJson, "utf8"))
   } catch {}
-  if (prev.dbPath === dbPath) {
+
+  // Migrate legacy `{ dbPath }` writers (pre-registry) into the new shape.
+  let next: Reg
+  if (
+    prev &&
+    typeof prev === "object" &&
+    typeof prev.dbPath === "string" &&
+    prev.defaultDbPath === undefined &&
+    prev.dbs === undefined
+  ) {
+    next = {
+      defaultDbPath: prev.dbPath,
+      dbs: [{ path: prev.dbPath, lastUsedAt: Date.now() }],
+    }
+  } else {
+    next = {
+      defaultDbPath:
+        typeof prev?.defaultDbPath === "string" ? prev.defaultDbPath : null,
+      dbs: Array.isArray(prev?.dbs)
+        ? prev.dbs
+            .filter(
+              (e: any) => e && typeof e === "object" && typeof e.path === "string",
+            )
+            .map((e: any) => ({
+              path: e.path,
+              lastUsedAt: typeof e.lastUsedAt === "number" ? e.lastUsedAt : 0,
+            }))
+        : [],
+    }
+  }
+
+  // Seed the prod path: ensure it's in the list and default to it when nothing
+  // else is selected. Don't override a user-set default.
+  if (!next.dbs.some((e) => e.path === dbPath)) {
+    next.dbs.push({ path: dbPath, lastUsedAt: Date.now() })
+  }
+  if (!next.defaultDbPath) {
+    next.defaultDbPath = dbPath
+  }
+
+  const serialized = JSON.stringify(next, null, 2)
+  let prevSerialized = ""
+  try {
+    prevSerialized = await fsp.readFile(dbJson, "utf8")
+  } catch {}
+  if (prevSerialized.trim() === serialized.trim()) {
     logOk("db.json already current")
     return
   }
-  await fsp.writeFile(dbJson, JSON.stringify({ dbPath }, null, 2))
+  await fsp.writeFile(dbJson, serialized)
   logDo(`wrote ${dbJson}`)
 }
 
@@ -525,10 +574,20 @@ async function ensureAppPath(): Promise<void> {
   } catch {
     return
   }
-  // `zen config` writes into packages/init/.zenbu/db/root.json under
+  // `zen config` writes into the active DB's root.json under
   // plugin["zen-cli"].appPath. Read it directly to avoid spawning bun+zen
-  // every setup run.
-  const rootJson = path.join(REPO_DIR, "packages/init/.zenbu/db/root.json")
+  // every setup run. The active DB is whatever `ensureDbConfig` wrote as
+  // `defaultDbPath` (seeded earlier in this same run).
+  let activeDb = path.join(REPO_DIR, "packages/init/.zenbu/db")
+  try {
+    const reg = JSON.parse(
+      await fsp.readFile(path.join(INTERNAL_DIR, "db.json"), "utf8"),
+    )
+    if (typeof reg?.defaultDbPath === "string") {
+      activeDb = reg.defaultDbPath
+    }
+  } catch {}
+  const rootJson = path.join(activeDb, "root.json")
   let current = ""
   try {
     const root = JSON.parse(await fsp.readFile(rootJson, "utf8"))

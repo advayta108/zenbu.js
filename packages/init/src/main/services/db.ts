@@ -8,9 +8,9 @@ import type { KyjuError, EffectFieldNode, FieldNode } from "@zenbu/kyju";
 import type * as Effect from "effect/Effect";
 import { createRouter, dbStringify, dbParse } from "@zenbu/kyju/transport";
 import type { DbRoot } from "#registry/db-sections";
-//
 import { Service, runtime } from "../runtime";
 import { trace as traceSpan } from "../../../shared/tracer";
+import { addDb, resolveDbPath } from "../../../shared/db-registry";
 import { HttpService } from "./http";
 
 type EffectSectionProxy<S> = {
@@ -42,8 +42,6 @@ export type SectionedClient = {
     [K in keyof DbRoot["plugin"]]: SectionProxy<DbRoot["plugin"][K]>;
   };
 };
-
-const DB_PATH = path.join(process.cwd(), ".zenbu", "db");
 
 export async function resolveManifestModulePath(
   baseDir: string,
@@ -347,10 +345,22 @@ export class DbService extends Service {
   db: Db | null = null;
   dbRouter: ReturnType<typeof createRouter> | null = null;
   private sectionsHash = "";
-  private dbPath = "";
+  private _dbPath: string | null = null;
+
+  /**
+   * Resolved DB path. Throws if accessed before `evaluate()` has run — the
+   * service contract guarantees deps are evaluated before dependents, so any
+   * access from a dependent service or RPC handler is safe.
+   */
+  get dbPath(): string {
+    if (this._dbPath === null) {
+      throw new Error("DbService.dbPath accessed before evaluate()");
+    }
+    return this._dbPath;
+  }
 
   private getCollectionDir(collectionId: string): string {
-    return path.join(DB_PATH, "collections", collectionId);
+    return path.join(this.dbPath, "collections", collectionId);
   }
 
   private getCollectionIndexPath(collectionId: string): string {
@@ -432,35 +442,38 @@ export class DbService extends Service {
   }
 
   async evaluate() {
-    const sections = await this.trace("discover-sections", () =>
-      discoverSections(),
-    );
+    const [sections, resolved] = await Promise.all([
+      this.trace("discover-sections", () => discoverSections()),
+      resolveDbPath(process.argv),
+    ]);
     const sectionsHash = JSON.stringify(
       sections.map((s) => ({ name: s.name, v: s.migrations.length })),
     );
+    const dbPath = resolved.path;
 
     if (
       !this.db ||
       this.sectionsHash !== sectionsHash ||
-      this.dbPath !== DB_PATH
+      this._dbPath !== dbPath
     ) {
-      await fs.mkdir(path.dirname(DB_PATH), { recursive: true });
       this.dbRouter = createRouter();
       this.db = await this.trace("create-db", () =>
         createDb({
           sections,
-          path: DB_PATH,
+          path: dbPath,
           send: (event) => this.dbRouter!.send(event),
         }),
       );
       this.sectionsHash = sectionsHash;
-      this.dbPath = DB_PATH;
+      this._dbPath = dbPath;
+      addDb(dbPath).catch((err) => {
+        console.error("[db] failed to bump registry lastUsedAt:", err);
+      });
       console.log(
-        `[db] ready at ${DB_PATH} (sections: ${sections
+        `[db] ready at ${dbPath} (source: ${resolved.source}, sections: ${sections
           .map((s) => `${s.name}@v${s.migrations.length}`)
           .join(", ")})`,
       );
-      //
     }
 
     const { http } = this.ctx;

@@ -1,5 +1,4 @@
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { app } from "electron";
 import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid";
@@ -11,8 +10,6 @@ import { WorkspaceService } from "./workspace";
 import { INTERNAL_DIR, RUNTIME_JSON } from "../../../shared/paths";
 import { MAIN_WINDOW_ID } from "../../../shared/schema";
 import { makeWindowAppState } from "../../../shared/agent-ops";
-
-const DB_PATH = path.join(process.cwd(), ".zenbu", "db");
 
 export type WindowMode = "default" | "reuse" | "new";
 
@@ -193,7 +190,7 @@ export class CliService extends Service {
       JSON.stringify({
         wsPort: this.ctx.http.port,
         wsToken: this.ctx.http.authToken,
-        dbPath: DB_PATH,
+        dbPath: this.ctx.db.dbPath,
         pid: process.pid,
       }),
     );

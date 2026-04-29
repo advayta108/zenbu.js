@@ -3,6 +3,7 @@ import { existsSync, statSync } from "node:fs"
 import { resolve as resolvePath } from "node:path"
 import { resolveAppPath } from "../app-path"
 import { connectCli } from "../lib/rpc"
+import { addDb, loadRegistry } from "../../../init/shared/db-registry"
 
 type WindowMode = "default" | "reuse" | "new"
 
@@ -11,6 +12,7 @@ type Args = {
   mode: WindowMode
   blocking: boolean
   verbose: boolean
+  dbPath: string | null
 }
 
 function parseArgs(argv: string[]): Args {
@@ -18,17 +20,28 @@ function parseArgs(argv: string[]): Args {
   let mode: WindowMode = "default"
   let blocking = false
   let verbose = false
+  let dbPath: string | null = null
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === "--blocking") blocking = true
     else if (arg === "--verbose" || arg === "-v") verbose = true
     else if (arg === "--reuse-window" || arg === "-r") mode = "reuse"
     else if (arg === "--new-window" || arg === "-n") mode = "new"
-    else if (!arg.startsWith("-") && pathArg == null) pathArg = arg
+    else if (arg === "--db" || arg === "-d") {
+      const next = argv[i + 1]
+      if (!next || next.startsWith("-")) {
+        console.error(`zen: ${arg} requires a path`)
+        process.exit(1)
+      }
+      dbPath = resolvePath(process.cwd(), next)
+      i++
+    } else if (arg.startsWith("--db=")) {
+      dbPath = resolvePath(process.cwd(), arg.slice("--db=".length))
+    } else if (!arg.startsWith("-") && pathArg == null) pathArg = arg
     else {
       console.error(`zen: unknown flag "${arg}"`)
       console.error(
-        `valid: zen [path] [-r|--reuse-window] [-n|--new-window] [--blocking] [--verbose]`,
+        `valid: zen [path] [-r|--reuse-window] [-n|--new-window] [-d|--db <path>] [--blocking] [--verbose]`,
       )
       process.exit(1)
     }
@@ -52,21 +65,49 @@ function parseArgs(argv: string[]): Args {
     process.exit(1)
   }
 
-  return { cwd, mode, blocking, verbose }
+  return { cwd, mode, blocking, verbose, dbPath }
 }
 
 export async function runOpen(argv: string[]) {
-  const { cwd, mode, blocking, verbose } = parseArgs(argv)
+  const { cwd, mode, blocking, verbose, dbPath } = parseArgs(argv)
   const log = verbose
     ? (...args: unknown[]) => console.error("[zen]", ...args)
     : () => {}
 
   log("opening workspace at:", cwd, "mode:", mode)
 
+  // Resolve the requested DB path: explicit flag → registry default → null
+  // (let the main process fall back to cwd/.zenbu/db).
+  let resolvedDbPath: string | null = dbPath
+  if (!resolvedDbPath) {
+    try {
+      const reg = await loadRegistry()
+      resolvedDbPath = reg.defaultDbPath
+    } catch {
+      resolvedDbPath = null
+    }
+  }
+
   const conn = await connectCli()
   if (conn) {
     try {
+      if (
+        resolvedDbPath &&
+        conn.config.dbPath &&
+        conn.config.dbPath !== resolvedDbPath
+      ) {
+        console.error(
+          `zen: app is already running with DB at ${conn.config.dbPath}.`,
+        )
+        console.error(
+          `     Quit it (or omit --db) before switching to ${resolvedDbPath}.`,
+        )
+        process.exit(1)
+      }
       await conn.rpc.cli.openWorkspace({ cwd, mode })
+      if (resolvedDbPath) {
+        addDb(resolvedDbPath).catch(() => {})
+      }
       return
     } catch (err) {
       log("rpc openWorkspace failed, falling through to spawn:", err)
@@ -84,11 +125,22 @@ export async function runOpen(argv: string[]) {
     process.exit(1)
   }
 
+  if (resolvedDbPath) {
+    try {
+      await addDb(resolvedDbPath)
+    } catch (err) {
+      log("failed to record db path in registry:", err)
+    }
+  }
+
   const electronArgs: string[] = [
     `--zen-cwd=${cwd}`,
     `--zen-window-mode=${mode}`,
     `--zen-width=775`,
   ]
+  if (resolvedDbPath) {
+    electronArgs.push(`--zen-db-path=${resolvedDbPath}`)
+  }
 
   if (blocking) {
     const child = spawn(bin, electronArgs, { stdio: "inherit" })
