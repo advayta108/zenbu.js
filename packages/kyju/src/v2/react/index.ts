@@ -1,11 +1,13 @@
 import {
   createContext,
   createElement,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import type { ClientCollection, ClientState, ClientEvent, KyjuJSON } from "../shared";
@@ -64,35 +66,19 @@ export function createKyjuReact<TShape extends SchemaShape>() {
     const selectorRef = useRef(selector);
     selectorRef.current = selector;
 
-    const readSnapshot = () => {
+    const subscribe = useCallback(
+      (cb: () => void) => replica.subscribe(() => cb()),
+      [replica],
+    );
+
+    const getSnapshot = useCallback((): T | Root | undefined => {
       const state = replica.getState();
       if (state.kind !== "connected") return undefined;
       const root = state.root as Root;
       return selectorRef.current ? selectorRef.current(root) : root;
-    };
+    }, [replica]);
 
-    const [, forceRender] = useState(0);
-    const [value, setValue] = useState(readSnapshot);
-
-    useEffect(() => {
-      let prev = value;
-      return replica.subscribe((state: ClientState) => {
-        if (state.kind !== "connected") return;
-        const root = state.root as Root;
-        if (!selectorRef.current) {
-          setValue(() => root);
-          forceRender((n) => n + 1);
-          return;
-        }
-        const next = selectorRef.current(root);
-        if (!Object.is(prev, next)) {
-          prev = next;
-          setValue(() => next);
-        }
-      });
-    }, [replica.subscribe]);
-
-    return value as T | Root;
+    return useSyncExternalStore(subscribe, getSnapshot) as T | Root;
   }
 
   function useCollection<T extends { collectionId: string } & CollectionRefBrand<unknown>>(

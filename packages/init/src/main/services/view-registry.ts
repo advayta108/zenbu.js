@@ -119,6 +119,9 @@ export class ViewRegistryService extends Service {
       console.error("[view-registry] failed to load manifest icons:", err);
     });
 
+    // Wipe stale rows from any prior session; ports are fresh on boot.
+    void this.syncToDb();
+
     this.setup("view-registry-cleanup", () => {
       return async () => {
         for (const [scope, entry] of this.views) {

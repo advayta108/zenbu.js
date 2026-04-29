@@ -138,13 +138,13 @@ function WorkspaceContent() {
   const sidebarOpen = shellViewState?.sidebarOpen ?? true
   const utilSelected = shellViewState?.utilitySidebarSelected ?? null
 
-  const sidebarEntries = useMemo<RegistryEntry[]>(() => {
-    const all = registry.filter((e) => e.meta?.sidebar === true)
-    const filtered = all.filter((e) =>
-      !e.workspaceId || e.workspaceId === workspaceIdParam,
-    )
-    return filtered
-  }, [registry])
+  const sidebarEntries = useMemo<RegistryEntry[]>(
+    () =>
+      registry
+        .filter((e) => e.meta?.sidebar === true)
+        .filter((e) => !e.workspaceId || e.workspaceId === workspaceIdParam),
+    [registry, workspaceIdParam],
+  )
   const selectedUtilEntry = useMemo(
     () => sidebarEntries.find((e) => e.scope === utilSelected),
     [sidebarEntries, utilSelected],

@@ -10,7 +10,6 @@ interface HotContext {
   accept(): void
   dispose(cb: (data: any) => void | Promise<void>): void
   prune?(cb: () => void | Promise<void>): void
-  invalidate?(): void
   data?: any
 }
 
@@ -20,7 +19,6 @@ interface ServiceSlot {
   ServiceClass: typeof Service
   status: "blocked" | "evaluating" | "ready" | "failed"
   workspaceId?: string
-  hot?: HotContext
 }
 
 console.log("[kernel] runtime edit check")
@@ -155,7 +153,6 @@ export class ServiceRuntime {
     const slot = this.slots.get(slotKey)
     if (slot) {
       slot.ServiceClass = ServiceClass
-      slot.hot = hot ?? undefined
     } else {
       this.slots.set(slotKey, {
         error: null,
@@ -163,7 +160,6 @@ export class ServiceRuntime {
         ServiceClass,
         status: "blocked",
         workspaceId: ws,
-        hot: hot ?? undefined,
       })
     }
     this.rebuildDependentsIndex()
