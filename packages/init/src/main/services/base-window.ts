@@ -39,8 +39,8 @@ export class BaseWindowService extends Service {
     const windowId = opts?.windowId ?? nanoid()
     const zenWidth = this.getZenWidth()
     const win = new BaseWindow({
-      width: opts?.width ?? zenWidth ?? 800,
-      height: opts?.height ?? 900,
+      width: opts?.width ?? zenWidth ?? 1100,
+      height: opts?.height ?? 750,
       ...(opts?.x != null && opts?.y != null
         ? { x: opts.x, y: opts.y }
         : {}),

@@ -7,35 +7,20 @@ import {
   useState,
   useEffect,
   useRef,
+  useSyncExternalStore,
   lazy,
   Suspense,
 } from "react";
 import {
-  SearchIcon,
   RotateCwIcon,
   DownloadIcon,
   GitMergeIcon,
   RefreshCwIcon,
 } from "lucide-react";
-import { nanoid } from "nanoid";
-import { makeCollection } from "@zenbu/kyju/schema";
-import { useDb, useCollection } from "../../lib/kyju-react";
+import { useDb } from "../../lib/kyju-react";
 import { ViewProvider } from "../../lib/View";
 import { useKyjuClient, useRpc } from "../../lib/providers";
 import { DragRegionOverlay } from "../../lib/drag-region";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "../../components/ui/popover";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "../../components/ui/command";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -50,13 +35,6 @@ import { CliRelaunchModal } from "./components/CliRelaunchModal";
 import { KernelBinaryUpdateBanner } from "./components/KernelBinaryUpdateBanner";
 import { ShortcutForwarderProvider } from "./providers/shortcut-forwarder";
 import { useFocusOnRequest } from "../../lib/focus-request";
-import {
-  insertHotAgent,
-  validSelectionFromTemplate,
-  makeAgentAppState,
-  makeViewAppState,
-  type ArchivedAgent,
-} from "../../../../shared/agent-ops";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { View } from "../../lib/View";
 
@@ -70,7 +48,6 @@ if (!wsToken) throw new Error("Missing ?wsToken= in orchestrator URL");
 
 import type { SchemaRoot } from "../../../../shared/schema";
 
-type AgentItem = SchemaRoot["agents"][number];
 type RegistryEntry = { scope: string; url: string; port: number };
 
 // The workspace shell view's id is fully derived from (windowId,
@@ -217,128 +194,6 @@ function TitleBarErrorFallback({
         </button>
       </div>
     </div>
-  );
-}
-
-function AgentLabel({ agent }: { agent: AgentItem }) {
-  const { items: events } = useCollection(agent.eventLog);
-  const label = useMemo(() => {
-    if (agent.title?.kind === "set") return agent.title.value;
-    let last: string | undefined;
-    for (const event of events) {
-      if (event.data.kind === "user_prompt") last = event.data.text;
-    }
-    return last?.replace(/\s+/g, " ").trim() || "New Chat";
-  }, [agent.title, events]);
-  return <>{label}</>;
-}
-
-function timeAgo(ts: number | undefined): string {
-  if (!ts) return "";
-  const seconds = Math.floor((Date.now() - ts) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  return `${days}d`;
-}
-
-function AgentPickerCombobox({
-  agents,
-  openAgentIds,
-  onSelect,
-}: {
-  agents: AgentItem[];
-  openAgentIds: Set<string>;
-  onSelect: (agentId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const sortedAgents = useMemo(
-    () =>
-      [...agents]
-        .filter((a) => !openAgentIds.has(a.id))
-        .sort(
-          (a, b) => (b.lastUserMessageAt ?? 0) - (a.lastUserMessageAt ?? 0),
-        ),
-    [agents, openAgentIds],
-  );
-
-  useEffect(() => {
-    if (!open) return;
-
-    const closeIfOutside = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (
-        target &&
-        (triggerRef.current?.contains(target) ||
-          contentRef.current?.contains(target))
-      ) {
-        return;
-      }
-      setOpen(false);
-    };
-
-    const closeOnWindowBlur = () => setOpen(false);
-
-    document.addEventListener("pointerdown", closeIfOutside, true);
-    window.addEventListener("blur", closeOnWindowBlur);
-    return () => {
-      document.removeEventListener("pointerdown", closeIfOutside, true);
-      window.removeEventListener("blur", closeOnWindowBlur);
-    };
-  }, [open]);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen} modal={true}>
-      <PopoverTrigger asChild>
-        <button
-          ref={triggerRef}
-          className="flex h-6 items-center gap-1 rounded px-1.5 text-neutral-500 transition-colors hover:bg-black/10 hover:text-neutral-700 text-xs"
-          title="Load agent"
-        >
-          <SearchIcon size={12} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        ref={contentRef}
-        className="w-[280px] p-0 ml-2"
-        align="start"
-        onInteractOutside={() => setOpen(false)}
-      >
-        <Command>
-          <CommandInput placeholder="Search agents..." />
-          <CommandList>
-            <CommandEmpty>No agents found.</CommandEmpty>
-            <CommandGroup>
-              {sortedAgents.map((agent) => (
-                <CommandItem
-                  key={agent.id}
-                  value={agent.id}
-                  onSelect={() => {
-                    onSelect(agent.id);
-                    setOpen(false);
-                  }}
-                  className="flex items-center gap-2 text-xs"
-                >
-                  <span className="truncate flex-1">
-                    <AgentLabel agent={agent} />
-                  </span>
-                  {agent.lastUserMessageAt && (
-                    <span className="shrink-0 text-[10px] text-neutral-400">
-                      {timeAgo(agent.lastUserMessageAt)}
-                    </span>
-                  )}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
   );
 }
 
@@ -521,86 +376,125 @@ function ReloadMenu() {
   );
 }
 
+const SettingsDialog = lazy(() =>
+  import("./components/SettingsDialog").then((m) => ({
+    default: m.SettingsDialog,
+  })),
+);
+
 function TitleBar({
-  agents,
-  sidebarOpen,
-  onToggleSidebar,
-  openAgentIds,
-  onLoadAgent,
   workspaceLabel,
+  onToggleChatPanel,
+  chatPanelVisible,
 }: {
-  agents: AgentItem[];
-  sidebarOpen: boolean;
-  onToggleSidebar: () => void;
-  openAgentIds: Set<string>;
-  onLoadAgent: (agentId: string) => void;
   workspaceLabel: string;
+  onToggleChatPanel: (() => void) | null;
+  chatPanelVisible?: boolean;
 }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   return (
-    <div
-      className="shrink-0 relative flex items-center text-[13px]"
-      style={
-        {
-          height: 36,
-          background: "var(--zenbu-chrome)",
-          paddingLeft: 78,
-          paddingRight: 8,
-          WebkitAppRegion: "drag",
-        } as React.CSSProperties
-      }
-    >
+    <>
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsDialog
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
+            initialSection="general"
+          />
+        </Suspense>
+      )}
       <div
-        className="flex items-center gap-0.5 relative"
-        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        className="shrink-0 relative flex items-center text-[13px]"
+        style={
+          {
+            height: 36,
+            background: "var(--zenbu-chrome)",
+            paddingLeft: 78,
+            paddingRight: 8,
+            WebkitAppRegion: "drag",
+          } as React.CSSProperties
+        }
       >
-        <UtilityIconButton
-          title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-          onClick={onToggleSidebar}
+        <div
+          className="flex items-center gap-0.5 relative"
+          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
-          <SidebarToggleIcon open={sidebarOpen} />
-        </UtilityIconButton>
-        <ReloadMenu />
-        <AgentPickerCombobox
-          agents={agents}
-          openAgentIds={openAgentIds}
-          onSelect={onLoadAgent}
-        />
+          <SettingsButton onClick={() => setSettingsOpen(true)} />
+          <ReloadMenu />
+        </div>
+        <div
+          className="absolute inset-0 flex items-center justify-center pointer-events-none"
+          title={workspaceLabel}
+        >
+          <span className="truncate max-w-[60%] text-[12px] text-neutral-600 font-medium px-2">
+            {workspaceLabel}
+          </span>
+        </div>
+        {onToggleChatPanel && (
+          <div
+            className="ml-auto flex items-center relative"
+            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+          >
+            <ChatPanelToggle
+              onClick={onToggleChatPanel}
+              active={chatPanelVisible}
+            />
+          </div>
+        )}
       </div>
-      <div
-        className="absolute inset-0 flex items-center justify-center pointer-events-none"
-        title={workspaceLabel}
-      >
-        <span className="truncate max-w-[60%] text-[12px] text-neutral-600 font-medium px-2">
-          {workspaceLabel}
-        </span>
-      </div>
-    </div>
+    </>
   );
 }
 
-function UtilityIconButton({
-  children,
-  title,
+function ChatPanelToggle({
   onClick,
+  active,
 }: {
-  children: React.ReactNode;
-  title: string;
   onClick: () => void;
+  active: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      title={title}
-      className="inline-flex items-center justify-center rounded text-neutral-500 cursor-pointer hover:bg-black/10 hover:text-neutral-700 transition-colors"
+      title={active ? "Close chat" : "Open chat"}
+      className={`inline-flex items-center justify-center rounded text-neutral-500 cursor-pointer hover:bg-black/10 hover:text-neutral-700 transition-colors ${
+        active ? "bg-black/10 text-neutral-700" : ""
+      }`}
       style={{ width: 22, height: 22 }}
     >
-      {children}
+      <svg
+        width="13"
+        height="13"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
     </button>
   );
 }
 
-function SidebarToggleIcon({ open }: { open: boolean }) {
+function SettingsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Settings"
+      className="inline-flex items-center justify-center rounded text-neutral-500 cursor-pointer hover:bg-black/10 hover:text-neutral-700 transition-colors"
+      style={{ width: 22, height: 22 }}
+    >
+      <SettingsGearIcon />
+    </button>
+  );
+}
+
+function SettingsGearIcon() {
   return (
     <svg
       width="13"
@@ -611,35 +505,15 @@ function SidebarToggleIcon({ open }: { open: boolean }) {
       strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
+      aria-hidden
     >
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <line x1="9" y1="3" x2="9" y2="21" />
-      {open && (
-        <rect
-          x="3"
-          y="3"
-          width="6"
-          height="18"
-          fill="currentColor"
-          fillOpacity="0.15"
-          stroke="none"
-        />
-      )}
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
     </svg>
   );
 }
 
 function OrchestratorContent() {
-  const agents = useDb((root) => root.plugin.kernel.agents);
-  const allViews = useDb((root) => root.plugin.kernel.views) ?? [];
-  // Open agents = agents that already have a chat view somewhere.
-  const openAgentIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const v of allViews) {
-      if (v.scope === "chat" && v.props.agentId) ids.add(v.props.agentId);
-    }
-    return ids;
-  }, [allViews]);
   const registry = useDb((root) => root.plugin.kernel.viewRegistry);
   const client = useKyjuClient();
   const rpc = useRpc();
@@ -661,19 +535,6 @@ function OrchestratorContent() {
   const activeViewId = useDb(
     (root) => root.plugin.kernel.windowState[windowId!]?.activeViewId ?? null,
   );
-  // Agent-sidebar visibility is a property of the *workspace shell* view
-  // (one row per (window, workspace)), not of whichever chat tab the
-  // user is on. Both this title bar and the workspace iframe agree on
-  // the deterministic id below, so the toggle hits a single shared row.
-  const shellViewId =
-    windowId && activeWorkspaceId
-      ? workspaceShellViewId(windowId, activeWorkspaceId)
-      : null;
-  const sidebarOpen = useDb((root) => {
-    if (!shellViewId) return true;
-    const vs = root.plugin.kernel.viewState[shellViewId];
-    return vs?.sidebarOpen ?? true;
-  });
 
   // Ensure the windows + windowState entries exist for our windowId. Most
   // windows are created by the main process; this is a defensive fill-in
@@ -703,84 +564,6 @@ function OrchestratorContent() {
     return map;
   }, [registry]);
 
-  // Load an existing agent into a new chat view in this window. Used by
-  // the title-bar agent picker.
-  const handleLoadAgent = useCallback(
-    async (agentId: string) => {
-      const newViewId = nanoid();
-      const now = Date.now();
-      await client.update((root) => {
-        const k = root.plugin.kernel;
-        // Determine sibling order: append after the highest existing order
-        // among views in this window.
-        let maxOrder = -1;
-        for (const v of k.views) {
-          if (v.windowId !== windowId) continue;
-          const o = k.viewState[v.id]?.order ?? 0;
-          if (o > maxOrder) maxOrder = o;
-        }
-        k.views = [
-          ...k.views,
-          {
-            id: newViewId,
-            windowId: windowId!,
-            parentId: null,
-            scope: "chat",
-            props: { agentId },
-            createdAt: now,
-          },
-        ];
-        // Inherit sidebar state from the previously-active view for UX
-        // continuity (otherwise sidebars reset on every new tab).
-        const ws = k.windowState[windowId!];
-        const prevViewId = ws?.activeViewId ?? null;
-        const prev = prevViewId ? k.viewState[prevViewId] : null;
-        k.viewState = {
-          ...k.viewState,
-          [newViewId]: makeViewAppState(newViewId, {
-            order: maxOrder + 1,
-            sidebarOpen: prev?.sidebarOpen ?? false,
-            tabSidebarOpen: prev?.tabSidebarOpen ?? true,
-            sidebarPanel: prev?.sidebarPanel ?? "overview",
-            utilitySidebarSelected: prev?.utilitySidebarSelected ?? null,
-          }),
-        };
-        // Mark the previously-active view's agent as departed (for the
-        // unread-badge state machine on agentState).
-        if (prevViewId) {
-          const prevView = k.views.find((v) => v.id === prevViewId);
-          const prevAgentId =
-            prevView?.scope === "chat" ? prevView.props.agentId : undefined;
-          if (prevAgentId) {
-            const prevAS = k.agentState[prevAgentId];
-            k.agentState = {
-              ...k.agentState,
-              [prevAgentId]: prevAS
-                ? { ...prevAS, lastViewedAt: now }
-                : makeAgentAppState(prevAgentId, { lastViewedAt: now }),
-            };
-          }
-        }
-        // Activate the new view.
-        if (ws) {
-          k.windowState = {
-            ...k.windowState,
-            [windowId!]: { ...ws, activeViewId: newViewId },
-          };
-        }
-        // Clear unread on the loaded agent.
-        const cur = k.agentState[agentId];
-        k.agentState = {
-          ...k.agentState,
-          [agentId]: cur
-            ? { ...cur, lastViewedAt: null }
-            : makeAgentAppState(agentId, { lastViewedAt: null }),
-        };
-      });
-    },
-    [client],
-  );
-
   const handleSelectWorkspace = useCallback(
     async (workspaceId: string) => {
       try {
@@ -792,19 +575,55 @@ function OrchestratorContent() {
     [rpc],
   );
 
-  // Toggle the workspace shell's agent sidebar. The shell view writes
-  // its own viewState row (see <View persisted /> in WorkspaceFrame), so
-  // there's always a row to update once a workspace is active.
-  const toggleSidebar = useCallback(() => {
-    if (!shellViewId) return;
-    const all = client.plugin.kernel.viewState.read() ?? {};
-    const cur = all[shellViewId];
-    if (!cur) return;
-    client.plugin.kernel.viewState.set({
-      ...all,
-      [shellViewId]: { ...cur, sidebarOpen: !cur.sidebarOpen },
+  // ---- inline chat panel state ----
+
+  // The chat panel toggles when `activeWorkspace.viewScope !== "agent-manager"`.
+  // null means "no chat toggle available" (workspace already shows agent-manager).
+  const showChatToggle = !!activeWorkspace;
+
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const chatPanelWidth = chatPanelWidthStore.useWidth();
+  const [chatPanelResizing, setChatPanelResizing] = useState(false);
+
+  // Optimistic mirror: read from kyju state if one already exists for
+  // this workspace. If not, we create it on first toggle-open.
+  const existingMirrorId = useDb((root) => {
+    if (!activeWorkspaceId) return null;
+    const ws = (root.plugin.kernel.workspaces ?? []).find(
+      (w) =>
+        w.mirrorOfWorkspaceId === activeWorkspaceId && w.hidden,
+    );
+    return ws?.id ?? null;
+  });
+  const [createdMirrorId, setCreatedMirrorId] = useState<string | null>(null);
+  const mirrorWorkspaceId = existingMirrorId ?? createdMirrorId;
+
+  // Reset chat panel when workspace changes.
+  const prevWorkspaceRef = useRef(activeWorkspaceId);
+  useEffect(() => {
+    if (activeWorkspaceId !== prevWorkspaceRef.current) {
+      prevWorkspaceRef.current = activeWorkspaceId;
+      setChatPanelOpen(false);
+      setCreatedMirrorId(null);
+    }
+  }, [activeWorkspaceId]);
+
+  const handleToggleChatPanel = useCallback(() => {
+    setChatPanelOpen((prev) => {
+      const next = !prev;
+      if (next && !mirrorWorkspaceId && activeWorkspaceId) {
+        void rpc.workspace
+          .ensureMirrorWorkspace(activeWorkspaceId)
+          .then(({ mirrorWorkspaceId: id }) => setCreatedMirrorId(id))
+          .catch((err: unknown) => {
+            console.error("[orchestrator] ensureMirrorWorkspace failed:", err);
+          });
+      }
+      return next;
     });
-  }, [client, shellViewId]);
+  }, [rpc, activeWorkspaceId, mirrorWorkspaceId]);
+
+  const onToggleChatPanel = showChatToggle ? handleToggleChatPanel : null;
 
   const rootFocusRef = useRef<HTMLDivElement>(null);
   useFocusOnRequest("orchestrator", () => {
@@ -812,12 +631,10 @@ function OrchestratorContent() {
     rootFocusRef.current?.focus();
   });
 
-  // Keep references to fields that exist for the lint pass; the orchestrator
-  // itself doesn't render the tab UI (workspace iframe does).
   void workspaceCwds;
   void defaultCwd;
-  void useCollection;
-  void agents;
+
+  const chatPanelVisible = chatPanelOpen && showChatToggle && !!mirrorWorkspaceId;
 
   return (
     <div
@@ -832,21 +649,20 @@ function OrchestratorContent() {
         )}
       >
         <TitleBar
-          agents={agents}
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={toggleSidebar}
-          openAgentIds={openAgentIds}
-          onLoadAgent={handleLoadAgent}
           workspaceLabel={activeWorkspace?.name ?? ""}
+          onToggleChatPanel={onToggleChatPanel}
+          chatPanelVisible={chatPanelVisible}
         />
       </ErrorBoundary>
       <KernelBinaryUpdateBanner />
       <div className="flex flex-row flex-1 min-h-0">
-        <WorkspaceSidebar
-          windowId={windowId!}
-          activeWorkspaceId={activeWorkspaceId ?? null}
-          onSelectWorkspace={handleSelectWorkspace}
-        />
+        {!activeWorkspace?.hidden && (
+          <WorkspaceSidebar
+            windowId={windowId!}
+            activeWorkspaceId={activeWorkspaceId ?? null}
+            onSelectWorkspace={handleSelectWorkspace}
+          />
+        )}
         <ErrorBoundary
           scope="workspace-view"
           fallback={({ error, reset }) => (
@@ -858,8 +674,170 @@ function OrchestratorContent() {
             windowId={windowId!}
           />
         </ErrorBoundary>
+        {chatPanelVisible && (
+          <>
+            <ChatPanelResizeHandle
+              onResizeChange={setChatPanelResizing}
+              store={chatPanelWidthStore}
+            />
+            {chatPanelResizing && <ChatPanelResizeOverlay />}
+            <ChatPanel
+              mirrorWorkspaceId={mirrorWorkspaceId}
+              windowId={windowId!}
+              width={chatPanelWidth}
+            />
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+// ---- chat panel width store (localStorage-backed) ----
+
+const CHAT_PANEL_STORAGE_KEY = "chat-panel:width";
+const CHAT_PANEL_DEFAULT = 440;
+
+function makeChatPanelWidthStore() {
+  const listeners = new Set<() => void>();
+  let memo: number | null = null;
+  function read(): number {
+    if (memo !== null) return memo;
+    try {
+      const raw = localStorage.getItem(CHAT_PANEL_STORAGE_KEY);
+      if (raw != null) {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n)) {
+          memo = n;
+          return memo;
+        }
+      }
+    } catch {}
+    memo = CHAT_PANEL_DEFAULT;
+    return memo;
+  }
+  function get(): number {
+    return read();
+  }
+  function set(next: number) {
+    const clamped = Math.max(280, Math.round(next));
+    if (clamped === memo) return;
+    memo = clamped;
+    try {
+      localStorage.setItem(CHAT_PANEL_STORAGE_KEY, String(clamped));
+    } catch {}
+    for (const l of listeners) l();
+  }
+  function useWidth(): number {
+    return useSyncExternalStore(
+      (cb) => {
+        listeners.add(cb);
+        return () => listeners.delete(cb);
+      },
+      read,
+      read,
+    );
+  }
+  return { get, set, useWidth };
+}
+
+const chatPanelWidthStore = makeChatPanelWidthStore();
+
+// ---- chat panel components ----
+
+function ChatPanel({
+  mirrorWorkspaceId,
+  windowId,
+  width,
+}: {
+  mirrorWorkspaceId: string;
+  windowId: string;
+  width: number;
+}) {
+  const shellViewId = `chat-panel:${windowId}:${mirrorWorkspaceId}`;
+  return (
+    <div
+      className="shrink-0 flex flex-col overflow-hidden relative"
+      style={{
+        width,
+        borderTop: "1px solid var(--zenbu-panel-border)",
+      }}
+    >
+      <View
+        id={shellViewId}
+        scope="agent-manager"
+        props={{ workspaceId: mirrorWorkspaceId }}
+        persisted
+        pinned
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+        }}
+      />
+    </div>
+  );
+}
+
+function ChatPanelResizeHandle({
+  onResizeChange,
+  store,
+}: {
+  onResizeChange: (resizing: boolean) => void;
+  store: { get: () => number; set: (v: number) => void };
+}) {
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = store.get();
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      onResizeChange(true);
+      const onMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startX;
+        store.set(startWidth - delta);
+      };
+      const onUp = () => {
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        onResizeChange(false);
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [onResizeChange, store],
+  );
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{
+        width: 4,
+        cursor: "col-resize",
+        flexShrink: 0,
+        background: "transparent",
+        marginLeft: -2,
+        marginRight: -2,
+        zIndex: 1,
+      }}
+    />
+  );
+}
+
+function ChatPanelResizeOverlay() {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 9999,
+        cursor: "col-resize",
+        background: "transparent",
+      }}
+    />
   );
 }
 
@@ -870,6 +848,27 @@ function WorkspaceFrame({
   workspaceId: string | null;
   windowId: string;
 }) {
+  // Each workspace declares which registered view scope provides its shell.
+  // Defaults to "agent-manager"; if a future plugin registers an alternative
+  // workspace shell with `meta.kind === "workspace-shell"`, a workspace can
+  // point at it by setting `viewScope` on its row.
+  // Two separate `useDb` calls so each returns a primitive (otherwise
+  // returning a fresh object every snapshot would loop useSyncExternalStore).
+  const viewScope = useDb((root) => {
+    if (!workspaceId) return "agent-manager";
+    const ws = (root.plugin.kernel.workspaces ?? []).find(
+      (w) => w.id === workspaceId,
+    );
+    return ws?.viewScope ?? "agent-manager";
+  });
+  const isHidden = useDb((root) => {
+    if (!workspaceId) return false;
+    const ws = (root.plugin.kernel.workspaces ?? []).find(
+      (w) => w.id === workspaceId,
+    );
+    return ws?.hidden ?? false;
+  });
+
   if (!workspaceId) {
     return (
       <div className="flex-1 min-w-0 min-h-0 flex items-center justify-center text-neutral-400 text-xs">
@@ -877,6 +876,23 @@ function WorkspaceFrame({
       </div>
     );
   }
+  // Hidden workspaces (agent-window mirrors) render without the workspace
+  // sidebar, so the iframe occupies the full window width. Drop the
+  // top-left rounding + the left border so the iframe is flush with the
+  // window chrome — same flat treatment as the top-right edge.
+  const iframeStyle: React.CSSProperties = isHidden
+    ? {
+        borderTop: "1px solid var(--zenbu-panel-border)",
+        borderRight: "1px solid var(--zenbu-panel-border)",
+        boxSizing: "border-box",
+      }
+    : {
+        borderTopLeftRadius: "8px",
+        borderTop: "1px solid var(--zenbu-panel-border)",
+        borderLeft: "1px solid var(--zenbu-panel-border)",
+        borderRight: "1px solid var(--zenbu-panel-border)",
+        boxSizing: "border-box",
+      };
   return (
     <div
       className="flex-1 min-w-0 min-h-0 relative"
@@ -888,7 +904,7 @@ function WorkspaceFrame({
     >
       <View
         id={workspaceShellViewId(windowId, workspaceId)}
-        scope="workspace"
+        scope={viewScope}
         props={{ workspaceId }}
         persisted
         pinned
@@ -898,13 +914,7 @@ function WorkspaceFrame({
           width: "100%",
           height: "100%",
         }}
-        iframeStyle={{
-          borderTopLeftRadius: "8px",
-          borderTop: "1px solid var(--zenbu-panel-border)",
-          borderLeft: "1px solid var(--zenbu-panel-border)",
-          borderRight: "1px solid var(--zenbu-panel-border)",
-          boxSizing: "border-box",
-        }}
+        iframeStyle={iframeStyle}
       />
     </div>
   );

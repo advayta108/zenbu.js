@@ -3,19 +3,16 @@ import {
   useEffect,
   useMemo,
   useState,
-  lazy,
-  Suspense,
+  type ReactNode,
 } from "react"
 import { useCollection, useDb } from "../../../lib/kyju-react"
 import { useKyjuClient, useRpc } from "../../../lib/providers"
 import type { View } from "../../../../../shared/schema"
 
-const SettingsDialog = lazy(() =>
-  import("./SettingsDialog").then((m) => ({ default: m.SettingsDialog })),
-)
-
-const SIDEBAR_FOOTER_HEIGHT = 44
-const SIDEBAR_FOOTER_FADE = 24
+// Bottom edge fade so overflowing rows trail off into the panel color,
+// signaling "there's more, scroll down". Doubles as the scroll-area's
+// bottom padding so the last row isn't visually clipped by the gradient.
+const SIDEBAR_BOTTOM_FADE = 24
 
 type AgentItem = {
   id: string
@@ -40,6 +37,7 @@ export function AgentList({
   onCloseTabQuiet,
   onNewAgent,
   onOpenPlugins,
+  headerExtras,
 }: {
   agents: AgentItem[]
   views: View[]
@@ -51,10 +49,12 @@ export function AgentList({
   onCloseTabQuiet: (viewId: string) => void
   onNewAgent: () => void
   onOpenPlugins: () => void
+  /** Optional row(s) to render above the canonical "New Chat" / "Plugins"
+   *  header rows. The agent-manager workspace shell uses this to hold the
+   *  sidebar-collapse toggle and the workspace-scoped agent search. */
+  headerExtras?: ReactNode
 }) {
-  const [settingsOpen, setSettingsOpen] = useState(false)
-
-  const agentState = useDb((root) => root.plugin.kernel.agentState)
+  const agentState = useDb((root) => root.plugin["agent-manager"].agentState)
 
   const items = useMemo(() => {
     const out: Array<{
@@ -73,7 +73,7 @@ export function AgentList({
       // workspace concept).
       if (currentWorkspaceId) {
         const bound = agentState[agent.id]?.workspaceId ?? null
-        if (bound != null && bound !== currentWorkspaceId) continue
+        if (bound !== currentWorkspaceId) continue
       }
       out.push({ viewId: view.id, agent })
     }
@@ -93,16 +93,6 @@ export function AgentList({
 
   return (
     <>
-      {settingsOpen && (
-        <Suspense fallback={null}>
-          <SettingsDialog
-            open={settingsOpen}
-            onOpenChange={setSettingsOpen}
-            // initialSection="registry"
-            initialSection="general"
-          />
-        </Suspense>
-      )}
       <div
         className="flex flex-col h-full overflow-hidden"
         style={{ background: "var(--zenbu-agent-sidebar)" }}
@@ -111,6 +101,7 @@ export function AgentList({
           className="shrink-0 flex flex-col px-2 pt-2 pb-2 gap-0.5"
           style={{ WebkitAppRegion: "no-drag" } as any}
         >
+          {headerExtras}
           <HeaderRow
             icon={<ComposeIcon />}
             label="New Chat"
@@ -130,7 +121,7 @@ export function AgentList({
         >
           <div
             className="absolute inset-0 overflow-auto"
-            style={{ paddingBottom: SIDEBAR_FOOTER_HEIGHT }}
+            style={{ paddingBottom: SIDEBAR_BOTTOM_FADE }}
           >
             <div className="px-1.5 pt-1">
               {items.map((item) => (
@@ -153,7 +144,21 @@ export function AgentList({
               )}
             </div>
           </div>
-          <SidebarFooter onSettings={() => setSettingsOpen(true)} />
+          {/* Soft fade-to-panel gradient at the bottom edge, so overflowing
+              rows visibly trail off into the gap and there's a clear hint
+              that more content exists when the list is scrollable. */}
+          <div
+            aria-hidden
+            className="absolute left-0 right-0 bottom-0 pointer-events-none"
+            style={{
+              height: SIDEBAR_BOTTOM_FADE,
+              background: `linear-gradient(
+                to bottom,
+                color-mix(in srgb, var(--zenbu-agent-sidebar) 0%, transparent) 0%,
+                var(--zenbu-agent-sidebar) 100%
+              )`,
+            }}
+          />
         </div>
       </div>
       <style>{`
@@ -215,7 +220,7 @@ function SidebarRow({
   const isStreaming = item.agent?.status === "streaming"
   const lastViewedAt = useDb(
     (root) =>
-      root.plugin.kernel.agentState[item.agent?.id ?? ""]?.lastViewedAt ?? null,
+      root.plugin["agent-manager"].agentState[item.agent?.id ?? ""]?.lastViewedAt ?? null,
   )
   const hasUnread =
     !isActive &&
@@ -331,65 +336,6 @@ function ComposeIcon() {
     >
       <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7" />
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-    </svg>
-  )
-}
-
-function SidebarFooter({ onSettings }: { onSettings: () => void }) {
-  return (
-    <div
-      className="absolute left-0 right-0 bottom-0 pointer-events-none"
-      style={{ height: SIDEBAR_FOOTER_HEIGHT + SIDEBAR_FOOTER_FADE }}
-    >
-      <div
-        aria-hidden
-        className="absolute inset-0"
-        style={{
-          background: `linear-gradient(
-            to bottom,
-            color-mix(in srgb, var(--zenbu-agent-sidebar) 0%, transparent) 0%,
-            color-mix(in srgb, var(--zenbu-agent-sidebar) 85%, transparent) ${SIDEBAR_FOOTER_FADE}px,
-            var(--zenbu-agent-sidebar) ${SIDEBAR_FOOTER_FADE + 4}px,
-            var(--zenbu-agent-sidebar) 100%
-          )`,
-        }}
-      />
-      <div
-        className="absolute left-0 right-0 bottom-0 flex items-center px-2"
-        style={{
-          height: SIDEBAR_FOOTER_HEIGHT,
-          pointerEvents: "auto",
-          WebkitAppRegion: "no-drag",
-        } as any}
-      >
-        <button
-          type="button"
-          onClick={onSettings}
-          title="Settings"
-          className="inline-flex items-center justify-center rounded text-(--zenbu-agent-sidebar-muted) cursor-pointer hover:bg-(--zenbu-agent-sidebar-hover) hover:text-(--zenbu-agent-sidebar-foreground)"
-          style={{ width: 22, height: 22 }}
-        >
-          <SettingsGearIcon />
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function SettingsGearIcon() {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
     </svg>
   )
 }

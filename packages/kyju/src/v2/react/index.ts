@@ -60,11 +60,29 @@ export function createKyjuReact<TShape extends SchemaShape>() {
   type Root = InferRoot<TShape>;
 
   function useDb(): Root;
-  function useDb<T>(selector: (root: Root) => T): T;
-  function useDb<T>(selector?: (root: Root) => T): T | Root {
+  function useDb<T>(
+    selector: (root: Root) => T,
+    isEqual?: (a: T, b: T) => boolean,
+  ): T;
+  function useDb<T>(
+    selector?: (root: Root) => T,
+    isEqual?: (a: T, b: T) => boolean,
+  ): T | Root {
     const { replica } = useKyjuContext();
     const selectorRef = useRef(selector);
     selectorRef.current = selector;
+    const isEqualRef = useRef<((a: T, b: T) => boolean) | undefined>(isEqual);
+    isEqualRef.current = isEqual;
+
+    // Cache the last selector result so getSnapshot returns a stable
+    // reference when the selector produces a freshly-allocated value
+    // (filter/map/slice/etc) over unchanged data. Without this, React's
+    // useSyncExternalStore sees `Object.is(prev, next) === false` for
+    // every snapshot read and storms into an infinite re-render loop.
+    // Default equality is shallow: arrays + plain objects compare by
+    // their members with Object.is. Callers transforming into a deeper
+    // shape can pass a custom isEqual.
+    const cacheRef = useRef<{ output: T } | null>(null);
 
     const subscribe = useCallback(
       (cb: () => void) => replica.subscribe(() => cb()),
@@ -75,7 +93,16 @@ export function createKyjuReact<TShape extends SchemaShape>() {
       const state = replica.getState();
       if (state.kind !== "connected") return undefined;
       const root = state.root as Root;
-      return selectorRef.current ? selectorRef.current(root) : root;
+      const sel = selectorRef.current;
+      if (!sel) return root;
+      const next = sel(root);
+      const cache = cacheRef.current;
+      if (cache != null) {
+        const eq = isEqualRef.current ?? shallowEqual;
+        if (eq(cache.output, next)) return cache.output;
+      }
+      cacheRef.current = { output: next };
+      return next;
     }, [replica]);
 
     return useSyncExternalStore(subscribe, getSnapshot) as T | Root;
@@ -134,4 +161,38 @@ export function createKyjuReact<TShape extends SchemaShape>() {
   }
 
   return { KyjuProvider, useDb, useCollection };
+}
+
+// One-level structural equality. Same identity wins fast; otherwise compare
+// arrays element-wise and plain objects key-wise via Object.is. This is the
+// right default for selectors derived from kyju state (filter/map/slice on
+// stable arrays of refs, picking sub-objects). Callers reaching for deeper
+// transforms can pass a custom isEqual to useDb.
+function shallowEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (
+    typeof a !== "object" ||
+    a === null ||
+    typeof b !== "object" ||
+    b === null
+  )
+    return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!Object.is(a[i], (b as unknown[])[i])) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const ka = Object.keys(ao);
+  const kb = Object.keys(bo);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(bo, k)) return false;
+    if (!Object.is(ao[k], bo[k])) return false;
+  }
+  return true;
 }

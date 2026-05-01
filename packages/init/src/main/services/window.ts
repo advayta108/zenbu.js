@@ -25,11 +25,11 @@ import {
   insertHotAgent,
   validSelectionFromTemplate,
   findExistingViewForAgent,
-  activateView,
   makeViewAppState,
   makeWindowAppState,
   type ArchivedAgent,
 } from "../../../shared/agent-ops";
+import { activateView } from "#zenbu/agent-manager/shared/schema";
 import { MAIN_WINDOW_ID } from "../../../shared/schema";
 import { bootBus } from "../../../shared/boot-bus";
 import { mark } from "../../../shared/tracer";
@@ -158,7 +158,7 @@ export class WindowService extends Service {
     if (existing) {
       await Effect.runPromise(
         client.update((root) => {
-          activateView(root.plugin.kernel, existing);
+          activateView(root, existing);
         }),
       );
       const win = baseWindow.windows.get(existing.windowId);
@@ -197,6 +197,37 @@ export class WindowService extends Service {
     baseWindow.createWindow({ windowId });
     this._mountNewWindows?.();
     return { windowId, agentId: lastAgent.id };
+  }
+
+  /**
+   * Open a fresh window with `activeWorkspaceId` set, no auto-agent. Used
+   * by `rpc.workspace.openAgentWindow` to spawn a clean agent-manager
+   * window for an existing (typically hidden) workspace. Unlike
+   * `createWindowWithAgent`, this seeds no chat tab — the workspace's
+   * own activation logic (lastViewId fallback or empty state) takes
+   * over once the renderer mounts.
+   */
+  async createWindowForWorkspace(
+    workspaceId: string,
+  ): Promise<{ windowId: string }> {
+    const { baseWindow, db } = this.ctx;
+    const client = db.effectClient;
+    const windowId = nanoid();
+    await Effect.runPromise(
+      client.update((root) => {
+        const k = root.plugin.kernel;
+        k.windows = [...k.windows, { id: windowId, persisted: false }];
+        k.windowState = {
+          ...k.windowState,
+          [windowId]: makeWindowAppState(windowId, {
+            activeWorkspaceId: workspaceId,
+          }),
+        };
+      }),
+    );
+    baseWindow.createWindow({ windowId });
+    this._mountNewWindows?.();
+    return { windowId };
   }
 
   private getFocusedWebContents(): Electron.WebContents | undefined {

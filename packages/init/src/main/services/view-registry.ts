@@ -58,7 +58,6 @@ export class ViewRegistryService extends Service {
     };
     this.views.set(scope, entry);
     await this.syncToDb();
-    console.log(`[view-registry] registered "${scope}" at ${entry.url} wsId=${ws ?? "global"} sidebar=${meta?.sidebar ?? false} bottomPanel=${meta?.bottomPanel ?? false}`);
     return entry;
   }
 
@@ -93,9 +92,6 @@ export class ViewRegistryService extends Service {
     };
     this.views.set(scope, entry);
     void this.syncToDb();
-    console.log(
-      `[view-registry] aliased "${scope}" -> ${reloaderId}${pathPrefix} wsId=${ws ?? "global"} sidebar=${meta?.sidebar ?? false} bottomPanel=${meta?.bottomPanel ?? false}`,
-    );
     return entry;
   }
 
@@ -107,7 +103,6 @@ export class ViewRegistryService extends Service {
     }
     this.views.delete(scope);
     await this.syncToDb();
-    console.log(`[view-registry] unregistered "${scope}"`);
   }
 
   get(scope: string): ViewEntry | undefined {
@@ -116,7 +111,7 @@ export class ViewRegistryService extends Service {
 
   evaluate() {
     this.loadManifestIcons().catch((err) => {
-      console.error("[view-registry] failed to load manifest icons:", err);
+      // log removed
     });
 
     // Wipe stale rows from any prior session; ports are fresh on boot.
@@ -169,15 +164,12 @@ export class ViewRegistryService extends Service {
       workspaceId: e.workspaceId,
       meta: e.meta,
     }));
-    console.log(
-      `[view-registry] syncToDb entries=[${snapshot.map(s => `${s.scope}(ws=${s.workspaceId ?? "global"},sidebar=${s.meta?.sidebar ?? false},bottomPanel=${s.meta?.bottomPanel ?? false})`).join(", ")}]`,
-    );
     await Effect.runPromise(
       client.update((root) => {
         root.plugin.kernel.viewRegistry = snapshot;
       }),
     ).catch((err) => {
-      console.error("[view-registry] failed to sync to db:", err);
+      // log removed
     });
   }
 }

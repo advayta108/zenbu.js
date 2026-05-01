@@ -457,8 +457,8 @@ app.whenReady().then(async () => {
       "boot-window-create",
       () => {
         const bootWindow = new BaseWindow({
-          width: 800,
-          height: 900,
+          width: 1100,
+          height: 750,
           show: true,
           titleBarStyle: "hidden",
           trafficLightPosition: { x: 12, y: 10 },

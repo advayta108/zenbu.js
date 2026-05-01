@@ -240,10 +240,12 @@ function buildChildUrl(args: {
   const ownsServer = entryPath === "/" || entryPath === "";
   if (ownsServer) entryPath = "";
   else if (entryPath.endsWith("/")) entryPath = entryPath.slice(0, -1);
-  // Aliased views proxy through the kernel's wsPort; own-server views go
-  // directly to the plugin's Vite port (the kernel HTTP proxy only routes
-  // to core).
-  const targetPort = ownsServer ? registryPort : Number(env.wsPort);
+  // Always route directly to the entry's own reloader port. The kernel
+  // HTTP proxy only forwards to `core`, so aliases on a non-core reloader
+  // (e.g. agent-manager hosting workspace/new-agent/plugins on its own
+  // Vite) would 404 if we routed through `wsPort`. Going direct works for
+  // both core-aliased entries (same Vite, same port) and non-core ones.
+  const targetPort = registryPort;
   // Per-view subdomain so each iframe gets its own Origin (cookies,
   // localStorage, etc.).
   const hostname = id.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -384,10 +386,6 @@ export function View({
             draft: null,
             pendingCwd: null,
             order: 0,
-            sidebarOpen: false,
-            tabSidebarOpen: true,
-            sidebarPanel: "overview",
-            utilitySidebarSelected: null,
             cachedAt: null,
             loadedAt: null,
             loadCount: 0,

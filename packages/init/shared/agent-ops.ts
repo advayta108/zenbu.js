@@ -3,8 +3,6 @@ import type {
   View,
   WindowAppState,
   ViewAppState,
-  AgentAppState,
-  WorkspaceAppState,
 } from "./schema";
 
 type Kernel = SchemaRoot;
@@ -12,11 +10,11 @@ export type HotAgent = Kernel["agents"][number];
 export type ArchivedAgent = HotAgent & { archivedAt: number };
 
 // ---------------------------------------------------------------------------
-// State-record factory helpers.
+// State-record factory helpers (kernel-only).
 //
-// Invariant: kernel.<x>State[id].<idField> === id for every record. These
-// factories are the single source of truth for that invariant - new call
-// sites should use them rather than constructing records inline.
+// `makeAgentAppState`, `makeWorkspaceAppState`, `makeWorkspaceShellState`,
+// and `activateView` moved to `@zenbu/agent-manager/shared/schema` along
+// with their owning fields.
 // ---------------------------------------------------------------------------
 
 export function makeWindowAppState(
@@ -40,40 +38,10 @@ export function makeViewAppState(
     draft: null,
     pendingCwd: null,
     order: 0,
-    sidebarOpen: false,
-    tabSidebarOpen: true,
-    sidebarPanel: "overview",
-    utilitySidebarSelected: null,
     cachedAt: null,
     loadedAt: null,
     loadCount: 0,
     loadError: null,
-    ...overrides,
-  };
-}
-
-export function makeAgentAppState(
-  agentId: string,
-  overrides?: Partial<Omit<AgentAppState, "agentId">>,
-): AgentAppState {
-  return {
-    agentId,
-    lastViewedAt: null,
-    workspaceId: null,
-    ...overrides,
-  };
-}
-
-export function makeWorkspaceAppState(
-  workspaceId: string,
-  overrides?: Partial<Omit<WorkspaceAppState, "workspaceId">>,
-): WorkspaceAppState {
-  return {
-    workspaceId,
-    lastViewId: null,
-    bottomPanelOpen: false,
-    bottomPanelSelected: null,
-    bottomPanelHeight: 260,
     ...overrides,
   };
 }
@@ -135,60 +103,8 @@ export function findLiveViewTab(
   return { windowId: focusedWindowId };
 }
 
-/**
- * Activate a view in its window. Sets `windowState[windowId].activeViewId`,
- * and updates the unread-badge state on `agentState`:
- *   - the now-active chat view's agent: lastViewedAt = null (currently viewing)
- *   - the previously-active chat view's agent: lastViewedAt = now (just left)
- *
- * Must be called inside a `client.update((root) => ...)` callback.
- */
-export function activateView(
-  kernel: Kernel,
-  target: { windowId: string; viewId: string },
-): void {
-  const ws = kernel.windowState[target.windowId];
-  if (!ws) return;
-  const previousViewId = ws.activeViewId;
-  ws.activeViewId = target.viewId;
-
-  const now = Date.now();
-
-  // Mark the previously-active chat view's agent as "departed" (unread state).
-  if (previousViewId && previousViewId !== target.viewId) {
-    const prevView = kernel.views.find((v) => v.id === previousViewId);
-    const prevAgentId =
-      prevView?.scope === "chat" ? prevView.props.agentId : undefined;
-    if (prevAgentId) {
-      const prev = kernel.agentState[prevAgentId];
-      if (prev) {
-        prev.lastViewedAt = now;
-      } else {
-        kernel.agentState[prevAgentId] = makeAgentAppState(prevAgentId, {
-          lastViewedAt: now,
-        });
-      }
-    }
-  }
-
-  // Clear unread on the now-active chat view's agent.
-  const newView = kernel.views.find((v) => v.id === target.viewId);
-  const newAgentId =
-    newView?.scope === "chat" ? newView.props.agentId : undefined;
-  if (newAgentId) {
-    const cur = kernel.agentState[newAgentId];
-    if (cur) {
-      cur.lastViewedAt = null;
-    } else {
-      kernel.agentState[newAgentId] = makeAgentAppState(newAgentId, {
-        lastViewedAt: null,
-      });
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Hot-agent / archived-agent helpers (unchanged from prior implementation).
+// Hot-agent / archived-agent helpers.
 // ---------------------------------------------------------------------------
 
 type AgentConfig = Kernel["agentConfigs"][number];

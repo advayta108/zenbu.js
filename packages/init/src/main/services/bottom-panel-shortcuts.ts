@@ -4,7 +4,8 @@ import { ShortcutService } from "./shortcut";
 /**
  * Registers the canonical Cmd+J shortcut for toggling the workspace's
  * bottom panel. The actual toggle logic lives in the workspace renderer
- * (`useShortcutHandler` flips `kernel.workspaceState[id].bottomPanelOpen`),
+ * (`useShortcutHandler` flips
+ * `plugin["agent-manager"].workspaceState[id].bottomPanelOpen`),
  * matching the renderer-handler pattern used by `chat.interrupt` /
  * `chat.openMode`. Registering here puts the binding in the settings UI
  * and makes it overridable.

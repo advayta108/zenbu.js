@@ -47,6 +47,42 @@ const ZEN_SHIM = path.join(CLI_BIN_DIR, "zen")
 
 const VERSIONS_JSON = path.join(REPO_DIR, "setup/versions.json")
 
+// ---------- default plugins ----------
+//
+// Single source of truth for which monorepo plugins ship as defaults.
+// `ensureKernelManifestRegistered` and `ensureRegistryTypes` walk this
+// list uniformly: each entry is appended to `~/.zenbu/config.json`
+// (skipped if the manifest file isn't on disk) and `zen link` is run
+// for each one so `#registry/db-sections` and `#registry/services`
+// regenerate.
+//
+// Adding a future default plugin = one line here. Lives in dynamically-
+// loaded code (this file is git-pulled with the rest of `packages/init`),
+// so no `apps/kernel/` update is required.
+const DEFAULT_PLUGINS = [
+  "packages/init/zenbu.plugin.json",
+  "packages/zen/zenbu.plugin.json",
+  "packages/agent-manager/zenbu.plugin.json",
+] as const
+
+function defaultPluginManifestPaths(): string[] {
+  return DEFAULT_PLUGINS.map((rel) => path.join(REPO_DIR, rel))
+}
+
+async function defaultPluginSchemaPaths(): Promise<string[]> {
+  const out: string[] = []
+  for (const manifestPath of defaultPluginManifestPaths()) {
+    if (!fs.existsSync(manifestPath)) continue
+    try {
+      const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"))
+      if (typeof manifest.schema === "string") {
+        out.push(path.resolve(path.dirname(manifestPath), manifest.schema))
+      }
+    } catch {}
+  }
+  return out
+}
+
 // Export so pnpm / bun subprocesses pick these up.
 process.env.BUN_INSTALL = BUN_INSTALL
 process.env.PNPM_HOME = PNPM_HOME
@@ -352,35 +388,175 @@ async function ensureTsconfigLocal(): Promise<void> {
 }
 
 async function ensureKernelManifestRegistered(): Promise<void> {
-  const configJson = path.join(HOME_DIR, ".zenbu/config.json")
-  const kernelManifest = path.join(
-    REPO_DIR,
-    "packages/init/zenbu.plugin.json",
-  )
-  const zenManifest = path.join(REPO_DIR, "packages/zen/zenbu.plugin.json")
-  await fsp.mkdir(path.dirname(configJson), { recursive: true })
-  let cfg: { plugins?: string[] } = { plugins: [] }
+  // Match the kernel's resolution: prefer `config.jsonc` (with comments)
+  // if it exists, otherwise use `config.json`. Both formats are valid;
+  // users who hand-edit comments live in jsonc-land and we shouldn't
+  // silently move them onto a parallel json file.
+  const configDir = path.join(HOME_DIR, ".zenbu")
+  const configJsonc = path.join(configDir, "config.jsonc")
+  const configJson = path.join(configDir, "config.json")
+  await fsp.mkdir(configDir, { recursive: true })
+  const usingJsonc = fs.existsSync(configJsonc)
+  const configPath = usingJsonc ? configJsonc : configJson
+
+  let raw = ""
   try {
-    cfg = JSON.parse(await fsp.readFile(configJson, "utf8"))
+    raw = await fsp.readFile(configPath, "utf8")
   } catch {
-    // file missing or malformed; start fresh
+    // file missing; start fresh
   }
-  const plugins = Array.isArray(cfg.plugins) ? cfg.plugins : []
+  const parsed = (raw ? parseJsoncLoose(raw) : { plugins: [] }) as {
+    plugins?: string[]
+  }
+  const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : []
   let changed = false
-  for (const m of [kernelManifest, zenManifest]) {
+  for (const m of defaultPluginManifestPaths()) {
     if (!fs.existsSync(m)) continue
     if (!plugins.includes(m)) {
       plugins.push(m)
       changed = true
     }
   }
-  if (changed) {
-    cfg.plugins = plugins
-    await fsp.writeFile(configJson, JSON.stringify(cfg, null, 2) + "\n")
-    logDo("registered plugin manifests")
-  } else {
+  if (!changed) {
     logOk("plugin manifests already registered")
+    return
   }
+  if (usingJsonc) {
+    // Preserve existing comments + formatting by injecting just the new
+    // entries before the closing `]`. Append-only; never reorders.
+    const next = injectIntoJsoncPluginsArray(
+      raw,
+      defaultPluginManifestPaths().filter(
+        (m) => fs.existsSync(m) && !rawContainsLiteral(raw, m),
+      ),
+    )
+    if (next != null) {
+      await fsp.writeFile(configPath, next)
+      logDo("registered plugin manifests (config.jsonc, append)")
+      return
+    }
+    // Fallback: rewrite as plain JSON if injection couldn't find anchor.
+    await fsp.writeFile(
+      configPath,
+      JSON.stringify({ ...parsed, plugins }, null, 2) + "\n",
+    )
+    logDo("registered plugin manifests (config.jsonc, rewritten)")
+    return
+  }
+  await fsp.writeFile(
+    configPath,
+    JSON.stringify({ ...parsed, plugins }, null, 2) + "\n",
+  )
+  logDo("registered plugin manifests")
+}
+
+// Tiny JSONC parser — strips line/block comments and trailing commas
+// before passing to `JSON.parse`. Preserves nothing about formatting;
+// only used for read-side parsing here.
+function parseJsoncLoose(str: string): unknown {
+  let result = ""
+  let i = 0
+  while (i < str.length) {
+    if (str[i] === '"') {
+      let j = i + 1
+      while (j < str.length) {
+        if (str[j] === "\\") {
+          j += 2
+        } else if (str[j] === '"') {
+          j++
+          break
+        } else {
+          j++
+        }
+      }
+      result += str.slice(i, j)
+      i = j
+    } else if (str[i] === "/" && str[i + 1] === "/") {
+      i += 2
+      while (i < str.length && str[i] !== "\n") i++
+    } else if (str[i] === "/" && str[i + 1] === "*") {
+      i += 2
+      while (i < str.length && !(str[i] === "*" && str[i + 1] === "/")) i++
+      i += 2
+    } else {
+      result += str[i]
+      i++
+    }
+  }
+  try {
+    return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"))
+  } catch {
+    return { plugins: [] }
+  }
+}
+
+function rawContainsLiteral(raw: string, literal: string): boolean {
+  // Active matches only — ignore commented-out occurrences. Approximate by
+  // scanning per-line and skipping lines whose first non-whitespace chars
+  // are `//`. Block comments would need a real parse; not worth it here.
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith("//")) continue
+    if (line.includes(JSON.stringify(literal))) return true
+  }
+  return false
+}
+
+function injectIntoJsoncPluginsArray(
+  raw: string,
+  newEntries: string[],
+): string | null {
+  if (newEntries.length === 0) return raw
+  // Locate the closing bracket of the `"plugins": [ ... ]` array. Walk
+  // string literals and nested brackets so we don't misidentify a `]`
+  // inside a comment or string.
+  const keyMatch = /"plugins"\s*:\s*\[/.exec(raw)
+  if (!keyMatch) return null
+  const arrStart = keyMatch.index + keyMatch[0].length
+  let depth = 1
+  let i = arrStart
+  while (i < raw.length && depth > 0) {
+    const ch = raw[i]
+    if (ch === '"') {
+      i++
+      while (i < raw.length && raw[i] !== '"') {
+        if (raw[i] === "\\") i += 2
+        else i++
+      }
+      i++
+      continue
+    }
+    if (ch === "[") depth++
+    else if (ch === "]") depth--
+    if (depth > 0) i++
+  }
+  if (depth !== 0) return null
+  const closeIdx = i
+
+  const arrayBody = raw.slice(arrStart, closeIdx)
+  const indentMatch = /\n([ \t]+)\S/.exec(arrayBody)
+  const indent = indentMatch?.[1] ?? "    "
+
+  // Find the last non-whitespace character of the array body. If it's
+  // already a `,`, append after; otherwise insert a leading `,`. We
+  // preserve any trailing whitespace + comments verbatim.
+  let lastNonWs = -1
+  for (let j = arrayBody.length - 1; j >= 0; j--) {
+    const c = arrayBody[j]
+    if (c !== " " && c !== "\t" && c !== "\n" && c !== "\r") {
+      lastNonWs = j
+      break
+    }
+  }
+  const head =
+    lastNonWs >= 0 ? arrayBody.slice(0, lastNonWs + 1) : arrayBody
+  const tail = lastNonWs >= 0 ? arrayBody.slice(lastNonWs + 1) : ""
+  const sep = head.length > 0 && !head.endsWith(",") ? "," : ""
+  const insertedLines = newEntries
+    .map((p) => `${indent}${JSON.stringify(p)}`)
+    .join(",\n")
+  const newArrayBody = head + sep + "\n" + insertedLines + "," + tail
+  return raw.slice(0, arrStart) + newArrayBody + raw.slice(closeIdx)
 }
 
 async function ensureZenShim(): Promise<void> {
@@ -467,13 +643,9 @@ async function ensurePathWired(): Promise<void> {
 async function ensureRegistryTypes(): Promise<void> {
   const marker = path.join(REGISTRY_DIR, ".types.sig")
   const configJson = path.join(HOME_DIR, ".zenbu/config.json")
-  const sig = await fileSig(
-    configJson,
-    path.join(REPO_DIR, "packages/init/zenbu.plugin.json"),
-    path.join(REPO_DIR, "packages/zen/zenbu.plugin.json"),
-    path.join(REPO_DIR, "packages/init/shared/schema/index.ts"),
-    path.join(REPO_DIR, "packages/zen/shared/schema.ts"),
-  )
+  const manifestPaths = defaultPluginManifestPaths()
+  const schemaPaths = await defaultPluginSchemaPaths()
+  const sig = await fileSig(configJson, ...manifestPaths, ...schemaPaths)
   const dbSections = path.join(REGISTRY_DIR, "db-sections.ts")
   const preloads = path.join(REGISTRY_DIR, "preloads.ts")
   if (
@@ -488,10 +660,8 @@ async function ensureRegistryTypes(): Promise<void> {
   const bunBin = path.join(BIN_DIR, "bun")
   const zenCli = path.join(REPO_DIR, "packages/zen/src/bin.ts")
 
-  for (const manifest of [
-    path.join(REPO_DIR, "packages/init/zenbu.plugin.json"),
-    path.join(REPO_DIR, "packages/zen/zenbu.plugin.json"),
-  ]) {
+  for (const manifest of manifestPaths) {
+    if (!fs.existsSync(manifest)) continue
     const proc = Bun.spawn([bunBin, zenCli, "link", manifest], {
       stdio: ["ignore", "inherit", "inherit"],
     })

@@ -3,7 +3,7 @@ import {
   FolderIcon,
   ImageIcon,
   LayoutGridIcon,
-  XIcon,
+  PlusIcon,
 } from "lucide-react";
 import { useDb } from "../../../lib/kyju-react";
 import { useKyjuClient, useRpc } from "../../../lib/providers";
@@ -11,22 +11,19 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "../../../components/ui/dialog";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../../../components/ui/tooltip";
 
 const RAIL_WIDTH = 48;
-
-type ConfigEntry = {
-  id: string;
-  name: string;
-  description: string;
-  tags: string[];
-  thumbnailBase64: string | null;
-};
 
 type WorkspaceEntry = {
   id: string;
@@ -38,6 +35,9 @@ type WorkspaceEntry = {
     origin: "override" | "scanned";
     sourcePath: string | null;
   } | null;
+  viewScope?: string;
+  hidden?: boolean;
+  mirrorOfWorkspaceId?: string | null;
 };
 
 export function WorkspaceSidebar({
@@ -51,79 +51,126 @@ export function WorkspaceSidebar({
 }) {
   const rpc = useRpc();
   const client = useKyjuClient();
-  const workspaces = useDb((root) => root.plugin.kernel.workspaces) as
-    | WorkspaceEntry[]
-    | undefined;
+  // Pull the raw array via useDb (stable reference until kyju mutates it)
+  // and filter via useMemo. Filtering inside the useDb selector returned
+  // a fresh array on every snapshot read which made useSyncExternalStore
+  // perceive the snapshot as ever-changing — infinite re-render loop.
+  // Hidden workspaces are agent-window mirrors and never belong in the
+  // primary navigation rail.
+  const allWorkspaces = useDb(
+    (root) => root.plugin.kernel.workspaces,
+  ) 
+  
 
   const sorted = useMemo(
     () =>
-      [...(workspaces ?? [])].sort(
-        (a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0),
-      ),
-    [workspaces],
+      [...(allWorkspaces ?? [])]
+        .filter((w) => !w.hidden)
+        .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0)),
+    [allWorkspaces],
   );
 
   const [dialogOpen, setDialogOpen] = useState(false);
 
+  // Force-close any open tooltip when the cursor enters an iframe (or leaves
+  // the window). Radix relies on pointer events on the parent doc; once the
+  // cursor enters an iframe, those stop firing and the tooltip would otherwise
+  // stay visible until you move back over the trigger.
+  useEffect(() => {
+    const closeAllTooltips = () => {
+      document
+        .querySelectorAll<HTMLElement>('[data-slot="tooltip-trigger"]')
+        .forEach((el) => {
+          el.dispatchEvent(
+            new PointerEvent("pointerleave", { bubbles: true, cancelable: true }),
+          );
+        });
+    };
+    document.documentElement.addEventListener("mouseleave", closeAllTooltips);
+    window.addEventListener("blur", closeAllTooltips);
+    return () => {
+      document.documentElement.removeEventListener("mouseleave", closeAllTooltips);
+      window.removeEventListener("blur", closeAllTooltips);
+    };
+  }, []);
+
   return (
-    <div
-      className="shrink-0 flex flex-col items-center gap-1 py-2 overflow-y-auto"
-      style={
-        {
-          width: RAIL_WIDTH,
-          background: "var(--zenbu-chrome)",
-          WebkitAppRegion: "no-drag",
-        } as any
-      }
-    >
-      {sorted.map((ws) => (
-        <WorkspaceRailItem
-          key={ws.id}
-          workspace={ws}
-          isActive={ws.id === activeWorkspaceId}
-          onSelect={() => onSelectWorkspace(ws.id)}
-          onUploadIcon={async (file) => {
-            const data = new Uint8Array(await file.arrayBuffer());
-            const blobId = await (client as any).createBlob(data, true);
-            await rpc.workspace.setWorkspaceIcon(ws.id, blobId, "override");
-          }}
-        />
-      ))}
-      <button
-        type="button"
-        onClick={() => setDialogOpen(true)}
-        title="New workspace"
-        className="flex items-center justify-center mt-1 text-(--zenbu-agent-sidebar-muted) hover:text-(--zenbu-agent-sidebar-foreground) hover:bg-(--zenbu-agent-sidebar-hover)"
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: 8,
-          border: "1px dashed var(--zenbu-panel-border)",
-          cursor: "pointer",
-        }}
+    <TooltipProvider delayDuration={800} disableHoverableContent>
+      <div
+        className="shrink-0 flex flex-col items-center gap-1 py-2 overflow-y-auto"
+        style={
+          {
+            width: RAIL_WIDTH,
+            background: "var(--zenbu-chrome)",
+            WebkitAppRegion: "no-drag",
+          } as any
+        }
       >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-      </button>
-      <NewWorkspaceDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onCreated={onSelectWorkspace}
-      />
-    </div>
+        {sorted.map((ws) => (
+          <WorkspaceRailItem
+            key={ws.id}
+            workspace={ws}
+            isActive={ws.id === activeWorkspaceId}
+            onSelect={() => onSelectWorkspace(ws.id)}
+            onUploadIcon={async (file) => {
+              const data = new Uint8Array(await file.arrayBuffer());
+              const blobId = await (client as any).createBlob(data, true);
+              await rpc.workspace.setWorkspaceIcon(ws.id, blobId, "override");
+            }}
+          />
+        ))}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setDialogOpen(true)}
+              className="flex items-center justify-center mt-1 text-(--zenbu-agent-sidebar-muted) hover:text-(--zenbu-agent-sidebar-foreground) hover:bg-(--zenbu-agent-sidebar-hover)"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 8,
+                border: "1px dashed var(--zenbu-panel-border)",
+                cursor: "pointer",
+              }}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={-4}>
+            New workspace
+          </TooltipContent>
+        </Tooltip>
+        <NewWorkspaceDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          onCreated={onSelectWorkspace}
+        />
+      </div>
+    </TooltipProvider>
   );
 }
+
+type ConfigEntry = {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  thumbnailBase64: string | null;
+};
+
+type WizardStep = "choose-type" | "configuration" | "configure";
 
 function NewWorkspaceDialog({
   open,
@@ -138,29 +185,31 @@ function NewWorkspaceDialog({
   const client = useKyjuClient() as any;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [step, setStep] = useState<WizardStep>("choose-type");
+  const [chosenType, setChosenType] = useState<"create" | "existing">("create");
   const [dir, setDir] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [nameTouched, setNameTouched] = useState(false);
   const [iconFile, setIconFile] = useState<File | null>(null);
   const [iconPreview, setIconPreview] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedConfig, setSelectedConfig] = useState<string | null>(null);
-  const [selectedConfigName, setSelectedConfigName] = useState<string | null>(null);
-  const [configPickerOpen, setConfigPickerOpen] = useState(false);
+  const [configs, setConfigs] = useState<ConfigEntry[]>([]);
+  const [configsLoading, setConfigsLoading] = useState(false);
 
   useEffect(() => {
     if (!open) {
+      setStep("choose-type");
+      setChosenType("create");
       setDir(null);
       setName("");
-      setNameTouched(false);
       setIconFile(null);
       setIconPreview(null);
       setCreating(false);
       setError(null);
       setSelectedConfig(null);
-      setSelectedConfigName(null);
-      setConfigPickerOpen(false);
+      setConfigs([]);
+      setConfigsLoading(false);
     }
   }, [open]);
 
@@ -174,18 +223,70 @@ function NewWorkspaceDialog({
     return () => URL.revokeObjectURL(url);
   }, [iconFile]);
 
-  const pickDirectory = useCallback(async () => {
-    try {
-      const picked: string | null = await rpc.window.pickDirectory();
-      if (!picked) return;
-      setDir(picked);
-      if (!nameTouched) {
-        setName(picked.split("/").pop() || picked);
+  useEffect(() => {
+    if (step !== "configuration") return;
+    let cancelled = false;
+    setConfigsLoading(true);
+    rpc.workspace
+      .listConfigurations()
+      .then((list: ConfigEntry[]) => {
+        if (cancelled) return;
+        setConfigs(list);
+        if (list.length > 0 && !selectedConfig) {
+          setSelectedConfig(list[0].id);
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("[workspace-sidebar] failed to list configurations:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setConfigsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [step, rpc]);
+
+  const handleNext = useCallback(async () => {
+    if (step === "configuration") {
+      setStep("configure");
+    } else if (step === "configure") {
+      if (name.trim().length === 0) return;
+      try {
+        let cwdPath = dir;
+        if (!cwdPath) {
+          const picked: string | null = await rpc.window.pickDirectory();
+          if (!picked) return;
+          cwdPath = picked;
+        }
+        setCreating(true);
+        setError(null);
+        const result = await rpc.workspace.createWorkspace(name.trim(), [cwdPath], selectedConfig ?? undefined);
+        if (iconFile) {
+          try {
+            const data = new Uint8Array(await iconFile.arrayBuffer());
+            const blobId = await client.createBlob(data, true);
+            await rpc.workspace.setWorkspaceIcon(result.id, blobId, "override");
+          } catch (err) {
+            console.error("[workspace-sidebar] icon upload failed:", err);
+          }
+        }
+        onCreated(result.id);
+        onOpenChange(false);
+      } catch (e) {
+        console.error("[workspace-sidebar] create failed:", e);
+        setError(e instanceof Error ? e.message : String(e));
+        setCreating(false);
       }
-    } catch (e) {
-      console.error("[workspace-sidebar] pickDirectory failed:", e);
     }
-  }, [rpc, nameTouched]);
+  }, [step, chosenType, rpc, client, name, iconFile, selectedConfig, onCreated, onOpenChange]);
+
+  const handlePrevious = useCallback(() => {
+    if (step === "configure") {
+      if (chosenType === "create") setStep("configuration");
+      else setStep("choose-type");
+    } else if (step === "configuration") {
+      setStep("choose-type");
+    }
+  }, [step, chosenType]);
 
   const onIconChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -196,336 +297,228 @@ function NewWorkspaceDialog({
     [],
   );
 
-  const canCreate = !!dir && name.trim().length > 0 && !creating;
-
-  const create = useCallback(async () => {
-    if (!dir || name.trim().length === 0) return;
-    setCreating(true);
-    setError(null);
-    try {
-      const result = await rpc.workspace.createWorkspace(name.trim(), [dir], selectedConfig ?? undefined);
-      if (iconFile) {
-        try {
-          const data = new Uint8Array(await iconFile.arrayBuffer());
-          const blobId = await client.createBlob(data, true);
-          await rpc.workspace.setWorkspaceIcon(result.id, blobId, "override");
-        } catch (err) {
-          console.error("[workspace-sidebar] icon upload failed:", err);
-        }
-      }
-      onCreated(result.id);
-      onOpenChange(false);
-    } catch (e) {
-      console.error("[workspace-sidebar] create failed:", e);
-      setError(e instanceof Error ? e.message : String(e));
-      setCreating(false);
-    }
-  }, [rpc, client, dir, name, iconFile, selectedConfig, onCreated, onOpenChange]);
-
-  const fallback = (name.trim()[0] ?? "?").toUpperCase();
+  const fallback = (name.trim()[0] ?? "W").toUpperCase();
+  const isLastStep = step === "configure";
+  const canProceed = step === "configure"
+    ? name.trim().length > 0 && !creating
+    : true;
 
   return (
-    <>
-      <Dialog
-        open={open}
-        onOpenChange={(next) => {
-          if (!creating) onOpenChange(next);
-        }}
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!creating) onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        className={step === "configuration" ? "sm:max-w-2xl" : "sm:max-w-md"}
+        showCloseButton={false}
       >
-        <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>New workspace</DialogTitle>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
-              Folder
-            </label>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={pickDirectory}
-              disabled={creating}
-              className="justify-start gap-2 font-normal"
-            >
-              <FolderIcon />
-              <span className="truncate">
-                {dir ? dir : "Choose folder…"}
-              </span>
-            </Button>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="new-workspace-name"
-              className="text-xs font-medium text-muted-foreground"
-            >
-              Name
-            </label>
-            <Input
-              id="new-workspace-name"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                setNameTouched(true);
-              }}
-              placeholder="my-project"
-              disabled={creating}
-            />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
-              Icon
-            </label>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={creating}
-                className="flex items-center justify-center rounded-lg border border-border bg-muted/40 hover:bg-muted transition-colors overflow-hidden"
-                style={{ width: 48, height: 48 }}
-                title="Upload icon"
-              >
-                {iconPreview ? (
-                  <img
-                    src={iconPreview}
-                    alt=""
-                    className="object-contain"
-                    style={{ width: 36, height: 36, borderRadius: 4 }}
-                  />
-                ) : (
-                  <span className="text-base font-medium text-muted-foreground">
-                    {fallback}
-                  </span>
-                )}
-              </button>
-              <div className="flex flex-col gap-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={creating}
-                  className="gap-1"
-                >
-                  <ImageIcon />
-                  {iconFile ? "Replace" : "Upload"}
-                </Button>
-                {iconFile && (
-                  <button
-                    type="button"
-                    onClick={() => setIconFile(null)}
-                    disabled={creating}
-                    className="text-[11px] text-muted-foreground hover:text-foreground self-start"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/svg+xml,image/png,image/jpeg,image/gif,image/webp,image/x-icon"
-                style={{ display: "none" }}
-                onChange={onIconChange}
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
-              Configuration
-            </label>
-            {selectedConfig ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setConfigPickerOpen(true)}
-                disabled={creating}
-                className="justify-start gap-2 font-normal h-auto py-1.5"
-              >
-                <span className="truncate flex-1 text-left">
-                  {selectedConfigName ?? selectedConfig}
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedConfig(null);
-                    setSelectedConfigName(null);
-                  }}
-                  disabled={creating}
-                  className="text-muted-foreground hover:text-foreground p-0.5 -mr-1 cursor-pointer"
-                >
-                  <XIcon size={12} />
-                </button>
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setConfigPickerOpen(true)}
-                disabled={creating}
-                className="justify-start gap-2 font-normal"
-              >
-                <LayoutGridIcon />
-                Browse configurations…
-              </Button>
-            )}
-          </div>
-
-          {error && (
-            <p className="text-xs text-destructive whitespace-pre-wrap break-words">
-              {error}
-            </p>
+          <DialogTitle>
+            {step === "choose-type" && "New Workspace"}
+            {step === "configuration" && "Choose a configuration:"}
+            {step === "configure" && "Configure your workspace:"}
+          </DialogTitle>
+          {step === "configuration" && (
+            <DialogDescription>
+              Configurations pre-configure your workspace with views, services,
+              and tools for a specific workflow.
+            </DialogDescription>
           )}
-        </div>
-
-        <DialogFooter className="gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            disabled={creating}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={create}
-            disabled={!canCreate}
-          >
-            {creating ? "Creating…" : "Create"}
-          </Button>
-        </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <ConfigPickerDialog
-        open={configPickerOpen}
-        onOpenChange={setConfigPickerOpen}
-        selectedId={selectedConfig}
-        onSelect={(id, name) => {
-          setSelectedConfig(id === "blank" ? null : id);
-          setSelectedConfigName(id === "blank" ? null : name);
-          setConfigPickerOpen(false);
-        }}
-      />
-    </>
-  );
-}
-
-function ConfigPickerDialog({
-  open,
-  onOpenChange,
-  selectedId,
-  onSelect,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  selectedId: string | null;
-  onSelect: (configId: string, name: string) => void;
-}) {
-  const rpc = useRpc();
-  const [configs, setConfigs] = useState<ConfigEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setLoading(true);
-    rpc.workspace
-      .listConfigurations()
-      .then((list: ConfigEntry[]) => {
-        if (!cancelled) setConfigs(list);
-      })
-      .catch((err: unknown) => {
-        console.error("[config-picker] failed to list configurations:", err);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, rpc]);
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Choose a configuration</DialogTitle>
-          <DialogDescription>
-            Configurations pre-configure your workspace with views, services,
-            and tools for a specific workflow.
-          </DialogDescription>
         </DialogHeader>
-        {loading ? (
-          <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
-            Loading configurations…
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[60vh] overflow-y-auto">
-            {configs.map((config) => {
-              const isSelected = config.id === selectedId;
-              return (
-                <button
-                  key={config.id}
-                  type="button"
-                  onClick={() => onSelect(config.id, config.name)}
-                  className={`text-left rounded-lg border flex flex-col transition-colors cursor-pointer overflow-hidden ${
-                    isSelected
-                      ? "border-primary bg-primary/5 ring-1 ring-primary"
-                      : "border-border bg-muted/20 hover:bg-muted/40 hover:border-foreground/20"
-                  }`}
-                >
-                  {config.thumbnailBase64 ? (
-                    <img
-                      src={config.thumbnailBase64}
-                      alt=""
-                      className="w-full object-cover"
-                      style={{ height: 100 }}
-                    />
-                  ) : (
-                    <div
-                      className="w-full flex items-center justify-center bg-muted/30"
-                      style={{ height: 100 }}
-                    >
-                      <LayoutGridIcon
-                        size={24}
-                        className="text-muted-foreground/50"
-                      />
-                    </div>
-                  )}
-                  <div className="flex flex-col gap-1 p-2.5">
-                    <p className="text-sm font-semibold">{config.name}</p>
-                    <p className="text-xs text-muted-foreground line-clamp-2">
-                      {config.description}
-                    </p>
-                    {config.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {config.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
+
+        {step === "choose-type" && (
+          <div className="flex flex-col gap-2">
+            {([
+              { type: "create" as const, icon: PlusIcon, label: "Create New Workspace..." },
+              { type: "existing" as const, icon: FolderIcon, label: "Open Existing Folder..." },
+            ]).map(({ type, icon: Icon, label }) => (
+              <button
+                key={type}
+                type="button"
+                onClick={async () => {
+                  setChosenType(type);
+                  if (type === "create") {
+                    setStep("configuration");
+                  } else {
+                    try {
+                      const picked: string | null = await rpc.window.pickDirectory();
+                      if (!picked) return;
+                      setDir(picked);
+                      setName(picked.split("/").pop() || picked);
+                      setStep("configure");
+                    } catch (e) {
+                      console.error("[workspace-sidebar] pickDirectory failed:", e);
+                    }
+                  }
+                }}
+                className="flex items-center gap-3 rounded-xl bg-muted px-4 py-3.5 text-left transition-colors cursor-pointer hover:bg-muted/80 border border-border"
+              >
+                <Icon size={20} className="shrink-0 text-muted-foreground" />
+                <span className="text-sm font-medium">{label}</span>
+              </button>
+            ))}
           </div>
         )}
+
+        {step === "configuration" && (
+          configsLoading ? (
+            <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
+              Loading configurations…
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[60vh] overflow-y-auto">
+              {configs.map((config) => {
+                const isSelected = config.id === selectedConfig;
+                return (
+                  <button
+                    key={config.id}
+                    type="button"
+                    onClick={() => setSelectedConfig(config.id)}
+                    className={`text-left rounded-lg border flex flex-col transition-colors cursor-pointer overflow-hidden ${
+                      isSelected
+                        ? "border-primary bg-primary/5 ring-1 ring-primary"
+                        : "border-border bg-muted/20 hover:bg-muted/40 hover:border-foreground/20"
+                    }`}
+                  >
+                    {config.thumbnailBase64 ? (
+                      <img
+                        src={config.thumbnailBase64}
+                        alt=""
+                        className="w-full object-cover"
+                        style={{ height: 100 }}
+                      />
+                    ) : (
+                      <div
+                        className="w-full flex items-center justify-center bg-muted/30"
+                        style={{ height: 100 }}
+                      >
+                        <LayoutGridIcon size={24} className="text-muted-foreground/50" />
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1 p-2.5">
+                      <p className="text-sm font-semibold">{config.name}</p>
+                      <p className="text-xs text-muted-foreground line-clamp-2">
+                        {config.description}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )
+        )}
+
+        {step === "configure" && (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="ws-name" className="text-xs font-medium text-muted-foreground">
+                Workspace Name
+              </label>
+              <Input
+                id="ws-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="my-workspace"
+                disabled={creating}
+                autoFocus
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Icon</label>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={creating}
+                  className="flex items-center justify-center rounded-lg border border-border bg-muted/40 hover:bg-muted transition-colors overflow-hidden cursor-pointer"
+                  style={{ width: 48, height: 48 }}
+                >
+                  {iconPreview ? (
+                    <img
+                      src={iconPreview}
+                      alt=""
+                      className="object-contain"
+                      style={{ width: 36, height: 36, borderRadius: 4 }}
+                    />
+                  ) : (
+                    <span className="text-base font-medium text-muted-foreground">{fallback}</span>
+                  )}
+                </button>
+                <div className="flex flex-col gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={creating}
+                    className="gap-1"
+                  >
+                    <ImageIcon />
+                    {iconFile ? "Replace" : "Upload"}
+                  </Button>
+                  {iconFile && (
+                    <button
+                      type="button"
+                      onClick={() => setIconFile(null)}
+                      disabled={creating}
+                      className="text-[11px] text-muted-foreground hover:text-foreground self-start cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {error && (
+              <p className="text-xs text-destructive whitespace-pre-wrap wrap-break-word">{error}</p>
+            )}
+          </div>
+        )}
+
+        {step !== "choose-type" && (
+          <div className="flex items-center justify-between pt-2 border-t border-border">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              disabled={creating}
+            >
+              Cancel
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handlePrevious}
+                disabled={creating}
+              >
+                Previous
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleNext}
+                disabled={!canProceed}
+              >
+                {isLastStep ? (creating ? "Creating…" : "Create") : "Next"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/svg+xml,image/png,image/jpeg,image/gif,image/webp,image/x-icon"
+          style={{ display: "none" }}
+          onChange={onIconChange}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -553,6 +546,7 @@ function WorkspaceRailItem({
       const result = await rpc.window.showContextMenu([
         { id: "change-icon", label: "Change Icon..." },
         { id: "rescan-icon", label: "Re-scan Icon from Project" },
+        { id: "open-agent-window", label: "Open Agent Window" },
       ]);
       if (result === "change-icon") {
         fileInputRef.current?.click();
@@ -562,6 +556,12 @@ function WorkspaceRailItem({
         } catch (err) {
           console.error("[workspace-sidebar] rescan icon failed:", err);
         }
+      } else if (result === "open-agent-window") {
+        try {
+          await rpc.workspace.openAgentWindow(workspace.id);
+        } catch (err) {
+          console.error("[workspace-sidebar] openAgentWindow failed:", err);
+        }
       }
     },
     [rpc, workspace.id],
@@ -569,43 +569,49 @@ function WorkspaceRailItem({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={onSelect}
-        onContextMenu={onContextMenu}
-        title={workspace.name}
-        className="relative flex items-center justify-center"
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: 8,
-          background: isActive
-            ? "var(--zenbu-agent-sidebar-active)"
-            : "transparent",
-          boxShadow: isActive ? "0 0 0 1px var(--zenbu-panel-border)" : "none",
-          cursor: "pointer",
-        }}
-      >
-        <span
-          aria-hidden
-          className="absolute"
-          style={{
-            left: -6,
-            top: 6,
-            bottom: 6,
-            width: 3,
-            borderRadius: 2,
-            background: isActive
-              ? "var(--zenbu-agent-sidebar-foreground)"
-              : "transparent",
-          }}
-        />
-        <WorkspaceIcon
-          blobId={workspace.icon?.blobId}
-          fallback={fallback}
-          isActive={isActive}
-        />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={onSelect}
+            onContextMenu={onContextMenu}
+            className="relative flex items-center justify-center"
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              background: isActive
+                ? "var(--zenbu-agent-sidebar-active)"
+                : "transparent",
+              boxShadow: isActive ? "0 0 0 1px var(--zenbu-panel-border)" : "none",
+              cursor: "pointer",
+            }}
+          >
+            <span
+              aria-hidden
+              className="absolute"
+              style={{
+                left: -6,
+                top: 6,
+                bottom: 6,
+                width: 3,
+                borderRadius: 2,
+                background: isActive
+                  ? "var(--zenbu-agent-sidebar-foreground)"
+                  : "transparent",
+              }}
+            />
+            <WorkspaceIcon
+              blobId={workspace.icon?.blobId}
+              fallback={fallback}
+              isActive={isActive}
+            />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" sideOffset={-4}>
+          {label}
+        </TooltipContent>
+      </Tooltip>
       <input
         ref={fileInputRef}
         type="file"

@@ -7,8 +7,9 @@ import * as Effect from "effect/Effect"
 import { subscribe, type AsyncSubscription } from "@parcel/watcher"
 import { Service, runtime } from "../runtime"
 import { DbService } from "./db"
+import { WindowService } from "./window"
 import { WorkspaceContextService } from "./workspace-context"
-import { makeWorkspaceAppState } from "../../../shared/agent-ops"
+import { makeWorkspaceAppState } from "#zenbu/agent-manager/shared/schema"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const CONFIGURATIONS_DIR = path.resolve(__dirname, "../../../../../configurations")
@@ -69,8 +70,8 @@ async function resolveWorkspaceConfigPath(zenbuDir: string): Promise<string | nu
 
 export class WorkspaceService extends Service {
   static key = "workspace"
-  static deps = { db: DbService }
-  declare ctx: { db: DbService }
+  static deps = { db: DbService, window: WindowService }
+  declare ctx: { db: DbService; window: WindowService }
 
   private loadedWorkspacePlugins = new Map<string, string[]>()
 
@@ -84,7 +85,12 @@ export class WorkspaceService extends Service {
     absCwd: string,
   ): Promise<{ id: string; created: boolean }> {
     const root = this.ctx.db.client.readRoot()
-    const workspaces = root.plugin.kernel.workspaces ?? []
+    // Skip hidden workspaces: those are agent-window mirrors and should
+    // never be returned for a CLI/file-open path. The user's intent is
+    // always the source workspace.
+    const workspaces = (root.plugin.kernel.workspaces ?? []).filter(
+      (w) => !w.hidden,
+    )
 
     const exact = workspaces.find((w) => w.cwds.includes(absCwd))
     if (exact) return { id: exact.id, created: false }
@@ -120,7 +126,16 @@ export class WorkspaceService extends Service {
       client.update((root) => {
         root.plugin.kernel.workspaces = [
           ...(root.plugin.kernel.workspaces ?? []),
-          { id, name, cwds, createdAt: now, icon: null },
+          {
+            id,
+            name,
+            cwds,
+            createdAt: now,
+            icon: null,
+            viewScope: "agent-manager",
+            hidden: false,
+            mirrorOfWorkspaceId: null,
+          },
         ]
       }),
     )
@@ -136,29 +151,142 @@ export class WorkspaceService extends Service {
   }
 
   async deleteWorkspace(id: string): Promise<void> {
-    await this.stopWorkspacePlugins(id)
+    // Cascade: any hidden mirrors of this workspace go too. Determined
+    // before stopWorkspacePlugins so we can also unload their (empty)
+    // plugin slots and pull the rows + any window-state pointing at them.
+    const root = this.ctx.db.client.readRoot()
+    const mirrorIds = (root.plugin.kernel.workspaces ?? [])
+      .filter((w) => w.mirrorOfWorkspaceId === id && w.hidden)
+      .map((w) => w.id)
+    const allIds = new Set<string>([id, ...mirrorIds])
+
+    for (const wid of allIds) {
+      await this.stopWorkspacePlugins(wid)
+    }
+
     const client = this.ctx.db.effectClient
     await Effect.runPromise(
       client.update((root) => {
         const k = root.plugin.kernel
-        k.workspaces = k.workspaces.filter((w) => w.id !== id)
-        // Clear `activeWorkspaceId` from any window that pointed here.
+        const am = root.plugin["agent-manager"]
+        k.workspaces = k.workspaces.filter((w) => !allIds.has(w.id))
+        // Clear `activeWorkspaceId` from any window that pointed at any
+        // of the deleted ids.
         const nextWindowState: typeof k.windowState = {}
         for (const wid of Object.keys(k.windowState)) {
           const ws = k.windowState[wid]
           nextWindowState[wid] =
-            ws.activeWorkspaceId === id
+            ws.activeWorkspaceId && allIds.has(ws.activeWorkspaceId)
               ? { ...ws, activeWorkspaceId: null }
               : ws
         }
         k.windowState = nextWindowState
-        // Drop the workspaceState row.
-        const nextWorkspaceState = { ...k.workspaceState }
-        delete nextWorkspaceState[id]
-        k.workspaceState = nextWorkspaceState
+        // Drop the workspaceState rows (lives on agent-manager).
+        const nextWorkspaceState = { ...am.workspaceState }
+        for (const wid of allIds) delete nextWorkspaceState[wid]
+        am.workspaceState = nextWorkspaceState
       }),
     )
-    console.log(`[workspace] deleted ${id}`)
+    if (mirrorIds.length > 0) {
+      console.log(
+        `[workspace] deleted ${id} + ${mirrorIds.length} mirror(s): ${mirrorIds.join(", ")}`,
+      )
+    } else {
+      console.log(`[workspace] deleted ${id}`)
+    }
+  }
+
+  /**
+   * Open a fresh window pointed at a hidden mirror of `sourceWorkspaceId`,
+   * creating the mirror on first call. The mirror shares cwds + chrome
+   * with the source but skips its plugin barrel, so the user gets a
+   * clean agent-manager shell — useful when a per-workspace plugin has
+   * overridden `viewScope` and the user needs the chat view back to
+   * edit/admin it.
+   *
+   * Trade-off: we represent this as a second workspace row rather than a
+   * per-window plugin-skip flag because plugin lifecycle is fundamentally
+   * workspace-scoped (one barrel import, one set of registered services).
+   * A richer "selective plugins per workspace" model is the long-term
+   * direction; until then the hidden mirror is the simplest representation.
+   */
+  /**
+   * Find-or-create a hidden mirror workspace for `sourceWorkspaceId`.
+   * Returns the mirror's id. Does NOT create a window — callers decide
+   * how to present the mirror (inline chat panel, separate window, etc.).
+   */
+  async ensureMirrorWorkspace(
+    sourceWorkspaceId: string,
+  ): Promise<{ mirrorWorkspaceId: string }> {
+    const root = this.ctx.db.client.readRoot()
+    const source = (root.plugin.kernel.workspaces ?? []).find(
+      (w) => w.id === sourceWorkspaceId,
+    )
+    if (!source) {
+      throw new Error(`workspace ${sourceWorkspaceId} not found`)
+    }
+
+    const existing = (root.plugin.kernel.workspaces ?? []).find(
+      (w) => w.mirrorOfWorkspaceId === sourceWorkspaceId && w.hidden,
+    )
+    let mirrorId: string
+    if (existing) {
+      mirrorId = existing.id
+      // Self-heal: an older code path could load this hidden mirror's
+      // plugins (the source's plugin then flipped viewScope away from
+      // agent-manager). Force it back so the agent window always renders
+      // the default shell, regardless of what got persisted earlier.
+      if (existing.viewScope !== "agent-manager") {
+        const client = this.ctx.db.effectClient
+        await Effect.runPromise(
+          client.update((root) => {
+            const ws = root.plugin.kernel.workspaces.find(
+              (w) => w.id === mirrorId,
+            )
+            if (ws) ws.viewScope = "agent-manager"
+          }),
+        )
+        console.log(
+          `[workspace] healed mirror ${mirrorId} viewScope -> agent-manager`,
+        )
+      }
+    } else {
+      mirrorId = nanoid()
+      const now = Date.now()
+      const client = this.ctx.db.effectClient
+      await Effect.runPromise(
+        client.update((root) => {
+          root.plugin.kernel.workspaces = [
+            ...(root.plugin.kernel.workspaces ?? []),
+            {
+              id: mirrorId,
+              name: `${source.name} (agent)`,
+              cwds: source.cwds,
+              createdAt: now,
+              icon: source.icon,
+              viewScope: "agent-manager",
+              hidden: true,
+              mirrorOfWorkspaceId: sourceWorkspaceId,
+            },
+          ]
+        }),
+      )
+      console.log(
+        `[workspace] created hidden mirror ${mirrorId} for ${sourceWorkspaceId}`,
+      )
+    }
+
+    return { mirrorWorkspaceId: mirrorId }
+  }
+
+  async openAgentWindow(
+    sourceWorkspaceId: string,
+  ): Promise<{ windowId: string; mirrorWorkspaceId: string }> {
+    const { mirrorWorkspaceId } =
+      await this.ensureMirrorWorkspace(sourceWorkspaceId)
+    const { windowId } =
+      await this.ctx.window.createWindowForWorkspace(mirrorWorkspaceId)
+    return { windowId, mirrorWorkspaceId }
   }
 
   async updateWorkspace(
@@ -197,16 +325,17 @@ export class WorkspaceService extends Service {
     await Effect.runPromise(
       client.update((root) => {
         const k = root.plugin.kernel
+        const am = root.plugin["agent-manager"]
         const ws = k.windowState[windowId]
         if (!ws) return
 
         // Persist last-active-view for the previous workspace, so re-entry
         // restores it.
         if (prevId && ws.activeViewId) {
-          const prevState = k.workspaceState[prevId]
+          const prevState = am.workspaceState[prevId]
           const base = prevState ?? makeWorkspaceAppState(prevId)
-          k.workspaceState = {
-            ...k.workspaceState,
+          am.workspaceState = {
+            ...am.workspaceState,
             [prevId]: { ...base, lastViewId: ws.activeViewId },
           }
         }
@@ -227,13 +356,13 @@ export class WorkspaceService extends Service {
           if (view.scope !== "chat") return false
           const agentId = view.props.agentId
           if (!agentId) return false
-          const bound = k.agentState[agentId]?.workspaceId ?? null
+          const bound = am.agentState[agentId]?.workspaceId ?? null
           // Unbound agents (legacy / warm-pool) are visible everywhere;
           // bound agents only match their own workspace.
           return bound === null || bound === workspaceId
         }
 
-        const lastViewId = k.workspaceState[workspaceId]?.lastViewId ?? null
+        const lastViewId = am.workspaceState[workspaceId]?.lastViewId ?? null
 
         let target: string | undefined
         if (lastViewId && viewMatchesWorkspace(lastViewId)) {
@@ -293,15 +422,16 @@ export class WorkspaceService extends Service {
     await Effect.runPromise(
       client.update((root) => {
         const k = root.plugin.kernel
+        const am = root.plugin["agent-manager"]
         const ws = k.windowState[windowId]
         if (!ws) return
 
         // Persist last-active-view before clearing.
         if (prevId && ws.activeViewId) {
-          const prevState = k.workspaceState[prevId]
+          const prevState = am.workspaceState[prevId]
           const base = prevState ?? makeWorkspaceAppState(prevId)
-          k.workspaceState = {
-            ...k.workspaceState,
+          am.workspaceState = {
+            ...am.workspaceState,
             [prevId]: { ...base, lastViewId: ws.activeViewId },
           }
         }
@@ -349,6 +479,21 @@ export class WorkspaceService extends Service {
     cwds: string[],
   ): Promise<void> {
     if (this.loadedWorkspacePlugins.has(workspaceId)) return
+
+    // Hidden workspaces are mirrors used by "Open Agent Window" — they
+    // share cwds with a source workspace but intentionally skip the
+    // plugin barrel so the user gets a clean agent-manager shell.
+    const root = this.ctx.db.client.readRoot()
+    const ws = (root.plugin.kernel.workspaces ?? []).find(
+      (w) => w.id === workspaceId,
+    )
+    if (ws?.hidden) {
+      this.loadedWorkspacePlugins.set(workspaceId, [])
+      console.log(
+        `[workspace] skipping plugin load for hidden workspace ${workspaceId}`,
+      )
+      return
+    }
 
     const manifests = await this.scanWorkspacePlugins(cwds)
 

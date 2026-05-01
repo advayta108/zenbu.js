@@ -1,0 +1,9 @@
+{
+  "name": "agent-manager",
+  "requiredVersion": ">=0.1.0",
+  "services": [
+    "src/main/services/*.ts"
+  ],
+  "schema": "./shared/schema.ts",
+  "migrations": "./kyju/index.ts"
+}

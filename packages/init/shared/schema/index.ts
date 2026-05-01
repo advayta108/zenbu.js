@@ -36,6 +36,10 @@ const windowAppStateSchema = zod.object({
   activeWorkspaceId: zod.string().nullable().default(null),
 });
 
+// Slimmed: workspace-shell-only sub-fields (sidebarOpen, tabSidebarOpen,
+// sidebarPanel, utilitySidebarSelected) moved to
+// `plugin["agent-manager"].workspaceShellState`. Generic per-view fields
+// (cache/load metadata, draft, order) stay in kernel.
 const viewAppStateSchema = zod.object({
   viewId: zod.string(),
   draft: zod
@@ -49,28 +53,10 @@ const viewAppStateSchema = zod.object({
     .default(null),
   pendingCwd: zod.string().nullable().default(null),
   order: zod.number().default(0),
-  sidebarOpen: zod.boolean().default(false),
-  tabSidebarOpen: zod.boolean().default(true),
-  sidebarPanel: zod.string().default("overview"),
-  utilitySidebarSelected: zod.string().nullable().default(null),
   cachedAt: zod.number().nullable().default(null),
   loadedAt: zod.number().nullable().default(null),
   loadCount: zod.number().default(0),
   loadError: zod.string().nullable().default(null),
-});
-
-const agentAppStateSchema = zod.object({
-  agentId: zod.string(),
-  lastViewedAt: zod.number().nullable().default(null),
-  workspaceId: zod.string().nullable().default(null),
-});
-
-const workspaceAppStateSchema = zod.object({
-  workspaceId: zod.string(),
-  lastViewId: zod.string().nullable().default(null),
-  bottomPanelOpen: zod.boolean().default(false),
-  bottomPanelSelected: zod.string().nullable().default(null),
-  bottomPanelHeight: zod.number().default(260),
 });
 
 const workspaceIconSchema = zod.object({
@@ -85,6 +71,24 @@ const workspaceSchema = zod.object({
   cwds: zod.array(zod.string()).default([]),
   createdAt: zod.number(),
   icon: workspaceIconSchema.nullable().default(null),
+  // Which registered ViewRegistry scope provides this workspace's shell.
+  // Defaults to "agent-manager"; future plugins can register alternative
+  // workspace shells with `meta.kind === "workspace-shell"` and a user can
+  // set this field to point at one.
+  viewScope: zod.string().default("agent-manager"),
+  // Hidden workspaces don't appear in the workspace sidebar rail and skip
+  // their plugin barrel during `loadWorkspacePlugins`. Today this is used
+  // exclusively for "agent windows" — mirrors of a source workspace that
+  // render the default agent-manager shell so the user can edit/admin a
+  // workspace whose plugins overrode `viewScope`. This is the simplest
+  // representation that lets us run the same cwds without the source's
+  // plugins; a richer per-workspace "plugin allowlist" model is the
+  // long-term direction.
+  hidden: zod.boolean().default(false),
+  // If non-null, this workspace mirrors another workspace's cwds + chrome.
+  // Used to dedupe agent-windows (one mirror per source) and cascade-
+  // delete the mirror when the source is deleted.
+  mirrorOfWorkspaceId: zod.string().nullable().default(null),
 });
 
 export const MAIN_WINDOW_ID = "main";
@@ -167,7 +171,6 @@ export const appSchema = createSchema({
   windowState: f.record(zod.string(), windowAppStateSchema).default({}),
   views: f.array(viewSchema).default([]),
   viewState: f.record(zod.string(), viewAppStateSchema).default({}),
-  agentState: f.record(zod.string(), agentAppStateSchema).default({}),
   commands: f
     .array(
       zod.object({
@@ -231,15 +234,6 @@ export const appSchema = createSchema({
       dismissedVersion: null,
     }),
   workspaces: f.array(workspaceSchema).default([]),
-  workspaceState: f.record(zod.string(), workspaceAppStateSchema).default({}),
-  pool: f
-    .array(
-      zod.object({
-        agentId: zod.string(),
-      }),
-    )
-    .default([]),
-  poolSize: f.number().default(1),
 });
 
 export const schema = appSchema;
@@ -251,5 +245,3 @@ export type Window = zod.infer<typeof windowSchema>;
 export type View = zod.infer<typeof viewSchema>;
 export type WindowAppState = zod.infer<typeof windowAppStateSchema>;
 export type ViewAppState = zod.infer<typeof viewAppStateSchema>;
-export type AgentAppState = zod.infer<typeof agentAppStateSchema>;
-export type WorkspaceAppState = zod.infer<typeof workspaceAppStateSchema>;
