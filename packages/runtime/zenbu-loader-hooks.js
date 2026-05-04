@@ -8,8 +8,8 @@ const _runtimeDir = path.dirname(new URL(import.meta.url).pathname)
 const _require = createRequire(path.join(_runtimeDir, "package.json"))
 const { subscribe } = _require("@parcel/watcher")
 
-const _dynohotPkgPath = path.dirname(_require.resolve("dynohot/package.json"))
-const _dynohotPausePath = path.join(_dynohotPkgPath, "dist", "runtime", "pause.js")
+const _packagesDir = process.env.ZENBU_PACKAGES_DIR || path.resolve(_runtimeDir, "..", "..")
+const _dynohotPausePath = path.join(_packagesDir, "dynohot", "dist", "runtime", "pause.js")
 const { registerWatcherClosable } = await import(pathToFileURL(_dynohotPausePath).href)
 
 // ----- Telemetry -----

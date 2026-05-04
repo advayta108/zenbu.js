@@ -106,8 +106,7 @@ app.whenReady().then(async () => {
     const advicePath = path.join(advicePkgDir, "src", "node.ts")
     await import(pathToFileURL(advicePath).href)
 
-    const dynohotPkgDir = path.dirname(runtimeRequire.resolve("dynohot/package.json"))
-    const dynohotRegPath = path.join(dynohotPkgDir, "dist", "loader", "register.js")
+    const dynohotRegPath = path.join(packagesDir, "dynohot", "dist", "loader", "register.js")
     const { register: registerDynohot } = await import(pathToFileURL(dynohotRegPath).href)
     registerDynohot({ ignore: /[/\\]node_modules[/\\]/ })
 
