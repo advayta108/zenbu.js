@@ -807,19 +807,19 @@ async function groupInstall(): Promise<void> {
   await ensureDepsInstalled();
 }
 async function groupWire(): Promise<void> {
-  await ensureTsconfigLocal();
   if (!STANDALONE) {
+    await ensureTsconfigLocal();
     await ensureKernelManifestRegistered();
+    await ensureDbConfig();
+    await ensureAppPath();
   }
   await ensureZenShim();
   await ensurePathWired();
-  await ensureDbConfig();
-  if (!STANDALONE) {
-    await ensureAppPath();
-  }
 }
 async function groupTypes(): Promise<void> {
-  await ensureRegistryTypes();
+  if (!STANDALONE) {
+    await ensureRegistryTypes();
+  }
 }
 
 // ---------- main ----------
