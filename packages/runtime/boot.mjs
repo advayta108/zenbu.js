@@ -102,10 +102,12 @@ app.whenReady().then(async () => {
     registerTsx({ tsconfig })
 
     process.env.ZENBU_ADVICE_ROOT = projectRoot
-    const advicePath = runtimeRequire.resolve("@zenbu/advice/node")
+    const advicePkgDir = path.join(packagesDir, "advice")
+    const advicePath = path.join(advicePkgDir, "src", "node.ts")
     await import(pathToFileURL(advicePath).href)
 
-    const dynohotRegPath = runtimeRequire.resolve("dynohot/register")
+    const dynohotPkgDir = path.dirname(runtimeRequire.resolve("dynohot/package.json"))
+    const dynohotRegPath = path.join(dynohotPkgDir, "dist", "loader", "register.js")
     const { register: registerDynohot } = await import(pathToFileURL(dynohotRegPath).href)
     registerDynohot({ ignore: /[/\\]node_modules[/\\]/ })
 
