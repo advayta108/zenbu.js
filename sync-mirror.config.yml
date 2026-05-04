@@ -16,7 +16,7 @@ tracked:
   - packages/lint/
   - packages/create-zenbu-app/
   - packages/runtime/
-  - packages/init/setup.ts
+  - packages/init/
   - setup/
 
 remove:

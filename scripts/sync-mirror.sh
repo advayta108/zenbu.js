@@ -64,14 +64,18 @@ READMEEOF
 
   local am_pkg="$target_dir/packages/agent-manager/package.json"
   if [[ -f "$am_pkg" ]]; then
-    local tmp_pkg
-    tmp_pkg=$(mktemp)
     node -e "
       const pkg = JSON.parse(require('fs').readFileSync('$am_pkg','utf8'));
       if (pkg.dependencies) delete pkg.dependencies['@zenbu/init'];
       require('fs').writeFileSync('$am_pkg', JSON.stringify(pkg, null, 2) + '\n');
     " 2>/dev/null || true
   fi
+
+  rm -rf "$target_dir/packages/init/kyju" 2>/dev/null || true
+  rm -rf "$target_dir/packages/init/.zenbu" 2>/dev/null || true
+  rm -rf "$target_dir/packages/init/test" 2>/dev/null || true
+  rm -f "$target_dir/packages/init/tsconfig.local.json" 2>/dev/null || true
+  rm -f "$target_dir/packages/init/tsconfig.ci.json" 2>/dev/null || true
 }
 
 usage() {
