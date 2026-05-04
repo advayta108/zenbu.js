@@ -2,8 +2,15 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { subscribe } from "@parcel/watcher"
-import { registerWatcherClosable } from "dynohot/pause"
+import { createRequire } from "node:module"
+
+const _require = createRequire(
+  process.env.ZENBU_PACKAGES_DIR
+    ? path.join(process.env.ZENBU_PACKAGES_DIR, "..", "package.json")
+    : import.meta.url
+)
+const { subscribe } = _require("@parcel/watcher")
+const { registerWatcherClosable } = _require("dynohot/pause")
 
 // ----- Telemetry -----
 //

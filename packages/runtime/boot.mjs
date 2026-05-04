@@ -74,6 +74,12 @@ app.whenReady().then(async () => {
 
     process.env.ZENBU_PACKAGES_DIR = packagesDir
 
+    const zenbuNodeModules = path.join(zenbuDir, "node_modules")
+    const existing = process.env.NODE_PATH ?? ""
+    process.env.NODE_PATH = existing
+      ? `${zenbuNodeModules}${path.delimiter}${existing}`
+      : zenbuNodeModules
+
     console.log("[runtime] project:", projectDir)
     console.log("[runtime] manifest:", manifestPath)
     console.log("[runtime] packages:", packagesDir)
