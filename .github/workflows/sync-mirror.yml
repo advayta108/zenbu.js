@@ -1,0 +1,26 @@
+name: Sync Mirror
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repo (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-filter-repo
+        run: pip install git-filter-repo
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "zenbu-mirror[bot]"
+          git config --global user.email "mirror-bot@zenbu.dev"
+
+      - name: Run sync
+        run: bash scripts/sync-mirror.sh --sync --target-repo https://x-access-token:${{ secrets.ZENBU_TS_PUSH_TOKEN }}@github.com/zenbu-labs/zenbu-ts.git
