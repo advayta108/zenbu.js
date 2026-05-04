@@ -10,19 +10,28 @@ parse_config() {
     exit 1
   fi
 
+  parse_yaml_list() {
+    local key="$1" file="$2"
+    awk -v key="$key" '
+      $0 ~ "^"key":" { found=1; next }
+      found && /^[^ ]/ { found=0 }
+      found && /^  - / { sub(/^  - /, ""); sub(/[[:space:]]*$/, ""); print }
+    ' "$file"
+  }
+
   TRACKED_PATHS=()
   while IFS= read -r line; do
     TRACKED_PATHS+=("$line")
-  done < <(sed -n '/^tracked:/,/^[^ ]/{ /^  - /{ s/^  - //; s/[[:space:]]*$//; p; } }' "$CONFIG_FILE")
+  done < <(parse_yaml_list "tracked" "$CONFIG_FILE")
 
   REMOVE_FILES=()
   while IFS= read -r line; do
     REMOVE_FILES+=("$line")
-  done < <(sed -n '/^remove:/,/^[^ ]/{ /^  - /{ s/^  - //; s/[[:space:]]*$//; p; } }' "$CONFIG_FILE")
+  done < <(parse_yaml_list "remove" "$CONFIG_FILE")
 
-  TARGET_ORG_REPO=$(sed -n 's/^target: *//p' "$CONFIG_FILE")
-  README_MODE=$(sed -n 's/^readme: *//p' "$CONFIG_FILE")
-  PACKAGE_NAME=$(sed -n '/^root_files:/,/^[^ ]/{ s/^  package_name: *//p; }' "$CONFIG_FILE")
+  TARGET_ORG_REPO=$(awk -F': *' '/^target:/{print $2}' "$CONFIG_FILE")
+  README_MODE=$(awk -F': *' '/^readme:/{print $2}' "$CONFIG_FILE")
+  PACKAGE_NAME=$(awk '/^root_files:/,/^[^ ]/{if(/package_name:/){sub(/.*package_name: */,"");print}}' "$CONFIG_FILE")
 
   if [[ ${#TRACKED_PATHS[@]} -eq 0 ]]; then
     echo "Error: no tracked paths defined in $CONFIG_FILE" >&2
@@ -93,12 +102,17 @@ generate_workspace_yaml() {
   local source_workspace="$1"
   local output_file="$2"
 
+  local catalog_section=""
+  if grep -q "^catalog:" "$source_workspace" 2>/dev/null; then
+    catalog_section=$(awk '/^catalog:/{found=1} found{print}' "$source_workspace")
+  fi
+
   echo "packages:" > "$output_file"
   echo "  - 'packages/*'" >> "$output_file"
 
-  if grep -q "^catalog:" "$source_workspace" 2>/dev/null; then
+  if [[ -n "$catalog_section" ]]; then
     echo "" >> "$output_file"
-    sed -n '/^catalog:/,/^[^ ]/{ /^catalog:/p; /^  /p; }' "$source_workspace" >> "$output_file"
+    echo "$catalog_section" >> "$output_file"
   fi
 }
 
