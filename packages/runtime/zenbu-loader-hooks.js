@@ -4,11 +4,11 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
 
-const _require = createRequire(
-  process.env.ZENBU_PACKAGES_DIR
-    ? path.join(process.env.ZENBU_PACKAGES_DIR, "..", "package.json")
-    : import.meta.url
-)
+const _packagesDir = process.env.ZENBU_PACKAGES_DIR
+const _requireBase = _packagesDir
+  ? path.join(_packagesDir, "dynohot", "package.json")
+  : import.meta.url
+const _require = createRequire(_requireBase)
 const { subscribe } = _require("@parcel/watcher")
 const { registerWatcherClosable } = _require("dynohot/pause")
 
