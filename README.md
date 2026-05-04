@@ -19,8 +19,7 @@
 ## What is Zenbu
 Zenbu is an app to build, share, and discover customizable desktop apps
 
-At its core is Zenbu.js, a JavaScript framework for building desktop apps. All apps written in Zenbu.js can be modified while they are running, made possible by a plugin system all apps inherit by default
-
+At its core is Zenbu.js, a JavaScript framework for building desktop apps. All apps written in Zenbu.js can be modified while they are running, made possible a built in plugin system
 
 Zenbu is currently under heavy construction. If you are interested in the project, you should join the discord - [invite link](https://discord.gg/t3jzHHfc6z)
 
