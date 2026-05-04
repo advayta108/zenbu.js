@@ -94,13 +94,19 @@ app.whenReady().then(async () => {
     ).href
     registerLoader(aliasLoaderPath)
 
-    const { register: registerTsx } = await import("tsx/esm/api")
+    const { createRequire } = await import("node:module")
+    const frameworkRequire = createRequire(path.join(zenbuDir, "package.json"))
+
+    const tsxPath = frameworkRequire.resolve("tsx/esm/api")
+    const { register: registerTsx } = await import(pathToFileURL(tsxPath).href)
     registerTsx({ tsconfig })
 
     process.env.ZENBU_ADVICE_ROOT = projectRoot
-    await import("@zenbu/advice/node")
+    const advicePath = path.join(packagesDir, "advice", "src", "node.ts")
+    await import(pathToFileURL(advicePath).href)
 
-    const { register: registerDynohot } = await import("dynohot/register")
+    const dynohotRegPath = path.join(packagesDir, "dynohot", "dist", "loader", "register.js")
+    const { register: registerDynohot } = await import(pathToFileURL(dynohotRegPath).href)
     registerDynohot({ ignore: /[/\\]node_modules[/\\]/ })
 
     process.chdir(projectRoot)
