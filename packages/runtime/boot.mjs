@@ -155,6 +155,34 @@ app.whenReady().then(async () => {
     if (runtime) {
       console.log("[runtime] draining services...")
       await runtime.whenIdle()
+
+      const viewRegistry = runtime.get("view-registry")
+      if (viewRegistry && bootWindow) {
+        const views = viewRegistry.list?.() ?? viewRegistry.views
+        if (views && views.size > 0) {
+          const first = views.values().next().value
+          if (first?.url) {
+            console.log("[runtime] loading view:", first.scope, first.url)
+            const { WebContentsView } = await import("electron")
+            const contentView = new WebContentsView({
+              webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                webSecurity: false,
+              },
+            })
+            bootWindow.contentView.removeChildView(loadingView)
+            bootWindow.contentView.addChildView(contentView)
+            const layout = () => {
+              const { width, height } = bootWindow.getContentBounds()
+              contentView.setBounds({ x: 0, y: 0, width, height })
+            }
+            layout()
+            bootWindow.on("resize", layout)
+            contentView.webContents.loadURL(first.url)
+          }
+        }
+      }
     }
 
     console.log("[runtime] boot complete")
