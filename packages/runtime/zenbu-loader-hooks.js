@@ -10,7 +10,11 @@ const _requireBase = _packagesDir
   : import.meta.url
 const _require = createRequire(_requireBase)
 const { subscribe } = _require("@parcel/watcher")
-const { registerWatcherClosable } = _require("dynohot/pause")
+
+const _dynohotPausePath = _packagesDir
+  ? pathToFileURL(path.join(_packagesDir, "dynohot", "dist", "runtime", "pause.js")).href
+  : "dynohot/pause"
+const { registerWatcherClosable } = await import(_dynohotPausePath)
 
 // ----- Telemetry -----
 //
