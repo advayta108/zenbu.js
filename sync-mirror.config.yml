@@ -1,0 +1,25 @@
+target: zenbu-labs/zenbu-ts
+
+tracked:
+  - packages/kyju/
+  - packages/zen/
+  - packages/zenrpc/
+  - packages/dynohot/
+  - packages/advice/
+  - packages/ui/
+  - packages/diffs/
+  - packages/git/
+  - packages/agent/
+  - packages/agent-manager/
+  - packages/claude-acp/
+  - packages/codex-acp/
+  - packages/lint/
+
+remove:
+  - LICENSE
+  - LICENSE.md
+
+readme: stub
+
+root_files:
+  package_name: zenbu-ts

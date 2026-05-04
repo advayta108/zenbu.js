@@ -23,4 +23,6 @@ jobs:
           git config --global user.email "mirror-bot@zenbu.dev"
 
       - name: Run sync
-        run: bash scripts/sync-mirror.sh --sync --target-repo https://x-access-token:${{ secrets.ZENBU_TS_PUSH_TOKEN }}@github.com/zenbu-labs/zenbu-ts.git
+        run: |
+          TARGET=$(sed -n 's/^target: *//p' sync-mirror.config.yml)
+          bash scripts/sync-mirror.sh --sync --target-repo "https://x-access-token:${{ secrets.ZENBU_TS_PUSH_TOKEN }}@github.com/${TARGET}.git"

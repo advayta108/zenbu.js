@@ -1,28 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TRACKED_PATHS=(
-  "packages/kyju/"
-  "packages/zen/"
-  "packages/zenrpc/"
-  "packages/dynohot/"
-  "packages/advice/"
-  "packages/ui/"
-  "packages/diffs/"
-  "packages/git/"
-  "packages/agent/"
-  "packages/agent-manager/"
-  "packages/claude-acp/"
-  "packages/codex-acp/"
-  "packages/lint/"
-)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/../sync-mirror.config.yml"
+
+parse_config() {
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "Error: config file not found at $CONFIG_FILE" >&2
+    exit 1
+  fi
+
+  TRACKED_PATHS=()
+  while IFS= read -r line; do
+    TRACKED_PATHS+=("$line")
+  done < <(sed -n '/^tracked:/,/^[^ ]/{ /^  - /{ s/^  - //; s/[[:space:]]*$//; p; } }' "$CONFIG_FILE")
+
+  REMOVE_FILES=()
+  while IFS= read -r line; do
+    REMOVE_FILES+=("$line")
+  done < <(sed -n '/^remove:/,/^[^ ]/{ /^  - /{ s/^  - //; s/[[:space:]]*$//; p; } }' "$CONFIG_FILE")
+
+  TARGET_ORG_REPO=$(sed -n 's/^target: *//p' "$CONFIG_FILE")
+  README_MODE=$(sed -n 's/^readme: *//p' "$CONFIG_FILE")
+  PACKAGE_NAME=$(sed -n '/^root_files:/,/^[^ ]/{ s/^  package_name: *//p; }' "$CONFIG_FILE")
+
+  if [[ ${#TRACKED_PATHS[@]} -eq 0 ]]; then
+    echo "Error: no tracked paths defined in $CONFIG_FILE" >&2
+    exit 1
+  fi
+}
 
 WORKSPACE_CATALOG_FILE="pnpm-workspace.yaml"
-
-REMOVE_FILES=(
-  "LICENSE"
-  "LICENSE.md"
-)
 
 transform_files() {
   local target_dir="$1"
@@ -31,28 +39,30 @@ transform_files() {
     find "$target_dir/packages" -name "$file" -delete 2>/dev/null || true
   done
 
-  for readme in $(find "$target_dir/packages" -name "README.md" 2>/dev/null); do
-    local pkg_dir
-    pkg_dir=$(dirname "$readme")
-    local pkg_name
-    pkg_name=$(basename "$pkg_dir")
-    cat > "$readme" <<READMEEOF
+  if [[ "$README_MODE" == "stub" ]]; then
+    for readme in $(find "$target_dir/packages" -name "README.md" 2>/dev/null); do
+      local pkg_dir
+      pkg_dir=$(dirname "$readme")
+      local pkg_name
+      pkg_name=$(basename "$pkg_dir")
+      cat > "$readme" <<READMEEOF
 # ${pkg_name}
 
-Part of the [zenbu-ts](https://github.com/zenbu-labs/zenbu-ts) framework.
+Part of the [zenbu-ts](https://github.com/${TARGET_ORG_REPO}) framework.
 READMEEOF
-  done
+    done
+  fi
 }
 
 usage() {
-  echo "Usage: $0 --init|--sync --target-repo <url> [--source-repo <url>]"
+  echo "Usage: $0 --init|--sync [--target-repo <url>] [--source-repo <url>]"
   echo ""
   echo "Modes:"
   echo "  --init    One-time seed: extract full history via git-filter-repo and push to target"
   echo "  --sync    Incremental: replay new commits since last sync to target"
   echo ""
   echo "Options:"
-  echo "  --target-repo   Git URL of the mirror repo to push to"
+  echo "  --target-repo   Git URL of the mirror repo (default: derived from config)"
   echo "  --source-repo   Git URL of the source repo (only needed for --init)"
   exit 1
 }
@@ -72,7 +82,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$MODE" ]] && usage
-[[ -z "$TARGET_REPO" ]] && { echo "Error: --target-repo is required"; usage; }
+
+parse_config
+
+if [[ -z "$TARGET_REPO" ]]; then
+  TARGET_REPO="https://github.com/${TARGET_ORG_REPO}.git"
+fi
 
 generate_workspace_yaml() {
   local source_workspace="$1"
@@ -89,9 +104,10 @@ generate_workspace_yaml() {
 
 generate_root_package_json() {
   local output_file="$1"
-  cat > "$output_file" <<'PKGJSON'
+  local name="${PACKAGE_NAME:-zenbu-ts}"
+  cat > "$output_file" <<PKGJSON
 {
-  "name": "zenbu-ts",
+  "name": "${name}",
   "private": true,
   "type": "module"
 }
