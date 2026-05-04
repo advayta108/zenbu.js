@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL, fileURLToPath } from "node:url"
 import { register as registerLoader } from "node:module"
-import { app } from "electron"
+import { app, BaseWindow, WebContentsView } from "electron"
 import { bootstrapEnv } from "./env-bootstrap.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -109,6 +109,31 @@ app.whenReady().then(async () => {
     const dynohotRegPath = path.join(packagesDir, "dynohot", "dist", "loader", "register.js")
     const { register: registerDynohot } = await import(pathToFileURL(dynohotRegPath).href)
     registerDynohot({ ignore: /[/\\]node_modules[/\\]/ })
+
+    const bootWindow = new BaseWindow({
+      width: 900,
+      height: 700,
+      show: true,
+      titleBarStyle: "hidden",
+      trafficLightPosition: { x: 12, y: 10 },
+      backgroundColor: "#F4F4F4",
+    })
+    const loadingView = new WebContentsView({
+      webPreferences: { nodeIntegration: true, contextIsolation: false },
+    })
+    loadingView.setBackgroundColor("#F4F4F4")
+    bootWindow.contentView.addChildView(loadingView)
+    const layoutView = () => {
+      const { width, height } = bootWindow.getContentBounds()
+      loadingView.setBounds({ x: 0, y: 0, width, height })
+    }
+    layoutView()
+    bootWindow.on("resize", layoutView)
+    bootWindow.__zenbu_loading_view__ = loadingView
+
+    globalThis.__zenbu_boot_windows__ = [
+      { windowId: "main", win: bootWindow },
+    ]
 
     process.chdir(projectRoot)
     console.log("[runtime] cwd:", process.cwd())
