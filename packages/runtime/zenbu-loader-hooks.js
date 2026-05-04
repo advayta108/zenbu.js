@@ -4,17 +4,12 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
 
-const _packagesDir = process.env.ZENBU_PACKAGES_DIR
-const _requireBase = _packagesDir
-  ? path.join(_packagesDir, "dynohot", "package.json")
-  : import.meta.url
-const _require = createRequire(_requireBase)
+const _runtimeDir = path.dirname(new URL(import.meta.url).pathname)
+const _require = createRequire(path.join(_runtimeDir, "package.json"))
 const { subscribe } = _require("@parcel/watcher")
 
-const _dynohotPausePath = _packagesDir
-  ? pathToFileURL(path.join(_packagesDir, "dynohot", "dist", "runtime", "pause.js")).href
-  : "dynohot/pause"
-const { registerWatcherClosable } = await import(_dynohotPausePath)
+const _dynohotPausePath = _require.resolve("dynohot/pause")
+const { registerWatcherClosable } = await import(pathToFileURL(_dynohotPausePath).href)
 
 // ----- Telemetry -----
 //
