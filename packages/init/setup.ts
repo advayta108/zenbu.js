@@ -39,7 +39,9 @@ const XDG_DATA_HOME = path.join(CACHE_ROOT, "xdg/data");
 const XDG_STATE_HOME = path.join(CACHE_ROOT, "xdg/state");
 
 const INTERNAL_DIR = path.join(HOME_DIR, ".zenbu/.internal");
-const REGISTRY_DIR = path.join(HOME_DIR, ".zenbu/registry");
+const REGISTRY_DIR = process.env.ZENBU_STANDALONE === "1"
+  ? path.join(REPO_DIR, "registry")
+  : path.join(HOME_DIR, ".zenbu/registry");
 const CLI_BIN_DIR = path.join(HOME_DIR, ".zenbu/bin");
 
 const PATH_SENTINEL = "# added by zenbu";
@@ -343,11 +345,7 @@ async function ensureDepsInstalled(): Promise<void> {
   // CI=true makes pnpm non-interactive; otherwise it prompts on node_modules
   // divergence and aborts when there's no TTY.
   const pnpmBin = path.join(BIN_DIR, "pnpm");
-  const filters = ["--filter=!@zenbu/kernel"];
-  if (STANDALONE) {
-    filters.push("--filter=!@zenbu/agent-manager");
-  }
-  const proc = Bun.spawn([pnpmBin, "install", ...filters], {
+  const proc = Bun.spawn([pnpmBin, "install", "--filter=!@zenbu/kernel"], {
     cwd: REPO_DIR,
     env: { ...process.env, CI: "true" },
     stdio: ["ignore", "inherit", "inherit"],
