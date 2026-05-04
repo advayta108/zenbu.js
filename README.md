@@ -9,7 +9,7 @@
 
 <p align="center">
   <img alt="status: under construction" src="https://img.shields.io/badge/status-under_construction-orange"><br>
-  A customizable app for using coding agents
+  The personal software app
 </p>
 <p align="center">
   <img src="./assets/screenshot.webp" width="640" style="background: transparent;" />
@@ -17,40 +17,13 @@
 
 
 ## What is Zenbu
-Zenbu is a performant and minimal GUI for developing with coding agents.
+Zenbu is an app to build, share, and discover customizable desktop apps
 
-At its core is a system for modifying and extending the app. All features in the app are built on top of this system, allowing you to:
-
-* Edit any part of the app's original source code while it's running
-* Create composable and shareable modifications to the app
-
-Zenbu is currently under heavy construction. If you are interested in the project, you can start playing with the app by installing it:
-
-* https://www.zenbu.dev/download
-
-When you launch the app:
-
-1. The raw source code is dynamically downloaded to your computer using `git clone` and stored inside `~/.zenbu/plugins/`
-2. The source code is transformed using a small compiler to make the code more dynamic
-3. The transformed source code is run by the Node.js runtime
-4. The Node.js process serves a website at a port on localhost
-
-You can use Zenbu through the built-in desktop app or directly in your browser.
-
-Any changes made to the raw source code in `~/.zenbu/plugins` will immediately be reflected in the running application. This is made possible by a custom runtime that gives the app the capability to process updates without restarting any processes.
-
-> If you are familiar with Electron, this means both the main process and renderer process can be hot-reloaded while in production.
-
-Because any modifications you make to the core plugins have the risk of conflicting with future updates, you should use plugins to make merge-safe modifications. Plugins are modular blocks of code that can modify any behavior of the app. This is made possible by a collection of many undocumented APIs that are already being used to build the core. Plugins are able to:
-
-- Replace or wrap the value of any top-level binding, such as a function or variable, at runtime
-- Read and write to globally synchronized state
-- Communicate with each other in a type-safe way
-- Access the internal UI theming and component system
-- Compose together
-- Have their raw source code edited
+At its core is Zenbu.js, a JavaScript framework for building desktop apps. All apps written in Zenbu.js can be modified while they are running, letting users customize and extend applications with their coding agents.
 
 
+
+Zenbu is currently under heavy construction. If you are interested in the project, you should join the discord - [invite link](https://discord.gg/t3jzHHfc6z)
 
 
 ## Development Tips
