@@ -156,9 +156,13 @@ app.whenReady().then(async () => {
       console.log("[runtime] draining services...")
       await runtime.whenIdle()
 
-      const viewRegistry = runtime.get("view-registry")
+      let viewRegistry
+      try { viewRegistry = runtime.get({ key: "view-registry" }) } catch (e) {
+        console.log("[runtime] view-registry not available:", e.message)
+      }
       if (viewRegistry && bootWindow) {
-        const views = viewRegistry.list?.() ?? viewRegistry.views
+        const views = viewRegistry.views
+        console.log("[runtime] registered views:", views?.size ?? 0)
         if (views && views.size > 0) {
           const first = views.values().next().value
           if (first?.url) {
