@@ -15,6 +15,7 @@ tracked:
   - packages/codex-acp/
   - packages/lint/
   - packages/create-zenbu-app/
+  - packages/runtime/
   - packages/init/setup.ts
   - setup/
 

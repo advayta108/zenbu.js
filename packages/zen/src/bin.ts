@@ -13,6 +13,9 @@ import { runInit } from "./commands/init"
 import { runExec } from "./commands/exec"
 import { runProfile } from "./commands/profile"
 import { runDb } from "./commands/db"
+import { runRuntime } from "./commands/runtime"
+import { runSetupApp } from "./commands/setup-app"
+import { runOpenStandalone } from "./commands/open-standalone"
 
 const SUBCOMMANDS = new Set([
   "kyju",
@@ -24,6 +27,9 @@ const SUBCOMMANDS = new Set([
   "exec",
   "profile",
   "db",
+  "runtime",
+  "setup-app",
+  "launch",
   "help",
   "--help",
   "-h",
@@ -35,6 +41,9 @@ zen — Zenbu CLI
 
 Usage:
   zen [path] [-r|-n] [-d <path>] [--blocking]    Open a workspace at path (default: cwd)
+  zen launch [--blocking] [--runtime <ver>]      Launch standalone app via Electron + boot.mjs
+  zen runtime [install|list|remove] [version]    Manage Electron runtime versions
+  zen setup-app [--name "App"] [--runtime <ver>] Create a native .app bundle
   zen kyju <generate|db> [...]                   Run the kyju CLI
   zen link                                       Regenerate registry types
   zen doctor                                     Re-run kernel setup.ts
@@ -91,6 +100,15 @@ async function main() {
       return
     case "db":
       await runDb(rest)
+      return
+    case "runtime":
+      await runRuntime(rest)
+      return
+    case "setup-app":
+      await runSetupApp(rest)
+      return
+    case "launch":
+      await runOpenStandalone(rest)
       return
     case "help":
     case "--help":
