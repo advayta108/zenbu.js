@@ -326,10 +326,7 @@ export function View({
   });
 
   // Build the iframe URL once we have a registry entry.
-  const propsKey = useMemo(
-    () => JSON.stringify(props ?? {}),
-    [props],
-  );
+  const propsKey = useMemo(() => JSON.stringify(props ?? {}), [props]);
   const src = useMemo(() => {
     if (!registryEntry) return null;
     return buildChildUrl({
@@ -371,7 +368,9 @@ export function View({
         const sameProps =
           Object.keys(existing.props).length ===
             Object.keys(nextProps).length &&
-          Object.entries(nextProps).every(([k2, v]) => existing.props[k2] === v);
+          Object.entries(nextProps).every(
+            ([k2, v]) => existing.props[k2] === v,
+          );
         if (existing.scope !== scope || !sameProps) {
           k.views = k.views.map((v) =>
             v.id === id ? { ...v, scope, props: nextProps } : v,
@@ -429,10 +428,7 @@ export function View({
       }
       positionIframeOver(cur, el.getBoundingClientRect());
       if (iframeStyle) {
-        Object.assign(
-          cur.iframe.style,
-          iframeStyle as Record<string, string>,
-        );
+        Object.assign(cur.iframe.style, iframeStyle as Record<string, string>);
       }
     };
     apply();
@@ -540,8 +536,8 @@ function writeCachedAt(
       cachedAt !== null && cur.cachedAt === null
         ? { loadedAt: null, loadError: null }
         : cachedAt === null
-          ? { loadedAt: null }
-          : null;
+        ? { loadedAt: null }
+        : null;
     root.plugin.kernel.viewState = {
       ...root.plugin.kernel.viewState,
       [viewId]: { ...cur, cachedAt, ...(reset ?? {}) },
@@ -622,10 +618,7 @@ export function ViewProvider({
   }
 
   return (
-    <ConnectedViewProvider
-      connection={connection}
-      fallback={fallback}
-    >
+    <ConnectedViewProvider connection={connection} fallback={fallback}>
       {children}
     </ConnectedViewProvider>
   );
@@ -689,11 +682,7 @@ function ViewPropsResolver({
   }
 
   return (
-    <KyjuRowPropsBridge
-      viewId={viewId}
-      urlProps={urlProps}
-      fallback={fallback}
-    >
+    <KyjuRowPropsBridge viewId={viewId} urlProps={urlProps} fallback={fallback}>
       {children}
     </KyjuRowPropsBridge>
   );
@@ -720,9 +709,7 @@ function KyjuRowPropsBridge({
   // pure replace would strip windowId/wsPort/etc from the bag once
   // the row arrives.
   const rowProps = useDb((root) => {
-    return (
-      root.plugin.kernel.views.find((v) => v.id === viewId)?.props ?? null
-    );
+    return root.plugin.kernel.views.find((v) => v.id === viewId)?.props ?? null;
   });
   const resolved = useMemo(
     () => ({ ...urlProps, ...(rowProps ?? {}) }),

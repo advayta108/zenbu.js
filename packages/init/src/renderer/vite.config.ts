@@ -1,5 +1,5 @@
-import { resolve } from "path"
-import { defineZenbuViewConfig } from "./view-config"
+import { resolve } from "path";
+import { defineZenbuViewConfig } from "./view-config";
 
 export default defineZenbuViewConfig({
   // Kernel-only: the orchestrator/chat/etc. live in this package as
@@ -10,10 +10,7 @@ export default defineZenbuViewConfig({
   overrides: {
     server: {
       warmup: {
-        clientFiles: [
-          "./views/orchestrator/main.tsx",
-          "./views/chat/main.tsx",
-        ],
+        clientFiles: ["./views/orchestrator/main.tsx", "./views/chat/main.tsx"],
       },
     },
     build: {
@@ -25,9 +22,12 @@ export default defineZenbuViewConfig({
           quiz: resolve(__dirname, "views/quiz/index.html"),
           flashcard: resolve(__dirname, "views/flashcard/index.html"),
           heatmap: resolve(__dirname, "views/heatmap/index.html"),
-          "composer-debug": resolve(__dirname, "views/composer-debug/index.html"),
+          "composer-debug": resolve(
+            __dirname,
+            "views/composer-debug/index.html",
+          ),
         },
       },
     },
   },
-})
+});

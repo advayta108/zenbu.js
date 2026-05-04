@@ -14,38 +14,38 @@
  * (~/Library/Caches/Zenbu/) so they never collide with the user's toolchain.
  */
 
-import { $ } from "bun"
-import fs from "node:fs"
-import fsp from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
-import crypto from "node:crypto"
-import { fileURLToPath } from "node:url"
+import { $ } from "bun";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 // ---------- paths + env ----------
 
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 // setup.ts lives at `packages/init/setup.ts`; repo root is two levels up.
-const REPO_DIR = path.resolve(SCRIPT_DIR, "..", "..")
-const REPO_URL = "https://github.com/zenbu-labs/zenbu.git"
+const REPO_DIR = path.resolve(SCRIPT_DIR, "..", "..");
+const REPO_URL = "https://github.com/zenbu-labs/zenbu.git";
 
-const HOME_DIR = os.homedir()
-const CACHE_ROOT = path.join(HOME_DIR, "Library/Caches/Zenbu")
-const BIN_DIR = path.join(CACHE_ROOT, "bin")
-const BUN_INSTALL = path.join(CACHE_ROOT, "bun")
-const PNPM_HOME = path.join(CACHE_ROOT, "pnpm")
-const XDG_CACHE_HOME = path.join(CACHE_ROOT, "xdg/cache")
-const XDG_DATA_HOME = path.join(CACHE_ROOT, "xdg/data")
-const XDG_STATE_HOME = path.join(CACHE_ROOT, "xdg/state")
+const HOME_DIR = os.homedir();
+const CACHE_ROOT = path.join(HOME_DIR, "Library/Caches/Zenbu");
+const BIN_DIR = path.join(CACHE_ROOT, "bin");
+const BUN_INSTALL = path.join(CACHE_ROOT, "bun");
+const PNPM_HOME = path.join(CACHE_ROOT, "pnpm");
+const XDG_CACHE_HOME = path.join(CACHE_ROOT, "xdg/cache");
+const XDG_DATA_HOME = path.join(CACHE_ROOT, "xdg/data");
+const XDG_STATE_HOME = path.join(CACHE_ROOT, "xdg/state");
 
-const INTERNAL_DIR = path.join(HOME_DIR, ".zenbu/.internal")
-const REGISTRY_DIR = path.join(HOME_DIR, ".zenbu/registry")
-const CLI_BIN_DIR = path.join(HOME_DIR, ".zenbu/bin")
+const INTERNAL_DIR = path.join(HOME_DIR, ".zenbu/.internal");
+const REGISTRY_DIR = path.join(HOME_DIR, ".zenbu/registry");
+const CLI_BIN_DIR = path.join(HOME_DIR, ".zenbu/bin");
 
-const PATH_SENTINEL = "# added by zenbu"
-const ZEN_SHIM = path.join(CLI_BIN_DIR, "zen")
+const PATH_SENTINEL = "# added by zenbu";
+const ZEN_SHIM = path.join(CLI_BIN_DIR, "zen");
 
-const VERSIONS_JSON = path.join(REPO_DIR, "setup/versions.json")
+const VERSIONS_JSON = path.join(REPO_DIR, "setup/versions.json");
 
 // ---------- default plugins ----------
 //
@@ -63,96 +63,93 @@ const DEFAULT_PLUGINS = [
   "packages/init/zenbu.plugin.json",
   "packages/zen/zenbu.plugin.json",
   "packages/agent-manager/zenbu.plugin.json",
-] as const
+] as const;
 
 function defaultPluginManifestPaths(): string[] {
-  return DEFAULT_PLUGINS.map((rel) => path.join(REPO_DIR, rel))
+  return DEFAULT_PLUGINS.map((rel) => path.join(REPO_DIR, rel));
 }
 
 async function defaultPluginSchemaPaths(): Promise<string[]> {
-  const out: string[] = []
+  const out: string[] = [];
   for (const manifestPath of defaultPluginManifestPaths()) {
-    if (!fs.existsSync(manifestPath)) continue
+    if (!fs.existsSync(manifestPath)) continue;
     try {
-      const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"))
+      const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
       if (typeof manifest.schema === "string") {
-        out.push(path.resolve(path.dirname(manifestPath), manifest.schema))
+        out.push(path.resolve(path.dirname(manifestPath), manifest.schema));
       }
     } catch {}
   }
-  return out
+  return out;
 }
 
 // Export so pnpm / bun subprocesses pick these up.
-process.env.BUN_INSTALL = BUN_INSTALL
-process.env.PNPM_HOME = PNPM_HOME
-process.env.XDG_CACHE_HOME = XDG_CACHE_HOME
-process.env.XDG_DATA_HOME = XDG_DATA_HOME
-process.env.XDG_STATE_HOME = XDG_STATE_HOME
-process.env.PATH = `${BIN_DIR}:${process.env.PATH ?? ""}`
+process.env.BUN_INSTALL = BUN_INSTALL;
+process.env.PNPM_HOME = PNPM_HOME;
+process.env.XDG_CACHE_HOME = XDG_CACHE_HOME;
+process.env.XDG_DATA_HOME = XDG_DATA_HOME;
+process.env.XDG_STATE_HOME = XDG_STATE_HOME;
+process.env.PATH = `${BIN_DIR}:${process.env.PATH ?? ""}`;
 
 // ---------- UI protocol helpers ----------
 
 const stepStart = (id: string, label: string) =>
-  console.log(`##ZENBU_STEP:start:${id}:${label}`)
-const stepDone = (id: string) => console.log(`##ZENBU_STEP:done:${id}`)
+  console.log(`##ZENBU_STEP:start:${id}:${label}`);
+const stepDone = (id: string) => console.log(`##ZENBU_STEP:done:${id}`);
 const stepError = (id: string, msg: string) =>
-  console.log(`##ZENBU_STEP:error:${id}:${msg}`)
+  console.log(`##ZENBU_STEP:error:${id}:${msg}`);
 const stepOffer = (tool: string, cmd: string) =>
-  console.log(`##ZENBU_STEP:offer-install:${tool}:${cmd}`)
+  console.log(`##ZENBU_STEP:offer-install:${tool}:${cmd}`);
 
-const logOk = (s: string) => console.log(`  ✓ ${s}`)
-const logDo = (s: string) => console.log(`  → ${s}`)
+const logOk = (s: string) => console.log(`  ✓ ${s}`);
+const logDo = (s: string) => console.log(`  → ${s}`);
 
 // ---------- versions.json readers ----------
 
 type Versions = {
   bun: {
-    version: string
-    releaseTag: string
-    urlTemplate: string
-    targets: Record<string, { asset: string; sha256: string }>
-  }
+    version: string;
+    releaseTag: string;
+    urlTemplate: string;
+    targets: Record<string, { asset: string; sha256: string }>;
+  };
   pnpm: {
-    version: string
-    releaseTag: string
-    urlTemplate: string
-    targets: Record<string, { asset: string; sha256: string }>
-  }
-}
+    version: string;
+    releaseTag: string;
+    urlTemplate: string;
+    targets: Record<string, { asset: string; sha256: string }>;
+  };
+};
 
 function readVersions(): Versions {
-  return JSON.parse(fs.readFileSync(VERSIONS_JSON, "utf8")) as Versions
+  return JSON.parse(fs.readFileSync(VERSIONS_JSON, "utf8")) as Versions;
 }
 
 function detectBunTarget(): "darwin-aarch64" | "darwin-x64" {
-  const arch = os.arch()
-  if (arch === "arm64") return "darwin-aarch64"
-  if (arch === "x64") return "darwin-x64"
-  throw new Error(`unsupported architecture: ${arch}`)
+  const arch = os.arch();
+  if (arch === "arm64") return "darwin-aarch64";
+  if (arch === "x64") return "darwin-x64";
+  throw new Error(`unsupported architecture: ${arch}`);
 }
 
 function detectPnpmTarget(): "darwin-arm64" | "darwin-x64" {
-  const arch = os.arch()
-  if (arch === "arm64") return "darwin-arm64"
-  if (arch === "x64") return "darwin-x64"
-  throw new Error(`unsupported architecture: ${arch}`)
+  const arch = os.arch();
+  if (arch === "arm64") return "darwin-arm64";
+  if (arch === "x64") return "darwin-x64";
+  throw new Error(`unsupported architecture: ${arch}`);
 }
 
 // ---------- hash / sig helpers ----------
 
 async function sha256File(filePath: string): Promise<string> {
-  const data = await fsp.readFile(filePath)
-  return crypto.createHash("sha256").update(data).digest("hex")
+  const data = await fsp.readFile(filePath);
+  return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-async function verifySha256(
-  filePath: string,
-  expected: string,
-): Promise<void> {
-  const actual = await sha256File(filePath)
+async function verifySha256(filePath: string, expected: string): Promise<void> {
+  const actual = await sha256File(filePath);
   if (actual !== expected) {
-    throw new Error(`sha256 mismatch: expected ${expected}, got ${actual}`)
+    throw new Error(`sha256 mismatch: expected ${expected}, got ${actual}`);
   }
 }
 
@@ -162,35 +159,35 @@ async function verifySha256(
  * input (consistent across runs).
  */
 async function fileSig(...files: string[]): Promise<string> {
-  const hash = crypto.createHash("sha256")
+  const hash = crypto.createHash("sha256");
   for (const f of files) {
     try {
-      const stat = await fsp.stat(f)
+      const stat = await fsp.stat(f);
       if (stat.isFile()) {
-        const data = await fsp.readFile(f)
-        hash.update(data)
+        const data = await fsp.readFile(f);
+        hash.update(data);
       }
     } catch {
       // missing; skip contents
     }
-    hash.update("\0")
-    hash.update(f)
-    hash.update("\0")
+    hash.update("\0");
+    hash.update(f);
+    hash.update("\0");
   }
-  return hash.digest("hex")
+  return hash.digest("hex");
 }
 
 function readSig(sigPath: string): string {
   try {
-    return fs.readFileSync(sigPath, "utf8")
+    return fs.readFileSync(sigPath, "utf8");
   } catch {
-    return ""
+    return "";
   }
 }
 
 function writeSig(sigPath: string, value: string): void {
-  fs.mkdirSync(path.dirname(sigPath), { recursive: true })
-  fs.writeFileSync(sigPath, value)
+  fs.mkdirSync(path.dirname(sigPath), { recursive: true });
+  fs.writeFileSync(sigPath, value);
 }
 
 // ---------- ensure_* steps ----------
@@ -206,161 +203,161 @@ async function ensureDirs(): Promise<void> {
     INTERNAL_DIR,
     REGISTRY_DIR,
     CLI_BIN_DIR,
-  ]
+  ];
   for (const d of dirs) {
-    await fsp.mkdir(d, { recursive: true })
+    await fsp.mkdir(d, { recursive: true });
   }
 }
 
 async function ensureGit(): Promise<void> {
   try {
-    const res = await $`git --version`.quiet().nothrow()
+    const res = await $`git --version`.quiet().nothrow();
     if (res.exitCode !== 0) {
-      stepOffer("xcode-cli", "xcode-select --install")
-      throw new Error("git stub — install Xcode Command Line Tools")
+      stepOffer("xcode-cli", "xcode-select --install");
+      throw new Error("git stub — install Xcode Command Line Tools");
     }
-    logOk(`git: ${(await $`command -v git`.text()).trim()}`)
+    logOk(`git: ${(await $`command -v git`.text()).trim()}`);
   } catch {
-    stepOffer("xcode-cli", "xcode-select --install")
-    throw new Error("git not found — install Xcode Command Line Tools")
+    stepOffer("xcode-cli", "xcode-select --install");
+    throw new Error("git not found — install Xcode Command Line Tools");
   }
 }
 
 async function ensureBun(): Promise<void> {
-  const target = detectBunTarget()
-  const versions = readVersions()
-  const { version } = versions.bun
-  const { asset, sha256: expectedSha } = versions.bun.targets[target]
+  const target = detectBunTarget();
+  const versions = readVersions();
+  const { version } = versions.bun;
+  const { asset, sha256: expectedSha } = versions.bun.targets[target];
 
-  const marker = path.join(BIN_DIR, ".bun.version")
-  const current = readSig(marker)
-  const bunBin = path.join(BIN_DIR, "bun")
+  const marker = path.join(BIN_DIR, ".bun.version");
+  const current = readSig(marker);
+  const bunBin = path.join(BIN_DIR, "bun");
   if (fs.existsSync(bunBin) && current === version) {
     // Always re-ensure the node->bun symlink exists (may have been removed).
     try {
-      fs.unlinkSync(path.join(BIN_DIR, "node"))
+      fs.unlinkSync(path.join(BIN_DIR, "node"));
     } catch {}
-    fs.symlinkSync("bun", path.join(BIN_DIR, "node"))
-    logOk(`bun ${version} already installed`)
-    return
+    fs.symlinkSync("bun", path.join(BIN_DIR, "node"));
+    logOk(`bun ${version} already installed`);
+    return;
   }
 
-  const tag = `bun-v${version}`
-  const url = `https://github.com/oven-sh/bun/releases/download/${tag}/${asset}`
-  const tmpdir = await fsp.mkdtemp(path.join(os.tmpdir(), "bun-download-"))
-  const zipPath = path.join(tmpdir, asset)
+  const tag = `bun-v${version}`;
+  const url = `https://github.com/oven-sh/bun/releases/download/${tag}/${asset}`;
+  const tmpdir = await fsp.mkdtemp(path.join(os.tmpdir(), "bun-download-"));
+  const zipPath = path.join(tmpdir, asset);
 
-  logDo(`downloading bun ${version}`)
-  await $`curl -fL --progress-bar -o ${zipPath} ${url}`
-  await verifySha256(zipPath, expectedSha)
-  await $`unzip -q ${asset}`.cwd(tmpdir)
+  logDo(`downloading bun ${version}`);
+  await $`curl -fL --progress-bar -o ${zipPath} ${url}`;
+  await verifySha256(zipPath, expectedSha);
+  await $`unzip -q ${asset}`.cwd(tmpdir);
 
   // bun releases extract to a dir like bun-darwin-aarch64/bun
-  const extracted = await findBunBinary(tmpdir)
+  const extracted = await findBunBinary(tmpdir);
   if (!extracted) {
-    throw new Error(`could not locate bun binary in ${asset}`)
+    throw new Error(`could not locate bun binary in ${asset}`);
   }
-  await fsp.copyFile(extracted, bunBin)
-  await fsp.chmod(bunBin, 0o755)
-  writeSig(marker, version)
-  await fsp.rm(tmpdir, { recursive: true, force: true })
+  await fsp.copyFile(extracted, bunBin);
+  await fsp.chmod(bunBin, 0o755);
+  writeSig(marker, version);
+  await fsp.rm(tmpdir, { recursive: true, force: true });
 
   // Symlink node -> bun so pnpm lifecycle scripts with `#!/usr/bin/env node`
   // shebangs (e.g. the tsc shim that fails dynohot's prepare hook) resolve
   // to our bun via PATH. Bun runs in node-compat mode when invoked as `node`.
   try {
-    fs.unlinkSync(path.join(BIN_DIR, "node"))
+    fs.unlinkSync(path.join(BIN_DIR, "node"));
   } catch {}
-  fs.symlinkSync("bun", path.join(BIN_DIR, "node"))
-  logOk(`bun ${version} installed (node->bun symlinked)`)
+  fs.symlinkSync("bun", path.join(BIN_DIR, "node"));
+  logOk(`bun ${version} installed (node->bun symlinked)`);
 }
 
 async function findBunBinary(dir: string): Promise<string | null> {
-  const entries = await fsp.readdir(dir, { withFileTypes: true })
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
-    const full = path.join(dir, entry.name)
+    const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      const nested = await findBunBinary(full)
-      if (nested) return nested
+      const nested = await findBunBinary(full);
+      if (nested) return nested;
     } else if (entry.isFile() && entry.name === "bun") {
       try {
-        const stat = await fsp.stat(full)
-        if (stat.mode & 0o111) return full
+        const stat = await fsp.stat(full);
+        if (stat.mode & 0o111) return full;
       } catch {}
-      return full
+      return full;
     }
   }
-  return null
+  return null;
 }
 
 async function ensurePnpm(): Promise<void> {
-  const target = detectPnpmTarget()
-  const versions = readVersions()
-  const { version } = versions.pnpm
-  const { asset, sha256: expectedSha } = versions.pnpm.targets[target]
+  const target = detectPnpmTarget();
+  const versions = readVersions();
+  const { version } = versions.pnpm;
+  const { asset, sha256: expectedSha } = versions.pnpm.targets[target];
 
-  const marker = path.join(BIN_DIR, ".pnpm.version")
-  const current = readSig(marker)
-  const pnpmBin = path.join(BIN_DIR, "pnpm")
+  const marker = path.join(BIN_DIR, ".pnpm.version");
+  const current = readSig(marker);
+  const pnpmBin = path.join(BIN_DIR, "pnpm");
   if (fs.existsSync(pnpmBin) && current === version) {
-    logOk(`pnpm ${version} already installed`)
-    return
+    logOk(`pnpm ${version} already installed`);
+    return;
   }
 
-  const tag = `v${version}`
-  const url = `https://github.com/pnpm/pnpm/releases/download/${tag}/${asset}`
-  const tmp = path.join(BIN_DIR, ".pnpm.download")
+  const tag = `v${version}`;
+  const url = `https://github.com/pnpm/pnpm/releases/download/${tag}/${asset}`;
+  const tmp = path.join(BIN_DIR, ".pnpm.download");
 
-  logDo(`downloading pnpm ${version}`)
-  await $`curl -fL --progress-bar -o ${tmp} ${url}`
-  await verifySha256(tmp, expectedSha)
-  await fsp.chmod(tmp, 0o755)
-  await fsp.rename(tmp, pnpmBin)
-  writeSig(marker, version)
-  logOk(`pnpm ${version} installed`)
+  logDo(`downloading pnpm ${version}`);
+  await $`curl -fL --progress-bar -o ${tmp} ${url}`;
+  await verifySha256(tmp, expectedSha);
+  await fsp.chmod(tmp, 0o755);
+  await fsp.rename(tmp, pnpmBin);
+  writeSig(marker, version);
+  logOk(`pnpm ${version} installed`);
 }
 
 async function ensureRemote(): Promise<void> {
-  const gitDir = path.join(REPO_DIR, ".git")
-  if (fs.existsSync(gitDir)) return
-  await $`git init -q`.cwd(REPO_DIR)
-  await $`git remote add origin ${REPO_URL}`.cwd(REPO_DIR)
-  await $`git fetch --depth 1 origin main -q`.cwd(REPO_DIR)
-  await $`git reset origin/main -q`.cwd(REPO_DIR)
-  logOk("linked to remote")
+  const gitDir = path.join(REPO_DIR, ".git");
+  if (fs.existsSync(gitDir)) return;
+  await $`git init -q`.cwd(REPO_DIR);
+  await $`git remote add origin ${REPO_URL}`.cwd(REPO_DIR);
+  await $`git fetch --depth 1 origin main -q`.cwd(REPO_DIR);
+  await $`git reset origin/main -q`.cwd(REPO_DIR);
+  logOk("linked to remote");
 }
 
 async function ensureDepsInstalled(): Promise<void> {
-  const marker = path.join(BIN_DIR, ".deps.sig")
+  const marker = path.join(BIN_DIR, ".deps.sig");
   const sig = await fileSig(
     path.join(REPO_DIR, "pnpm-lock.yaml"),
     path.join(REPO_DIR, "pnpm-workspace.yaml"),
     path.join(BIN_DIR, ".pnpm.version"),
-  )
-  const nodeModules = path.join(REPO_DIR, "node_modules")
+  );
+  const nodeModules = path.join(REPO_DIR, "node_modules");
   if (fs.existsSync(nodeModules) && readSig(marker) === sig) {
-    logOk("deps up-to-date")
-    return
+    logOk("deps up-to-date");
+    return;
   }
-  logDo("installing pnpm deps")
+  logDo("installing pnpm deps");
   // CI=true makes pnpm non-interactive; otherwise it prompts on node_modules
   // divergence and aborts when there's no TTY.
-  const pnpmBin = path.join(BIN_DIR, "pnpm")
+  const pnpmBin = path.join(BIN_DIR, "pnpm");
   const proc = Bun.spawn([pnpmBin, "install", "--filter=!@zenbu/kernel"], {
     cwd: REPO_DIR,
     env: { ...process.env, CI: "true" },
     stdio: ["ignore", "inherit", "inherit"],
-  })
-  const exit = await proc.exited
+  });
+  const exit = await proc.exited;
   if (exit !== 0) {
-    throw new Error(`pnpm install exited with code ${exit}`)
+    throw new Error(`pnpm install exited with code ${exit}`);
   }
-  writeSig(marker, sig)
+  writeSig(marker, sig);
 }
 
 async function ensureTsconfigLocal(): Promise<void> {
-  const packagesDir = path.join(REPO_DIR, "packages")
-  const tsconfig = path.join(REPO_DIR, "packages/init/tsconfig.local.json")
+  const packagesDir = path.join(REPO_DIR, "packages");
+  const tsconfig = path.join(REPO_DIR, "packages/init/tsconfig.local.json");
   const expected =
     JSON.stringify(
       {
@@ -379,12 +376,12 @@ async function ensureTsconfigLocal(): Promise<void> {
       },
       null,
       2,
-    ) + "\n"
+    ) + "\n";
   try {
-    const current = await fsp.readFile(tsconfig, "utf8")
-    if (current === expected) return
+    const current = await fsp.readFile(tsconfig, "utf8");
+    if (current === expected) return;
   } catch {}
-  await fsp.writeFile(tsconfig, expected)
+  await fsp.writeFile(tsconfig, expected);
 }
 
 async function ensureKernelManifestRegistered(): Promise<void> {
@@ -392,34 +389,34 @@ async function ensureKernelManifestRegistered(): Promise<void> {
   // if it exists, otherwise use `config.json`. Both formats are valid;
   // users who hand-edit comments live in jsonc-land and we shouldn't
   // silently move them onto a parallel json file.
-  const configDir = path.join(HOME_DIR, ".zenbu")
-  const configJsonc = path.join(configDir, "config.jsonc")
-  const configJson = path.join(configDir, "config.json")
-  await fsp.mkdir(configDir, { recursive: true })
-  const usingJsonc = fs.existsSync(configJsonc)
-  const configPath = usingJsonc ? configJsonc : configJson
+  const configDir = path.join(HOME_DIR, ".zenbu");
+  const configJsonc = path.join(configDir, "config.jsonc");
+  const configJson = path.join(configDir, "config.json");
+  await fsp.mkdir(configDir, { recursive: true });
+  const usingJsonc = fs.existsSync(configJsonc);
+  const configPath = usingJsonc ? configJsonc : configJson;
 
-  let raw = ""
+  let raw = "";
   try {
-    raw = await fsp.readFile(configPath, "utf8")
+    raw = await fsp.readFile(configPath, "utf8");
   } catch {
     // file missing; start fresh
   }
   const parsed = (raw ? parseJsoncLoose(raw) : { plugins: [] }) as {
-    plugins?: string[]
-  }
-  const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : []
-  let changed = false
+    plugins?: string[];
+  };
+  const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
+  let changed = false;
   for (const m of defaultPluginManifestPaths()) {
-    if (!fs.existsSync(m)) continue
+    if (!fs.existsSync(m)) continue;
     if (!plugins.includes(m)) {
-      plugins.push(m)
-      changed = true
+      plugins.push(m);
+      changed = true;
     }
   }
   if (!changed) {
-    logOk("plugin manifests already registered")
-    return
+    logOk("plugin manifests already registered");
+    return;
   }
   if (usingJsonc) {
     // Preserve existing comments + formatting by injecting just the new
@@ -429,64 +426,64 @@ async function ensureKernelManifestRegistered(): Promise<void> {
       defaultPluginManifestPaths().filter(
         (m) => fs.existsSync(m) && !rawContainsLiteral(raw, m),
       ),
-    )
+    );
     if (next != null) {
-      await fsp.writeFile(configPath, next)
-      logDo("registered plugin manifests (config.jsonc, append)")
-      return
+      await fsp.writeFile(configPath, next);
+      logDo("registered plugin manifests (config.jsonc, append)");
+      return;
     }
     // Fallback: rewrite as plain JSON if injection couldn't find anchor.
     await fsp.writeFile(
       configPath,
       JSON.stringify({ ...parsed, plugins }, null, 2) + "\n",
-    )
-    logDo("registered plugin manifests (config.jsonc, rewritten)")
-    return
+    );
+    logDo("registered plugin manifests (config.jsonc, rewritten)");
+    return;
   }
   await fsp.writeFile(
     configPath,
     JSON.stringify({ ...parsed, plugins }, null, 2) + "\n",
-  )
-  logDo("registered plugin manifests")
+  );
+  logDo("registered plugin manifests");
 }
 
 // Tiny JSONC parser — strips line/block comments and trailing commas
 // before passing to `JSON.parse`. Preserves nothing about formatting;
 // only used for read-side parsing here.
 function parseJsoncLoose(str: string): unknown {
-  let result = ""
-  let i = 0
+  let result = "";
+  let i = 0;
   while (i < str.length) {
     if (str[i] === '"') {
-      let j = i + 1
+      let j = i + 1;
       while (j < str.length) {
         if (str[j] === "\\") {
-          j += 2
+          j += 2;
         } else if (str[j] === '"') {
-          j++
-          break
+          j++;
+          break;
         } else {
-          j++
+          j++;
         }
       }
-      result += str.slice(i, j)
-      i = j
+      result += str.slice(i, j);
+      i = j;
     } else if (str[i] === "/" && str[i + 1] === "/") {
-      i += 2
-      while (i < str.length && str[i] !== "\n") i++
+      i += 2;
+      while (i < str.length && str[i] !== "\n") i++;
     } else if (str[i] === "/" && str[i + 1] === "*") {
-      i += 2
-      while (i < str.length && !(str[i] === "*" && str[i + 1] === "/")) i++
-      i += 2
+      i += 2;
+      while (i < str.length && !(str[i] === "*" && str[i + 1] === "/")) i++;
+      i += 2;
     } else {
-      result += str[i]
-      i++
+      result += str[i];
+      i++;
     }
   }
   try {
-    return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"))
+    return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"));
   } catch {
-    return { plugins: [] }
+    return { plugins: [] };
   }
 }
 
@@ -495,68 +492,67 @@ function rawContainsLiteral(raw: string, literal: string): boolean {
   // scanning per-line and skipping lines whose first non-whitespace chars
   // are `//`. Block comments would need a real parse; not worth it here.
   for (const line of raw.split("\n")) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith("//")) continue
-    if (line.includes(JSON.stringify(literal))) return true
+    const trimmed = line.trim();
+    if (trimmed.startsWith("//")) continue;
+    if (line.includes(JSON.stringify(literal))) return true;
   }
-  return false
+  return false;
 }
 
 function injectIntoJsoncPluginsArray(
   raw: string,
   newEntries: string[],
 ): string | null {
-  if (newEntries.length === 0) return raw
+  if (newEntries.length === 0) return raw;
   // Locate the closing bracket of the `"plugins": [ ... ]` array. Walk
   // string literals and nested brackets so we don't misidentify a `]`
   // inside a comment or string.
-  const keyMatch = /"plugins"\s*:\s*\[/.exec(raw)
-  if (!keyMatch) return null
-  const arrStart = keyMatch.index + keyMatch[0].length
-  let depth = 1
-  let i = arrStart
+  const keyMatch = /"plugins"\s*:\s*\[/.exec(raw);
+  if (!keyMatch) return null;
+  const arrStart = keyMatch.index + keyMatch[0].length;
+  let depth = 1;
+  let i = arrStart;
   while (i < raw.length && depth > 0) {
-    const ch = raw[i]
+    const ch = raw[i];
     if (ch === '"') {
-      i++
+      i++;
       while (i < raw.length && raw[i] !== '"') {
-        if (raw[i] === "\\") i += 2
-        else i++
+        if (raw[i] === "\\") i += 2;
+        else i++;
       }
-      i++
-      continue
+      i++;
+      continue;
     }
-    if (ch === "[") depth++
-    else if (ch === "]") depth--
-    if (depth > 0) i++
+    if (ch === "[") depth++;
+    else if (ch === "]") depth--;
+    if (depth > 0) i++;
   }
-  if (depth !== 0) return null
-  const closeIdx = i
+  if (depth !== 0) return null;
+  const closeIdx = i;
 
-  const arrayBody = raw.slice(arrStart, closeIdx)
-  const indentMatch = /\n([ \t]+)\S/.exec(arrayBody)
-  const indent = indentMatch?.[1] ?? "    "
+  const arrayBody = raw.slice(arrStart, closeIdx);
+  const indentMatch = /\n([ \t]+)\S/.exec(arrayBody);
+  const indent = indentMatch?.[1] ?? "    ";
 
   // Find the last non-whitespace character of the array body. If it's
   // already a `,`, append after; otherwise insert a leading `,`. We
   // preserve any trailing whitespace + comments verbatim.
-  let lastNonWs = -1
+  let lastNonWs = -1;
   for (let j = arrayBody.length - 1; j >= 0; j--) {
-    const c = arrayBody[j]
+    const c = arrayBody[j];
     if (c !== " " && c !== "\t" && c !== "\n" && c !== "\r") {
-      lastNonWs = j
-      break
+      lastNonWs = j;
+      break;
     }
   }
-  const head =
-    lastNonWs >= 0 ? arrayBody.slice(0, lastNonWs + 1) : arrayBody
-  const tail = lastNonWs >= 0 ? arrayBody.slice(lastNonWs + 1) : ""
-  const sep = head.length > 0 && !head.endsWith(",") ? "," : ""
+  const head = lastNonWs >= 0 ? arrayBody.slice(0, lastNonWs + 1) : arrayBody;
+  const tail = lastNonWs >= 0 ? arrayBody.slice(lastNonWs + 1) : "";
+  const sep = head.length > 0 && !head.endsWith(",") ? "," : "";
   const insertedLines = newEntries
     .map((p) => `${indent}${JSON.stringify(p)}`)
-    .join(",\n")
-  const newArrayBody = head + sep + "\n" + insertedLines + "," + tail
-  return raw.slice(0, arrStart) + newArrayBody + raw.slice(closeIdx)
+    .join(",\n");
+  const newArrayBody = head + sep + "\n" + insertedLines + "," + tail;
+  return raw.slice(0, arrStart) + newArrayBody + raw.slice(closeIdx);
 }
 
 async function ensureZenShim(): Promise<void> {
@@ -600,93 +596,93 @@ if [ -x "$CACHE/bin/pnpm" ]; then
   export PATH="$CACHE/bin:$PATH"
 fi
 exec "$BUN" "$HOME/.zenbu/plugins/zenbu/packages/zen/src/bin.ts" "$@"
-`
+`;
   try {
-    const current = await fsp.readFile(ZEN_SHIM, "utf8")
-    if (current === expected) return
+    const current = await fsp.readFile(ZEN_SHIM, "utf8");
+    if (current === expected) return;
   } catch {}
-  await fsp.writeFile(ZEN_SHIM, expected)
-  await fsp.chmod(ZEN_SHIM, 0o755)
+  await fsp.writeFile(ZEN_SHIM, expected);
+  await fsp.chmod(ZEN_SHIM, 0o755);
 }
 
 async function ensurePathWired(): Promise<void> {
-  const shellName = path.basename(process.env.SHELL ?? "/bin/zsh")
-  let rc: string
+  const shellName = path.basename(process.env.SHELL ?? "/bin/zsh");
+  let rc: string;
   switch (shellName) {
     case "zsh":
-      rc = path.join(process.env.ZDOTDIR ?? HOME_DIR, ".zshrc")
-      break
+      rc = path.join(process.env.ZDOTDIR ?? HOME_DIR, ".zshrc");
+      break;
     case "bash":
-      rc = path.join(HOME_DIR, ".bash_profile")
-      if (!fs.existsSync(rc)) rc = path.join(HOME_DIR, ".bashrc")
-      break
+      rc = path.join(HOME_DIR, ".bash_profile");
+      if (!fs.existsSync(rc)) rc = path.join(HOME_DIR, ".bashrc");
+      break;
     case "fish":
-      rc = path.join(HOME_DIR, ".config/fish/config.fish")
-      break
+      rc = path.join(HOME_DIR, ".config/fish/config.fish");
+      break;
     default:
-      rc = path.join(HOME_DIR, ".profile")
+      rc = path.join(HOME_DIR, ".profile");
   }
 
-  await fsp.mkdir(path.dirname(rc), { recursive: true })
+  await fsp.mkdir(path.dirname(rc), { recursive: true });
   if (fs.existsSync(rc)) {
-    const content = await fsp.readFile(rc, "utf8")
-    if (content.includes(PATH_SENTINEL)) return
+    const content = await fsp.readFile(rc, "utf8");
+    if (content.includes(PATH_SENTINEL)) return;
   }
   const line =
     shellName === "fish"
       ? `\n${PATH_SENTINEL}\nset -x PATH $HOME/.zenbu/bin $PATH\n`
-      : `\n${PATH_SENTINEL}\nexport PATH="$HOME/.zenbu/bin:$PATH"\n`
-  await fsp.appendFile(rc, line)
-  logOk(`PATH wired in ${rc}`)
+      : `\n${PATH_SENTINEL}\nexport PATH="$HOME/.zenbu/bin:$PATH"\n`;
+  await fsp.appendFile(rc, line);
+  logOk(`PATH wired in ${rc}`);
 }
 
 async function ensureRegistryTypes(): Promise<void> {
-  const marker = path.join(REGISTRY_DIR, ".types.sig")
-  const configJson = path.join(HOME_DIR, ".zenbu/config.json")
-  const manifestPaths = defaultPluginManifestPaths()
-  const schemaPaths = await defaultPluginSchemaPaths()
-  const sig = await fileSig(configJson, ...manifestPaths, ...schemaPaths)
-  const dbSections = path.join(REGISTRY_DIR, "db-sections.ts")
-  const preloads = path.join(REGISTRY_DIR, "preloads.ts")
+  const marker = path.join(REGISTRY_DIR, ".types.sig");
+  const configJson = path.join(HOME_DIR, ".zenbu/config.json");
+  const manifestPaths = defaultPluginManifestPaths();
+  const schemaPaths = await defaultPluginSchemaPaths();
+  const sig = await fileSig(configJson, ...manifestPaths, ...schemaPaths);
+  const dbSections = path.join(REGISTRY_DIR, "db-sections.ts");
+  const preloads = path.join(REGISTRY_DIR, "preloads.ts");
   if (
     fs.existsSync(dbSections) &&
     fs.existsSync(preloads) &&
     readSig(marker) === sig
   ) {
-    logOk("registry types up-to-date")
-    return
+    logOk("registry types up-to-date");
+    return;
   }
-  logDo("regenerating registry types")
-  const bunBin = path.join(BIN_DIR, "bun")
-  const zenCli = path.join(REPO_DIR, "packages/zen/src/bin.ts")
+  logDo("regenerating registry types");
+  const bunBin = path.join(BIN_DIR, "bun");
+  const zenCli = path.join(REPO_DIR, "packages/zen/src/bin.ts");
 
   for (const manifest of manifestPaths) {
-    if (!fs.existsSync(manifest)) continue
+    if (!fs.existsSync(manifest)) continue;
     const proc = Bun.spawn([bunBin, zenCli, "link", manifest], {
       stdio: ["ignore", "inherit", "inherit"],
-    })
-    const exit = await proc.exited
+    });
+    const exit = await proc.exited;
     if (exit !== 0) {
-      throw new Error(`zen link exited with code ${exit} for ${manifest}`)
+      throw new Error(`zen link exited with code ${exit} for ${manifest}`);
     }
   }
-  writeSig(marker, sig)
+  writeSig(marker, sig);
 }
 
 async function ensureDbConfig(): Promise<void> {
-  const dbPath = path.join(REPO_DIR, "packages/init/.zenbu/db")
-  const dbJson = path.join(INTERNAL_DIR, "db.json")
+  const dbPath = path.join(REPO_DIR, "packages/init/.zenbu/db");
+  const dbJson = path.join(INTERNAL_DIR, "db.json");
 
-  type Entry = { path: string; lastUsedAt: number }
-  type Reg = { defaultDbPath: string | null; dbs: Entry[] }
+  type Entry = { path: string; lastUsedAt: number };
+  type Reg = { defaultDbPath: string | null; dbs: Entry[] };
 
-  let prev: any = {}
+  let prev: any = {};
   try {
-    prev = JSON.parse(await fsp.readFile(dbJson, "utf8"))
+    prev = JSON.parse(await fsp.readFile(dbJson, "utf8"));
   } catch {}
 
   // Migrate legacy `{ dbPath }` writers (pre-registry) into the new shape.
-  let next: Reg
+  let next: Reg;
   if (
     prev &&
     typeof prev === "object" &&
@@ -697,7 +693,7 @@ async function ensureDbConfig(): Promise<void> {
     next = {
       defaultDbPath: prev.dbPath,
       dbs: [{ path: prev.dbPath, lastUsedAt: Date.now() }],
-    }
+    };
   } else {
     next = {
       defaultDbPath:
@@ -705,72 +701,73 @@ async function ensureDbConfig(): Promise<void> {
       dbs: Array.isArray(prev?.dbs)
         ? prev.dbs
             .filter(
-              (e: any) => e && typeof e === "object" && typeof e.path === "string",
+              (e: any) =>
+                e && typeof e === "object" && typeof e.path === "string",
             )
             .map((e: any) => ({
               path: e.path,
               lastUsedAt: typeof e.lastUsedAt === "number" ? e.lastUsedAt : 0,
             }))
         : [],
-    }
+    };
   }
 
   // Seed the prod path: ensure it's in the list and default to it when nothing
   // else is selected. Don't override a user-set default.
   if (!next.dbs.some((e) => e.path === dbPath)) {
-    next.dbs.push({ path: dbPath, lastUsedAt: Date.now() })
+    next.dbs.push({ path: dbPath, lastUsedAt: Date.now() });
   }
   if (!next.defaultDbPath) {
-    next.defaultDbPath = dbPath
+    next.defaultDbPath = dbPath;
   }
 
-  const serialized = JSON.stringify(next, null, 2)
-  let prevSerialized = ""
+  const serialized = JSON.stringify(next, null, 2);
+  let prevSerialized = "";
   try {
-    prevSerialized = await fsp.readFile(dbJson, "utf8")
+    prevSerialized = await fsp.readFile(dbJson, "utf8");
   } catch {}
   if (prevSerialized.trim() === serialized.trim()) {
-    logOk("db.json already current")
-    return
+    logOk("db.json already current");
+    return;
   }
-  await fsp.writeFile(dbJson, serialized)
-  logDo(`wrote ${dbJson}`)
+  await fsp.writeFile(dbJson, serialized);
+  logDo(`wrote ${dbJson}`);
 }
 
 async function ensureAppPath(): Promise<void> {
-  const defaultPath = "/Applications/Zenbu.app/Contents/MacOS/Zenbu"
+  const defaultPath = "/Applications/Zenbu.app/Contents/MacOS/Zenbu";
   try {
-    await fsp.access(defaultPath, fs.constants.X_OK)
+    await fsp.access(defaultPath, fs.constants.X_OK);
   } catch {
-    return
+    return;
   }
   // `zen config` writes into the active DB's root.json under
   // plugin["zen-cli"].appPath. Read it directly to avoid spawning bun+zen
   // every setup run. The active DB is whatever `ensureDbConfig` wrote as
   // `defaultDbPath` (seeded earlier in this same run).
-  let activeDb = path.join(REPO_DIR, "packages/init/.zenbu/db")
+  let activeDb = path.join(REPO_DIR, "packages/init/.zenbu/db");
   try {
     const reg = JSON.parse(
       await fsp.readFile(path.join(INTERNAL_DIR, "db.json"), "utf8"),
-    )
+    );
     if (typeof reg?.defaultDbPath === "string") {
-      activeDb = reg.defaultDbPath
+      activeDb = reg.defaultDbPath;
     }
   } catch {}
-  const rootJson = path.join(activeDb, "root.json")
-  let current = ""
+  const rootJson = path.join(activeDb, "root.json");
+  let current = "";
   try {
-    const root = JSON.parse(await fsp.readFile(rootJson, "utf8"))
-    current = root?.plugin?.["zen-cli"]?.appPath ?? ""
+    const root = JSON.parse(await fsp.readFile(rootJson, "utf8"));
+    current = root?.plugin?.["zen-cli"]?.appPath ?? "";
   } catch {}
-  if (current === defaultPath) return
-  const bunBin = path.join(BIN_DIR, "bun")
-  const zenCli = path.join(REPO_DIR, "packages/zen/src/bin.ts")
+  if (current === defaultPath) return;
+  const bunBin = path.join(BIN_DIR, "bun");
+  const zenCli = path.join(REPO_DIR, "packages/zen/src/bin.ts");
   const proc = Bun.spawn(
     [bunBin, zenCli, "config", "set", "appPath", defaultPath],
     { stdio: ["ignore", "ignore", "ignore"] },
-  )
-  await proc.exited
+  );
+  await proc.exited;
 }
 
 // ---------- grouped step runner ----------
@@ -780,54 +777,54 @@ async function runStep(
   label: string,
   fn: () => Promise<void>,
 ): Promise<void> {
-  stepStart(id, label)
+  stepStart(id, label);
   try {
-    await fn()
-    stepDone(id)
+    await fn();
+    stepDone(id);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    stepError(id, msg)
-    process.exit(1)
+    const msg = err instanceof Error ? err.message : String(err);
+    stepError(id, msg);
+    process.exit(1);
   }
 }
 
 async function groupPrepare(): Promise<void> {
-  await ensureDirs()
-  await ensureGit()
+  await ensureDirs();
+  await ensureGit();
 }
 async function groupToolchain(): Promise<void> {
-  await ensureBun()
-  await ensurePnpm()
+  await ensureBun();
+  await ensurePnpm();
 }
 async function groupInstall(): Promise<void> {
-  await ensureRemote()
-  await ensureDepsInstalled()
+  await ensureRemote();
+  await ensureDepsInstalled();
 }
 async function groupWire(): Promise<void> {
-  await ensureTsconfigLocal()
-  await ensureKernelManifestRegistered()
-  await ensureZenShim()
-  await ensurePathWired()
-  await ensureDbConfig()
-  await ensureAppPath()
+  await ensureTsconfigLocal();
+  await ensureKernelManifestRegistered();
+  await ensureZenShim();
+  await ensurePathWired();
+  await ensureDbConfig();
+  await ensureAppPath();
 }
 async function groupTypes(): Promise<void> {
-  await ensureRegistryTypes()
+  await ensureRegistryTypes();
 }
 
 // ---------- main ----------
 
 async function main(): Promise<void> {
-  process.chdir(REPO_DIR)
-  await runStep("prepare", "Checking git", groupPrepare)
-  await runStep("toolchain", "Installing bun + pnpm", groupToolchain)
-  await runStep("install", "Installing packages", groupInstall)
-  await runStep("types", "Generating registry", groupTypes)
-  await runStep("wire", "Wiring environment", groupWire)
-  console.log("\n##ZENBU_STEP:all-done")
+  process.chdir(REPO_DIR);
+  await runStep("prepare", "Checking git", groupPrepare);
+  await runStep("toolchain", "Installing bun + pnpm", groupToolchain);
+  await runStep("install", "Installing packages", groupInstall);
+  await runStep("types", "Generating registry", groupTypes);
+  await runStep("wire", "Wiring environment", groupWire);
+  console.log("\n##ZENBU_STEP:all-done");
 }
 
 main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+  console.error(err);
+  process.exit(1);
+});
