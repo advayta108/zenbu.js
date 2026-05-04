@@ -1,4 +1,4 @@
-target: zenbu-labs/zenbu-ts
+target: zenbu-labs/zenbu.js
 
 tracked:
   - packages/kyju/
@@ -14,6 +14,9 @@ tracked:
   - packages/claude-acp/
   - packages/codex-acp/
   - packages/lint/
+  - packages/create-zenbu-app/
+  - packages/init/setup.ts
+  - setup/
 
 remove:
   - LICENSE
@@ -22,4 +25,4 @@ remove:
 readme: stub
 
 root_files:
-  package_name: zenbu-ts
+  package_name: zenbu.js

@@ -770,6 +770,8 @@ async function ensureAppPath(): Promise<void> {
   await proc.exited;
 }
 
+const STANDALONE = process.env.ZENBU_STANDALONE === "1";
+
 // ---------- grouped step runner ----------
 
 async function runStep(
@@ -802,11 +804,15 @@ async function groupInstall(): Promise<void> {
 }
 async function groupWire(): Promise<void> {
   await ensureTsconfigLocal();
-  await ensureKernelManifestRegistered();
+  if (!STANDALONE) {
+    await ensureKernelManifestRegistered();
+  }
   await ensureZenShim();
   await ensurePathWired();
   await ensureDbConfig();
-  await ensureAppPath();
+  if (!STANDALONE) {
+    await ensureAppPath();
+  }
 }
 async function groupTypes(): Promise<void> {
   await ensureRegistryTypes();

@@ -1,0 +1,11 @@
+{
+  "name": "{{projectName}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "zenbu/packages/init/setup.ts"
+  },
+  "dependencies": {
+    "zenbu": "file:./zenbu"
+  }
+}

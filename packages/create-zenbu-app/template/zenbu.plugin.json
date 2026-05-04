@@ -1,0 +1,6 @@
+{
+  "name": "app",
+  "services": [
+    "src/main/services/*.ts"
+  ]
+}

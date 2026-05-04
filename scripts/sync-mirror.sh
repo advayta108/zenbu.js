@@ -48,7 +48,7 @@ transform_files() {
       cat > "$readme" <<READMEEOF
 # ${pkg_name}
 
-Part of the [zenbu-ts](https://github.com/${TARGET_ORG_REPO}) framework.
+Part of the [zenbu.js](https://github.com/${TARGET_ORG_REPO}) framework.
 READMEEOF
     done
   fi
@@ -104,7 +104,7 @@ generate_workspace_yaml() {
 
 generate_root_package_json() {
   local output_file="$1"
-  local name="${PACKAGE_NAME:-zenbu-ts}"
+  local name="${PACKAGE_NAME:-zenbu.js}"
   cat > "$output_file" <<PKGJSON
 {
   "name": "${name}",
