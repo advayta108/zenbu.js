@@ -6,6 +6,7 @@ const PACKAGES = process.env.ZENBU_PACKAGES_DIR || (() => {
   throw new Error("alias-loader-hooks: ZENBU_PACKAGES_DIR env var is required")
 })()
 const ZENBU_ALIAS = "#zenbu/"
+const ZENBU_SCOPE = "@zenbu/"
 
 const LOADER_NAME = "alias-loader"
 let tracePort = null
@@ -39,34 +40,44 @@ function resolveToFile(resolved) {
   return resolved + ".ts"
 }
 
-function resolveImpl(specifier, context, nextResolve) {
-  if (specifier.startsWith(ZENBU_ALIAS)) {
-    const rest = specifier.slice(ZENBU_ALIAS.length)
-    const slashIdx = rest.indexOf("/")
-    const pkgName = slashIdx >= 0 ? rest.slice(0, slashIdx) : rest
-    const subpath = slashIdx >= 0 ? "./" + rest.slice(slashIdx + 1) : "."
-    const pkgDir = path.join(PACKAGES, pkgName)
-    if (fs.existsSync(pkgDir)) {
-      const pkgJson = path.join(pkgDir, "package.json")
-      if (fs.existsSync(pkgJson)) {
-        const pkg = JSON.parse(fs.readFileSync(pkgJson, "utf-8"))
-        const exportTarget = pkg.exports?.[subpath]
-        if (exportTarget) {
-          const target = typeof exportTarget === "string" ? exportTarget : exportTarget.default ?? exportTarget.import
-          if (target) {
-            const filePath = path.resolve(pkgDir, target)
-            return { url: pathToFileURL(filePath).href, shortCircuit: true }
-          }
+function resolveZenbuPkg(rest, context) {
+  const slashIdx = rest.indexOf("/")
+  const pkgName = slashIdx >= 0 ? rest.slice(0, slashIdx) : rest
+  const subpath = slashIdx >= 0 ? "./" + rest.slice(slashIdx + 1) : "."
+  const pkgDir = path.join(PACKAGES, pkgName)
+  if (fs.existsSync(pkgDir)) {
+    const pkgJson = path.join(pkgDir, "package.json")
+    if (fs.existsSync(pkgJson)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgJson, "utf-8"))
+      const exportTarget = pkg.exports?.[subpath]
+      if (exportTarget) {
+        const target = typeof exportTarget === "string" ? exportTarget : exportTarget.default ?? exportTarget.import
+        if (target) {
+          const filePath = path.resolve(pkgDir, target)
+          return { url: pathToFileURL(filePath).href, shortCircuit: true }
         }
       }
-      if (subpath !== ".") {
-        const filePath = resolveToFile(path.join(pkgDir, rest.slice(slashIdx + 1)))
-        return { url: pathToFileURL(filePath).href, shortCircuit: true }
-      }
-      const main = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf-8")).main ?? "index.ts"
-      const filePath = resolveToFile(path.join(pkgDir, main))
+    }
+    if (subpath !== ".") {
+      const filePath = resolveToFile(path.join(pkgDir, rest.slice(slashIdx + 1)))
       return { url: pathToFileURL(filePath).href, shortCircuit: true }
     }
+    const main = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf-8")).main ?? "index.ts"
+    const filePath = resolveToFile(path.join(pkgDir, main))
+    return { url: pathToFileURL(filePath).href, shortCircuit: true }
+  }
+  return null
+}
+
+function resolveImpl(specifier, context, nextResolve) {
+  if (specifier.startsWith(ZENBU_ALIAS)) {
+    const result = resolveZenbuPkg(specifier.slice(ZENBU_ALIAS.length), context)
+    if (result) return result
+  }
+
+  if (specifier.startsWith(ZENBU_SCOPE)) {
+    const result = resolveZenbuPkg(specifier.slice(ZENBU_SCOPE.length), context)
+    if (result) return result
   }
 
   return nextResolve(specifier, context)
