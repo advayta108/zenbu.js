@@ -7,6 +7,7 @@
     "@parcel/watcher": "^2.5.0",
     "tsx": "^4.21.0",
     "dynohot": "workspace:*",
-    "@zenbu/advice": "workspace:*"
+    "@zenbu/advice": "workspace:*",
+    "dugite": "^3.2.1"
   }
 }

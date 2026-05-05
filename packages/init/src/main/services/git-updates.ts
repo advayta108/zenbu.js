@@ -57,6 +57,7 @@ const BUN_BIN = path.join(
  * commas), fall back to `config.json`. Mirrors `installer.ts`'s lookup.
  */
 async function resolveConfigPath(): Promise<string> {
+  if (process.env.ZENBU_CONFIG_PATH) return process.env.ZENBU_CONFIG_PATH
   const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc")
   try {
     await fsp.access(jsonc)

@@ -1,0 +1,122 @@
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+
+const _logDir = path.join(os.homedir(), ".zenbu", ".internal")
+fs.mkdirSync(_logDir, { recursive: true })
+const _logStream = fs.createWriteStream(path.join(_logDir, "setup-gate.log"), { flags: "a" })
+_logStream.write(`\n=== setup-gate ${new Date().toISOString()} pid=${process.pid} ===\n`)
+const _origLog = console.log.bind(console)
+const _origErr = console.error.bind(console)
+console.log = (...args) => { try { _logStream.write(args.join(" ") + "\n") } catch {} try { _origLog(...args) } catch {} }
+console.error = (...args) => { try { _logStream.write("[ERR] " + args.join(" ") + "\n") } catch {} try { _origErr(...args) } catch {} }
+process.on("uncaughtException", (err) => {
+  _logStream.write("[UNCAUGHT] " + (err.stack || err.message || err) + "\n")
+  if (err.code === "EPIPE") return
+})
+process.stdout?.on?.("error", () => {})
+process.stderr?.on?.("error", () => {})
+import { app, BrowserWindow, ipcMain } from "electron"
+import { spawn, execFileSync } from "node:child_process"
+
+const APP_PATH = app.getAppPath()
+const CONFIG = JSON.parse(fs.readFileSync(path.join(APP_PATH, "app-config.json"), "utf8"))
+const APP_NAME = CONFIG.name
+const CACHE_ROOT = path.join(os.homedir(), "Library", "Caches", "Zenbu")
+const BIN_DIR = path.join(CACHE_ROOT, "bin")
+const RUNTIMES_DIR = path.join(CACHE_ROOT, "runtimes")
+const APPS_DIR = path.join(os.homedir(), ".zenbu", "apps")
+const PROJECT_DIR = path.join(APPS_DIR, APP_NAME)
+const SETUP_VERSION_FILE = path.join(PROJECT_DIR, ".setup-version")
+
+function isSetupDone() {
+  if (!fs.existsSync(PROJECT_DIR)) return false
+  if (!fs.existsSync(SETUP_VERSION_FILE)) return false
+  try {
+    const current = fs.readFileSync(SETUP_VERSION_FILE, "utf8").trim()
+    return current === String(CONFIG.setupVersion)
+  } catch { return false }
+}
+
+function seedRuntime() {
+  const toolchainDir = path.join(APP_PATH, "toolchain")
+
+  fs.mkdirSync(BIN_DIR, { recursive: true })
+
+  const bunSrc = path.join(toolchainDir, "bun")
+  const bunDest = path.join(BIN_DIR, "bun")
+  if (fs.existsSync(bunSrc) && !fs.existsSync(bunDest)) {
+    fs.copyFileSync(bunSrc, bunDest)
+    fs.chmodSync(bunDest, 0o755)
+    try { fs.unlinkSync(path.join(BIN_DIR, "node")) } catch {}
+    fs.symlinkSync("bun", path.join(BIN_DIR, "node"))
+  }
+
+  const pnpmSrc = path.join(toolchainDir, "pnpm")
+  const pnpmDest = path.join(BIN_DIR, "pnpm")
+  if (fs.existsSync(pnpmSrc) && !fs.existsSync(pnpmDest)) {
+    fs.copyFileSync(pnpmSrc, pnpmDest)
+    fs.chmodSync(pnpmDest, 0o755)
+  }
+
+  if (CONFIG.electronVersion) {
+    const runtimeDir = path.join(RUNTIMES_DIR, CONFIG.electronVersion)
+    const electronDest = path.join(runtimeDir, "Electron.app")
+    if (!fs.existsSync(electronDest)) {
+      fs.mkdirSync(runtimeDir, { recursive: true })
+      const electronAppSrc = path.resolve(APP_PATH, "..", "..")
+      try {
+        execFileSync("cp", ["-c", "-R", electronAppSrc, electronDest])
+      } catch {}
+    }
+  }
+}
+
+function runSetup() {
+  const win = new BrowserWindow({
+    width: 440,
+    height: 320,
+    resizable: false,
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 12, y: 12 },
+    backgroundColor: "#F4F4F4",
+    webPreferences: { nodeIntegration: true, contextIsolation: false },
+  })
+
+  win.loadFile(path.join(APP_PATH, "setup", "index.html"))
+}
+
+function boot() {
+  const bootMjs = path.join(PROJECT_DIR, "zenbu", "packages", "runtime", "boot.mjs")
+  if (!fs.existsSync(bootMjs)) {
+    console.error(`[setup-gate] boot.mjs not found at ${bootMjs}`)
+    app.exit(1)
+    return
+  }
+  process.argv.push(`--project=${PROJECT_DIR}`)
+  import(bootMjs)
+}
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit()
+})
+
+ipcMain.on("relaunch", () => {
+  app.relaunch()
+  app.exit()
+})
+
+app.whenReady().then(() => {
+  if (isSetupDone()) {
+    boot()
+    return
+  }
+
+  seedRuntime()
+
+  if (!fs.existsSync(PROJECT_DIR)) {
+    runSetup()
+  } else {
+    boot()
+  }
+})

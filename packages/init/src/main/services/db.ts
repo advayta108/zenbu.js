@@ -86,6 +86,7 @@ async function importFreshModule(modulePath: string): Promise<any> {
 }
 
 async function resolveConfigPath(): Promise<string> {
+  if (process.env.ZENBU_CONFIG_PATH) return process.env.ZENBU_CONFIG_PATH;
   const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc");
   try {
     await fs.access(jsonc);
@@ -265,9 +266,9 @@ export async function discoverSections(
         }
 
         const migrations = migrationsResult.migModule
-          ? migrationsResult.migModule.migrations ??
+          ? (migrationsResult.migModule.migrations ??
             migrationsResult.migModule.default ??
-            []
+            [])
           : [];
 
         return { name: manifest.name, schema, migrations };
