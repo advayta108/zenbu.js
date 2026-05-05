@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import fsp from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
@@ -17,7 +18,10 @@ process.on("uncaughtException", (err) => {
 process.stdout?.on?.("error", () => {})
 process.stderr?.on?.("error", () => {})
 import { app, BrowserWindow, ipcMain } from "electron"
-import { spawn, execFileSync } from "node:child_process"
+import { execFile as execFileCb } from "node:child_process"
+import { promisify } from "node:util"
+
+const execFileAsync = promisify(execFileCb)
 
 const APP_PATH = app.getAppPath()
 const CONFIG = JSON.parse(fs.readFileSync(path.join(APP_PATH, "app-config.json"), "utf8"))
@@ -38,35 +42,35 @@ function isSetupDone() {
   } catch { return false }
 }
 
-function seedRuntime() {
+async function seedRuntime() {
   const toolchainDir = path.join(APP_PATH, "toolchain")
 
-  fs.mkdirSync(BIN_DIR, { recursive: true })
+  await fsp.mkdir(BIN_DIR, { recursive: true })
 
   const bunSrc = path.join(toolchainDir, "bun")
   const bunDest = path.join(BIN_DIR, "bun")
   if (fs.existsSync(bunSrc) && !fs.existsSync(bunDest)) {
-    fs.copyFileSync(bunSrc, bunDest)
-    fs.chmodSync(bunDest, 0o755)
-    try { fs.unlinkSync(path.join(BIN_DIR, "node")) } catch {}
-    fs.symlinkSync("bun", path.join(BIN_DIR, "node"))
+    await fsp.copyFile(bunSrc, bunDest)
+    await fsp.chmod(bunDest, 0o755)
+    try { await fsp.unlink(path.join(BIN_DIR, "node")) } catch {}
+    await fsp.symlink("bun", path.join(BIN_DIR, "node"))
   }
 
   const pnpmSrc = path.join(toolchainDir, "pnpm")
   const pnpmDest = path.join(BIN_DIR, "pnpm")
   if (fs.existsSync(pnpmSrc) && !fs.existsSync(pnpmDest)) {
-    fs.copyFileSync(pnpmSrc, pnpmDest)
-    fs.chmodSync(pnpmDest, 0o755)
+    await fsp.copyFile(pnpmSrc, pnpmDest)
+    await fsp.chmod(pnpmDest, 0o755)
   }
 
   if (CONFIG.electronVersion) {
     const runtimeDir = path.join(RUNTIMES_DIR, CONFIG.electronVersion)
     const electronDest = path.join(runtimeDir, "Electron.app")
     if (!fs.existsSync(electronDest)) {
-      fs.mkdirSync(runtimeDir, { recursive: true })
+      await fsp.mkdir(runtimeDir, { recursive: true })
       const electronAppSrc = path.resolve(APP_PATH, "..", "..")
       try {
-        execFileSync("cp", ["-c", "-R", electronAppSrc, electronDest])
+        await execFileAsync("cp", ["-c", "-R", electronAppSrc, electronDest])
       } catch {}
     }
   }
@@ -106,17 +110,34 @@ ipcMain.on("relaunch", () => {
   app.exit()
 })
 
-app.whenReady().then(() => {
-  if (isSetupDone()) {
-    boot()
-    return
-  }
+async function cleanupOldRuntimes() {
+  if (!CONFIG.electronVersion || !fs.existsSync(RUNTIMES_DIR)) return
+  const currentMajor = parseInt(CONFIG.electronVersion.split(".")[0], 10)
+  try {
+    const entries = await fsp.readdir(RUNTIMES_DIR)
+    for (const entry of entries) {
+      const major = parseInt(entry.split(".")[0], 10)
+      if (!isNaN(major) && major < currentMajor) {
+        await fsp.rm(path.join(RUNTIMES_DIR, entry), { recursive: true, force: true })
+        console.log(`[setup-gate] cleaned up old runtime: ${entry}`)
+      }
+    }
+  } catch {}
+}
 
-  seedRuntime()
+app.whenReady().then(async () => {
+  await seedRuntime()
+  await cleanupOldRuntimes()
 
   if (!fs.existsSync(PROJECT_DIR)) {
     runSetup()
-  } else {
-    boot()
+    return
   }
+
+  if (!isSetupDone()) {
+    runSetup()
+    return
+  }
+
+  boot()
 })

@@ -28,5 +28,17 @@
         "sha256": "c31e29554b0e3f4e03f4617195c949595e4dca36085922003de4896c3ca4057d"
       }
     }
+  },
+  "git": {
+    "version": "2.53.0",
+    "releaseTag": "v2.53.0-3",
+    "targets": {
+      "darwin-arm64": {
+        "url": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-3/dugite-native-v2.53.0-f49d009-macOS-arm64.tar.gz"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/desktop/dugite-native/releases/download/v2.53.0-3/dugite-native-v2.53.0-f49d009-macOS-x64.tar.gz"
+      }
+    }
   }
 }

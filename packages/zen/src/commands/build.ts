@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises"
 import { Readable } from "node:stream"
 import { createWriteStream } from "node:fs"
 import { findInstalledVersion, getElectronBinary, getRuntimeDir } from "./runtime"
+import { ensureAppConfig, ensureSigningConfig, readConfig } from "../lib/config"
 
 function exec(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -55,45 +56,19 @@ function getGitBranch(projectDir: string): string {
   }
 }
 
-function parseArgs(argv: string[]): { name: string; out: string; runtimeVersion: string } {
-  let name: string | null = null
+function parseFlags(argv: string[]): { out: string | null; runtimeVersion: string | null } {
   let out: string | null = null
   let runtimeVersion: string | null = null
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
-    if (arg === "--name" || arg === "-n") name = argv[++i] ?? null
-    else if (arg.startsWith("--name=")) name = arg.slice("--name=".length)
-    else if (arg === "--out" || arg === "-o") out = argv[++i] ?? null
+    if (arg === "--out" || arg === "-o") out = argv[++i] ?? null
     else if (arg.startsWith("--out=")) out = arg.slice("--out=".length)
     else if (arg === "--runtime" || arg === "-r") runtimeVersion = argv[++i] ?? null
     else if (arg.startsWith("--runtime=")) runtimeVersion = arg.slice("--runtime=".length)
   }
 
-  const projectDir = resolveProjectDir()
-  if (!name) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(projectDir, "package.json"), "utf8"))
-      name = pkg.name ?? path.basename(projectDir)
-    } catch {
-      name = path.basename(projectDir)
-    }
-  }
-
-  if (!runtimeVersion) {
-    runtimeVersion = findInstalledVersion()
-    if (!runtimeVersion) {
-      console.error("zen build: no Electron runtime installed. Run: zen runtime install")
-      process.exit(1)
-    }
-  }
-  if (!runtimeVersion.includes(".")) runtimeVersion += ".0.0"
-
-  return {
-    name: name!,
-    out: out ?? path.join(projectDir, "dist"),
-    runtimeVersion,
-  }
+  return { out, runtimeVersion }
 }
 
 async function downloadToolchain(stagingDir: string, versionsPath: string) {
@@ -134,6 +109,20 @@ async function downloadToolchain(stagingDir: string, versionsPath: string) {
   console.log(`  → downloading pnpm ${versions.pnpm.version}...`)
   await download(pnpmUrl, path.join(toolchainDir, "pnpm"))
   fs.chmodSync(path.join(toolchainDir, "pnpm"), 0o755)
+
+  if (versions.git) {
+    const gitTarget = arch === "arm64" ? "darwin-arm64" : "darwin-x64"
+    const gitInfo = versions.git.targets[gitTarget]
+    if (gitInfo?.url) {
+      const gitTar = path.join(os.tmpdir(), `zenbu-build-git-${crypto.randomBytes(4).toString("hex")}.tar.gz`)
+      console.log(`  → downloading git ${versions.git.version}...`)
+      await download(gitInfo.url, gitTar)
+      const gitExtractDir = path.join(toolchainDir, "git")
+      fs.mkdirSync(gitExtractDir, { recursive: true })
+      execFileSync("tar", ["-xzf", gitTar, "-C", gitExtractDir])
+      try { fs.unlinkSync(gitTar) } catch {}
+    }
+  }
 }
 
 function findFile(dir: string, name: string): string | null {
@@ -149,10 +138,34 @@ function findFile(dir: string, name: string): string | null {
 
 export async function runBuild(argv: string[]) {
   const projectDir = resolveProjectDir()
-  const { name, out, runtimeVersion } = parseArgs(argv)
+  const flags = parseFlags(argv)
+
+  const appConfig = await ensureAppConfig(projectDir)
+  const signingConfig = await ensureSigningConfig(projectDir)
+
+  const name = appConfig.name!
+  const bundleId = appConfig.bundleId ?? `dev.zenbu.${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`
+  const out = flags.out ?? path.join(projectDir, "dist")
+
+  let runtimeVersion = flags.runtimeVersion
+  if (!runtimeVersion) {
+    try {
+      const pluginManifest = JSON.parse(fs.readFileSync(path.join(projectDir, "zenbu.plugin.json"), "utf8"))
+      runtimeVersion = pluginManifest.runtime?.electron ?? null
+    } catch {}
+  }
+  if (!runtimeVersion) {
+    runtimeVersion = findInstalledVersion()
+    if (!runtimeVersion) {
+      console.error("zen build: no Electron runtime installed. Run: zen runtime install")
+      process.exit(1)
+    }
+  }
+  if (!runtimeVersion!.includes(".")) runtimeVersion += ".0.0"
+
   const repoUrl = getGitRemote(projectDir)
   const branch = getGitBranch(projectDir)
-  const electronBin = getElectronBinary(runtimeVersion)
+  const electronBin = getElectronBinary(runtimeVersion!)
 
   if (!fs.existsSync(electronBin)) {
     console.error(`zen build: Electron ${runtimeVersion} not installed. Run: zen runtime install ${runtimeVersion}`)
@@ -190,12 +203,19 @@ export async function runBuild(argv: string[]) {
     main: "setup-gate.mjs",
   }, null, 2) + "\n")
 
+  const projectConfig = readConfig(projectDir)
+  const updateUrl = projectConfig.publish?.provider === "github"
+    ? `https://api.github.com/repos/${projectConfig.publish.owner}/${projectConfig.publish.repo}/releases/latest`
+    : projectConfig.publish?.url ?? null
+
   fs.writeFileSync(path.join(stagingDir, "app-config.json"), JSON.stringify({
     repoUrl,
     name: name.toLowerCase().replace(/[^a-z0-9]/g, "-"),
     branch,
     electronVersion: runtimeVersion,
     setupVersion,
+    updateUrl,
+    version: projectConfig.app?.version ?? "0.0.1",
   }, null, 2) + "\n")
 
   const runtimePkgDir = path.join(zenbuDir, "packages", "runtime")
@@ -223,7 +243,6 @@ export async function runBuild(argv: string[]) {
   fs.renameSync(path.join(macosDir, "Electron"), path.join(macosDir, name))
 
   const plist = path.join(contentsDir, "Info.plist")
-  const bundleId = `dev.zenbu.${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`
   await exec("plutil", ["-replace", "CFBundleName", "-string", name, plist])
   await exec("plutil", ["-replace", "CFBundleDisplayName", "-string", name, plist])
   await exec("plutil", ["-replace", "CFBundleExecutable", "-string", name, plist])
@@ -236,8 +255,9 @@ export async function runBuild(argv: string[]) {
   console.log("  → copying staged files...")
   await exec("cp", ["-R", ...fs.readdirSync(stagingDir).map(f => path.join(stagingDir, f)), appCodeDir])
 
-  console.log("  → codesigning...")
-  await exec("codesign", ["--force", "--deep", "--sign", "-", bundlePath])
+  const signIdentity = signingConfig?.identity ?? "-"
+  console.log(`  → codesigning (${signIdentity === "-" ? "ad-hoc" : signIdentity})...`)
+  await exec("codesign", ["--force", "--deep", "--sign", signIdentity, bundlePath])
 
   fs.rmSync(stagingDir, { recursive: true, force: true })
 

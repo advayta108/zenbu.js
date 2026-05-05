@@ -128,12 +128,12 @@ function handleOutput(buffer) {
   }
 }
 
-function runCommand(cmd, args, cwd) {
+function runCommand(cmd, args, cwd, extraEnv) {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: Object.assign({}, process.env, { FORCE_COLOR: "0" }),
+      env: Object.assign({}, process.env, { FORCE_COLOR: "0" }, extraEnv || {}),
     })
     let stdoutBuf = ""
     let stderrBuf = ""
@@ -158,18 +158,13 @@ function runCommand(cmd, args, cwd) {
 }
 
 function resolveGitBin() {
-  try {
-    const dugitPath = require.resolve("dugite/package.json")
-    const dugitDir = path.dirname(dugitPath)
-    const gitDir = path.join(dugitDir, "git")
-    const candidates = [
-      path.join(gitDir, "bin", "git"),
-      path.join(gitDir, "cmd", "git.exe"),
-    ]
-    for (const c of candidates) {
-      if (fs.existsSync(c)) return c
-    }
-  } catch {}
+  const bundledGit = path.join(APP_PATH, "toolchain", "git", "bin", "git")
+  if (fs.existsSync(bundledGit)) {
+    const gitDir = path.join(APP_PATH, "toolchain", "git")
+    process.env.GIT_EXEC_PATH = path.join(gitDir, "libexec", "git-core")
+    process.env.GIT_TEMPLATE_DIR = path.join(gitDir, "share", "git-core", "templates")
+    return bundledGit
+  }
   return "git"
 }
 

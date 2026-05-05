@@ -1,67 +1,187 @@
 import fs from "node:fs"
 import path from "node:path"
-import os from "node:os"
+import readline from "node:readline"
 
-/**
- * Cold-path fallback that mirrors `InstallerService.addPluginToConfig` —
- * used by `zen init` when the app isn't running. Preserves JSONC comments
- * and trailing commas. Prefer the RPC path when the app is up.
- */
-function resolveConfigPath(): string {
-  const dir = path.join(os.homedir(), ".zenbu")
-  const jsonc = path.join(dir, "config.jsonc")
-  if (fs.existsSync(jsonc)) return jsonc
-  return path.join(dir, "config.json")
+export interface ZenbuConfig {
+  app?: {
+    name?: string
+    bundleId?: string
+    icon?: string
+  }
+  signing?: {
+    identity?: string
+    teamId?: string
+    appleId?: string
+    notarize?: boolean
+  }
+  publish?: {
+    provider?: "github" | "s3" | "custom"
+    owner?: string
+    repo?: string
+    token?: string
+    url?: string
+  }
 }
 
-export function addPluginToLocalConfig(manifestPath: string): void {
-  const configPath = resolveConfigPath()
-  fs.mkdirSync(path.dirname(configPath), { recursive: true })
+const CONFIG_FILENAME = "zenbu.config.json"
 
-  if (!fs.existsSync(configPath)) {
-    const initial = `{\n  "plugins": [\n    "${manifestPath}",\n  ],\n}\n`
-    fs.writeFileSync(configPath, initial)
-    return
+export function resolveConfigPath(projectDir: string): string {
+  return path.join(projectDir, CONFIG_FILENAME)
+}
+
+export function readConfig(projectDir: string): ZenbuConfig {
+  const configPath = resolveConfigPath(projectDir)
+  try {
+    return JSON.parse(fs.readFileSync(configPath, "utf8"))
+  } catch {
+    return {}
+  }
+}
+
+export function writeConfig(projectDir: string, config: ZenbuConfig): void {
+  const configPath = resolveConfigPath(projectDir)
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
+}
+
+const IS_INTERACTIVE = process.stdin.isTTY === true
+
+function createPrompt(): { ask: (question: string, defaultValue?: string) => Promise<string>, close: () => void } {
+  if (!IS_INTERACTIVE) {
+    return {
+      ask(_question: string, defaultValue?: string): Promise<string> {
+        return Promise.resolve(defaultValue || "")
+      },
+      close() {},
+    }
   }
 
-  const raw = fs.readFileSync(configPath, "utf8")
-  const lines = raw.split("\n")
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stderr,
+  })
 
-  const pluginLineRe = /^(\s*)(\/\/\s*)?"([^"]+\.json)"/
-  let lastPluginIdx = -1
-  let arrayCloseIdx = -1
-  let pluginsKeyIdx = -1
-  let indent = "    "
+  return {
+    ask(question: string, defaultValue?: string): Promise<string> {
+      const suffix = defaultValue ? ` (${defaultValue})` : ""
+      return new Promise((resolve) => {
+        rl.question(`  ? ${question}${suffix}: `, (answer) => {
+          resolve(answer.trim() || defaultValue || "")
+        })
+      })
+    },
+    close() {
+      rl.close()
+    },
+  }
+}
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!
-    if (pluginsKeyIdx === -1 && /"plugins"\s*:\s*\[/.test(line)) {
-      pluginsKeyIdx = i
-      continue
+export async function ensureAppConfig(projectDir: string): Promise<Required<ZenbuConfig>["app"]> {
+  const config = readConfig(projectDir)
+  if (config.app?.name) return config.app as Required<ZenbuConfig>["app"]
+
+  const prompt = createPrompt()
+  console.log("\n  App not configured.\n")
+
+  const defaultName = (() => {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(projectDir, "package.json"), "utf8"))
+      return pkg.name ?? path.basename(projectDir)
+    } catch {
+      return path.basename(projectDir)
     }
-    if (pluginsKeyIdx !== -1) {
-      const match = line.match(pluginLineRe)
+  })()
+
+  const name = await prompt.ask("App name", defaultName)
+  const defaultBundleId = `dev.zenbu.${name.toLowerCase().replace(/[^a-z0-9]/g, "-")}`
+  const bundleId = await prompt.ask("Bundle ID", defaultBundleId)
+
+  config.app = { ...config.app, name, bundleId }
+  writeConfig(projectDir, config)
+  console.log(`\n  Saved to ${CONFIG_FILENAME}\n`)
+  prompt.close()
+
+  return config.app as Required<ZenbuConfig>["app"]
+}
+
+export async function ensureSigningConfig(projectDir: string): Promise<Required<ZenbuConfig>["signing"] | null> {
+  const config = readConfig(projectDir)
+  if (config.signing?.identity) return config.signing as Required<ZenbuConfig>["signing"]
+
+  if (!IS_INTERACTIVE) return null
+
+  const prompt = createPrompt()
+  console.log("\n  Code signing not configured.\n")
+
+  const sign = await prompt.ask("Sign the app? (y/N)")
+  if (sign.toLowerCase() !== "y") {
+    prompt.close()
+    return null
+  }
+
+  console.log("  (run `security find-identity -v -p codesigning` to list identities)\n")
+  const identity = await prompt.ask("Signing identity")
+  const teamId = await prompt.ask("Apple Team ID")
+  const notarizeStr = await prompt.ask("Notarize? (y/N)")
+  const notarize = notarizeStr.toLowerCase() === "y"
+
+  let appleId = ""
+  if (notarize) {
+    appleId = await prompt.ask("Apple ID for notarization")
+  }
+
+  config.signing = { identity, teamId, appleId, notarize }
+  writeConfig(projectDir, config)
+  console.log(`\n  Saved to ${CONFIG_FILENAME}\n`)
+  prompt.close()
+
+  return config.signing as Required<ZenbuConfig>["signing"]
+}
+
+export async function ensurePublishConfig(projectDir: string): Promise<Required<ZenbuConfig>["publish"]> {
+  const config = readConfig(projectDir)
+  if (config.publish?.provider && config.publish?.owner && config.publish?.repo) {
+    return config.publish as Required<ZenbuConfig>["publish"]
+  }
+
+  const prompt = createPrompt()
+  console.log("\n  Publish channel not configured.\n")
+
+  const provider = await prompt.ask("Provider (github / s3 / custom)", "github") as "github" | "s3" | "custom"
+
+  if (provider === "github") {
+    let defaultOwner = ""
+    let defaultRepo = ""
+    try {
+      const { execFileSync } = await import("node:child_process")
+      const remote = execFileSync("git", ["remote", "get-url", "origin"], {
+        cwd: projectDir, encoding: "utf8",
+      }).trim()
+      const match = remote.match(/github\.com[:/]([^/]+)\/([^/.]+)/)
       if (match) {
-        lastPluginIdx = i
-        indent = match[1]!
-        if (match[3] === manifestPath) return
+        defaultOwner = match[1]
+        defaultRepo = match[2]
       }
-      if (/^\s*\]/.test(line)) {
-        arrayCloseIdx = i
-        break
-      }
+    } catch {}
+
+    const owner = await prompt.ask("GitHub owner", defaultOwner)
+    const repo = await prompt.ask("GitHub repo", defaultRepo)
+    console.log("  (set GITHUB_TOKEN env var, or paste here)")
+    const token = await prompt.ask("GitHub token (leave blank to use $GITHUB_TOKEN)")
+
+    config.publish = {
+      provider: "github",
+      owner,
+      repo,
+      token: token || "$GITHUB_TOKEN",
     }
+  } else if (provider === "custom") {
+    const url = await prompt.ask("Release URL (JSON endpoint)")
+    config.publish = { provider: "custom", url }
   }
 
-  if (arrayCloseIdx === -1) return
+  writeConfig(projectDir, config)
+  console.log(`\n  Saved to ${CONFIG_FILENAME}\n`)
+  prompt.close()
 
-  const newLine = `${indent}"${manifestPath}",`
-  const insertAt = lastPluginIdx >= 0 ? lastPluginIdx + 1 : arrayCloseIdx
-
-  if (lastPluginIdx >= 0 && !lines[lastPluginIdx]!.trimEnd().endsWith(",")) {
-    lines[lastPluginIdx] = lines[lastPluginIdx]!.replace(/(\s*)$/, ",$1")
-  }
-
-  lines.splice(insertAt, 0, newLine)
-  fs.writeFileSync(configPath, lines.join("\n"))
+  return config.publish as Required<ZenbuConfig>["publish"]
 }

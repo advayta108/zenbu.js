@@ -18,6 +18,7 @@ import { runSetupApp } from "./commands/setup-app"
 import { runOpenStandalone } from "./commands/open-standalone"
 import { runDev } from "./commands/dev"
 import { runBuild } from "./commands/build"
+import { runPublish } from "./commands/publish"
 
 const SUBCOMMANDS = new Set([
   "kyju",
@@ -34,6 +35,7 @@ const SUBCOMMANDS = new Set([
   "launch",
   "dev",
   "build",
+  "publish",
   "help",
   "--help",
   "-h",
@@ -119,6 +121,9 @@ async function main() {
       return
     case "build":
       await runBuild(rest)
+      return
+    case "publish":
+      await runPublish(rest)
       return
     case "help":
     case "--help":
