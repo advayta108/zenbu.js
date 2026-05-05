@@ -18,6 +18,7 @@ import electronContextMenu from "electron-context-menu";
 import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { HttpService } from "./http";
+import { CoreRendererService } from "./core-renderer";
 import { ReloaderService } from "./reloader";
 import { RpcService } from "./rpc";
 import { registerAdvice, registerContentScript } from "./advice-config";
@@ -45,6 +46,7 @@ export class WindowService extends Service {
     baseWindow: "base-window",
     db: DbService,
     http: HttpService,
+    coreRenderer: CoreRendererService,
     reloader: ReloaderService,
     rpc: RpcService,
   };
@@ -52,6 +54,7 @@ export class WindowService extends Service {
     baseWindow: any;
     db: DbService;
     http: HttpService;
+    coreRenderer: CoreRendererService;
     reloader: ReloaderService;
     rpc: RpcService;
   };
@@ -673,12 +676,16 @@ export class WindowService extends Service {
       let currentViewPath =
         db.effectClient.readRoot().plugin.kernel.orchestratorViewPath ??
         DEFAULT_VIEW_PATH;
+      console.log("[window] currentViewPath:", currentViewPath);
+      console.log("[window] boot windows:", (globalThis as any).__zenbu_boot_windows__?.length ?? 0);
+      console.log("[window] baseWindow windows:", baseWindow.windows.size);
 
       const attachView = (
         windowId: string,
         win: Electron.BaseWindow,
         viewPath: string,
       ) => {
+        console.log("[window] attachView:", windowId, viewPath);
         const view = new WebContentsView({
           webPreferences: {
             sandbox: true,

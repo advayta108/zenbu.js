@@ -24,7 +24,13 @@ import { fileURLToPath } from "node:url";
 
 // ---------- paths + env ----------
 
-const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
+// `import.meta.url` resolves through symlinks; `process.argv[1]` does not.
+// We need the latter so an app that symlinks `<app>/zenbu/` to a framework
+// monorepo (via `zen dev link`) is still detected as the host app.
+const ARGV_SCRIPT = process.argv[1]
+  ? path.resolve(process.argv[1])
+  : fileURLToPath(import.meta.url);
+const SCRIPT_DIR = path.dirname(ARGV_SCRIPT);
 // setup.ts lives at `packages/init/setup.ts`; repo root is two levels up.
 const REPO_DIR = path.resolve(SCRIPT_DIR, "..", "..");
 const REPO_URL = "https://github.com/zenbu-labs/zenbu.git";
@@ -39,8 +45,23 @@ const XDG_DATA_HOME = path.join(CACHE_ROOT, "xdg/data");
 const XDG_STATE_HOME = path.join(CACHE_ROOT, "xdg/state");
 
 const INTERNAL_DIR = path.join(HOME_DIR, ".zenbu/.internal");
-const REGISTRY_DIR = process.env.ZENBU_STANDALONE === "1"
-  ? path.join(REPO_DIR, "registry")
+
+// In the new app-relative model the framework lives at `<app>/zenbu/`, so
+// the host app is the parent of REPO_DIR. `ZENBU_APP_DIR` is the explicit
+// override (used by create-zenbu-app and CI). When neither resolves to a
+// directory containing a `zenbu.plugin.json`, fall back to the old global
+// install layout so legacy `~/.zenbu/plugins/zenbu/` setups still boot.
+const APP_DIR_CANDIDATE = process.env.ZENBU_APP_DIR
+  ? path.resolve(process.env.ZENBU_APP_DIR)
+  : path.resolve(REPO_DIR, "..");
+const APP_DIR: string | null = fs.existsSync(
+  path.join(APP_DIR_CANDIDATE, "zenbu.plugin.json"),
+)
+  ? APP_DIR_CANDIDATE
+  : null;
+
+const REGISTRY_DIR = APP_DIR
+  ? path.join(APP_DIR, "types")
   : path.join(HOME_DIR, ".zenbu/registry");
 const CLI_BIN_DIR = path.join(HOME_DIR, ".zenbu/bin");
 
@@ -49,31 +70,27 @@ const ZEN_SHIM = path.join(CLI_BIN_DIR, "zen");
 
 const VERSIONS_JSON = path.join(REPO_DIR, "setup/versions.json");
 
-// ---------- default plugins ----------
+// ---------- plugin discovery ----------
 //
-// Single source of truth for which monorepo plugins ship as defaults.
-// `ensureKernelManifestRegistered` and `ensureRegistryTypes` walk this
-// list uniformly: each entry is appended to `~/.zenbu/config.json`
-// (skipped if the manifest file isn't on disk) and `zen link` is run
-// for each one so `#registry/db-sections` and `#registry/services`
-// regenerate.
+// New (app-relative) model: the host app's `<app>/config.json#plugins`
+// is the source of truth. `zen link` against the app manifest already
+// expands that list, so `ensureRegistryTypes` only needs to point at it.
 //
-// Adding a future default plugin = one line here. Lives in dynamically-
-// loaded code (this file is git-pulled with the rest of `packages/init`),
-// so no `apps/kernel/` update is required.
-const DEFAULT_PLUGINS = [
+// Legacy model (no host app detected): fall back to the framework's
+// hardcoded default-plugin list and the global `~/.zenbu/config.json`.
+const LEGACY_DEFAULT_PLUGINS = [
   "packages/init/zenbu.plugin.json",
   "packages/zen/zenbu.plugin.json",
   "packages/agent-manager/zenbu.plugin.json",
 ] as const;
 
-function defaultPluginManifestPaths(): string[] {
-  return DEFAULT_PLUGINS.map((rel) => path.join(REPO_DIR, rel));
+function legacyDefaultPluginManifestPaths(): string[] {
+  return LEGACY_DEFAULT_PLUGINS.map((rel) => path.join(REPO_DIR, rel));
 }
 
-async function defaultPluginSchemaPaths(): Promise<string[]> {
+async function legacyDefaultPluginSchemaPaths(): Promise<string[]> {
   const out: string[] = [];
-  for (const manifestPath of defaultPluginManifestPaths()) {
+  for (const manifestPath of legacyDefaultPluginManifestPaths()) {
     if (!fs.existsSync(manifestPath)) continue;
     try {
       const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8"));
@@ -357,33 +374,81 @@ async function ensureDepsInstalled(): Promise<void> {
   writeSig(marker, sig);
 }
 
+/**
+ * Each framework package that consumes `#zenbu/*` or `#registry/*` gets a
+ * gitignored `tsconfig.local.json` whose path mappings point at the host
+ * app. `tsconfig.json` in each package extends this file, so checked-in
+ * tsconfigs stay generic while LSP/`tsc` see the right paths.
+ *
+ * Layouts vary slightly per package (e.g. `init` declares `@/*`, `agent-
+ * manager` adds the init renderer to `@/*`, `zen` doesn't need either),
+ * so each gets a tailored body.
+ */
+type LocalTsconfig = {
+  compilerOptions: {
+    paths: Record<string, string[]>;
+    types?: string[];
+  };
+  include: string[];
+};
+
+function frameworkLocalTsconfigs(packagesDir: string): Record<string, LocalTsconfig> {
+  return {
+    init: {
+      compilerOptions: {
+        paths: {
+          "@/*": ["./src/renderer/*"],
+          "#zenbu/*": [`${packagesDir}/*`],
+          "#registry/*": [`${REGISTRY_DIR}/*`],
+        },
+        // setup.ts uses Bun-specific APIs (`Bun.*`, `$`) alongside the
+        // normal Node types the rest of the package relies on. Both type
+        // packages must be explicitly listed so the LSP resolves them.
+        types: ["node", "bun"],
+      },
+      include: ["src", "shared", "test", "setup.ts", REGISTRY_DIR],
+    },
+    "agent-manager": {
+      compilerOptions: {
+        paths: {
+          "@/*": [
+            "./src/renderer/*",
+            `${packagesDir}/init/src/renderer/*`,
+          ],
+          "#zenbu/*": [`${packagesDir}/*`],
+          "#registry/*": [`${REGISTRY_DIR}/*`],
+        },
+        types: ["node", "bun"],
+      },
+      include: ["src", "shared", REGISTRY_DIR],
+    },
+    zen: {
+      compilerOptions: {
+        paths: {
+          "#zenbu/*": [`${packagesDir}/*`],
+          "#registry/*": [`${REGISTRY_DIR}/*`],
+        },
+        types: ["bun"],
+      },
+      include: ["src", REGISTRY_DIR],
+    },
+  };
+}
+
 async function ensureTsconfigLocal(): Promise<void> {
   const packagesDir = path.join(REPO_DIR, "packages");
-  const tsconfig = path.join(REPO_DIR, "packages/init/tsconfig.local.json");
-  const expected =
-    JSON.stringify(
-      {
-        compilerOptions: {
-          paths: {
-            "@/*": ["./src/renderer/*"],
-            "#zenbu/*": [`${packagesDir}/*`],
-            "#registry/*": [`${REGISTRY_DIR}/*`],
-          },
-          // setup.ts uses Bun-specific APIs (`Bun.*`, `$`) alongside the
-          // normal Node types the rest of the package relies on. Both type
-          // packages must be explicitly listed so the LSP resolves them.
-          types: ["node", "bun"],
-        },
-        include: ["src", "shared", "test", "setup.ts", REGISTRY_DIR],
-      },
-      null,
-      2,
-    ) + "\n";
-  try {
-    const current = await fsp.readFile(tsconfig, "utf8");
-    if (current === expected) return;
-  } catch {}
-  await fsp.writeFile(tsconfig, expected);
+  const configs = frameworkLocalTsconfigs(packagesDir);
+  for (const [pkg, body] of Object.entries(configs)) {
+    const target = path.join(packagesDir, pkg, "tsconfig.local.json");
+    if (!fs.existsSync(path.dirname(target))) continue;
+    const expected = JSON.stringify(body, null, 2) + "\n";
+    try {
+      const current = await fsp.readFile(target, "utf8");
+      if (current === expected) continue;
+    } catch {}
+    await fsp.writeFile(target, expected);
+    logDo(`wrote ${path.relative(REPO_DIR, target)}`);
+  }
 }
 
 async function ensureKernelManifestRegistered(): Promise<void> {
@@ -640,12 +705,66 @@ async function ensurePathWired(): Promise<void> {
 
 async function ensureRegistryTypes(): Promise<void> {
   const marker = path.join(REGISTRY_DIR, ".types.sig");
-  const configJson = path.join(HOME_DIR, ".zenbu/config.json");
-  const manifestPaths = defaultPluginManifestPaths();
-  const schemaPaths = await defaultPluginSchemaPaths();
-  const sig = await fileSig(configJson, ...manifestPaths, ...schemaPaths);
   const dbSections = path.join(REGISTRY_DIR, "db-sections.ts");
   const preloads = path.join(REGISTRY_DIR, "preloads.ts");
+  const bunBin = path.join(BIN_DIR, "bun");
+  const zenCli = path.join(REPO_DIR, "packages/zen/src/bin.ts");
+
+  if (APP_DIR) {
+    // App-relative model: `zen link <APP_DIR>/zenbu.plugin.json` walks
+    // <app>/config.json#plugins for us, so a single invocation regenerates
+    // the entire registry under <APP_DIR>/types.
+    const appManifest = path.join(APP_DIR, "zenbu.plugin.json");
+    const appConfig = path.join(APP_DIR, "config.json");
+    const referencedManifests: string[] = [appManifest];
+    try {
+      const cfg = JSON.parse(await fsp.readFile(appConfig, "utf8"));
+      if (Array.isArray(cfg?.plugins)) {
+        for (const entry of cfg.plugins) {
+          const resolved = path.isAbsolute(entry)
+            ? entry
+            : path.resolve(APP_DIR, entry);
+          referencedManifests.push(resolved);
+        }
+      }
+    } catch {}
+    const schemaPaths: string[] = [];
+    for (const m of referencedManifests) {
+      if (!fs.existsSync(m)) continue;
+      try {
+        const manifest = JSON.parse(await fsp.readFile(m, "utf8"));
+        if (typeof manifest.schema === "string") {
+          schemaPaths.push(path.resolve(path.dirname(m), manifest.schema));
+        }
+      } catch {}
+    }
+    const sig = await fileSig(appConfig, ...referencedManifests, ...schemaPaths);
+    if (
+      fs.existsSync(dbSections) &&
+      fs.existsSync(preloads) &&
+      readSig(marker) === sig
+    ) {
+      logOk("registry types up-to-date");
+      return;
+    }
+    logDo("regenerating registry types");
+    const proc = Bun.spawn([bunBin, zenCli, "link", appManifest], {
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    const exit = await proc.exited;
+    if (exit !== 0) {
+      throw new Error(`zen link exited with code ${exit} for ${appManifest}`);
+    }
+    writeSig(marker, sig);
+    return;
+  }
+
+  // Legacy global-install fallback: walk the framework's hardcoded
+  // default-plugin list against `~/.zenbu/config.json` + `~/.zenbu/registry`.
+  const configJson = path.join(HOME_DIR, ".zenbu/config.json");
+  const manifestPaths = legacyDefaultPluginManifestPaths();
+  const schemaPaths = await legacyDefaultPluginSchemaPaths();
+  const sig = await fileSig(configJson, ...manifestPaths, ...schemaPaths);
   if (
     fs.existsSync(dbSections) &&
     fs.existsSync(preloads) &&
@@ -655,9 +774,6 @@ async function ensureRegistryTypes(): Promise<void> {
     return;
   }
   logDo("regenerating registry types");
-  const bunBin = path.join(BIN_DIR, "bun");
-  const zenCli = path.join(REPO_DIR, "packages/zen/src/bin.ts");
-
   for (const manifest of manifestPaths) {
     if (!fs.existsSync(manifest)) continue;
     const proc = Bun.spawn([bunBin, zenCli, "link", manifest], {
@@ -772,8 +888,6 @@ async function ensureAppPath(): Promise<void> {
   await proc.exited;
 }
 
-const STANDALONE = process.env.ZENBU_STANDALONE === "1";
-
 // ---------- grouped step runner ----------
 
 async function runStep(
@@ -805,8 +919,11 @@ async function groupInstall(): Promise<void> {
   await ensureDepsInstalled();
 }
 async function groupWire(): Promise<void> {
-  if (!STANDALONE) {
-    await ensureTsconfigLocal();
+  await ensureTsconfigLocal();
+  if (!APP_DIR) {
+    // Legacy global-install steps: only meaningful when there's no host
+    // app to be relative to. In the app-relative model the host app owns
+    // its own `config.json`, db registry, and electron app path.
     await ensureKernelManifestRegistered();
     await ensureDbConfig();
     await ensureAppPath();
@@ -815,9 +932,7 @@ async function groupWire(): Promise<void> {
   await ensurePathWired();
 }
 async function groupTypes(): Promise<void> {
-  if (!STANDALONE) {
-    await ensureRegistryTypes();
-  }
+  await ensureRegistryTypes();
 }
 
 // ---------- main ----------

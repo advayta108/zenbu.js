@@ -3,8 +3,8 @@ import type { TokenPayload } from "./tokens"
 /**
  * The kernel's contribution to `PluginEvents`. zen-link picks this up via
  * `events: "./shared/events.ts"` in [zenbu.plugin.json](./zenbu.plugin.json)
- * and intersects it with every other plugin's `Events` type into
- * `~/.zenbu/registry/events.ts`. Consumers (`createServer<TEvents>`,
+ * and intersects it with every other plugin's `Events` type into the host
+ * app's `<app>/types/events.ts`. Consumers (`createServer<TEvents>`,
  * `connectRpc<_, TEvents>`) take `PluginEvents` from that registry, not
  * this file directly — that's how plugins extend the event surface
  * without editing core.

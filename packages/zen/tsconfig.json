@@ -8,8 +8,6 @@
     "noEmit": true,
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
-    "types": ["bun"]
-  },
-  "include": ["src", "/Users/robby/.zenbu/registry"]
+    "skipLibCheck": true
+  }
 }

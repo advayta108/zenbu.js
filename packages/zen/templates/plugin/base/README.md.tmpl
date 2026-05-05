@@ -10,14 +10,21 @@ A Zenbu plugin scaffolded by `zen init {{name}}{{recipesFlag}}`.
 ├── zenbu.plugin.json        # manifest
 ├── package.json             # deps
 ├── tsconfig.json
-├── tsconfig.local.json      # path maps for #registry/* and #zenbu/*
+├── tsconfig.local.json      # gitignored — path maps for #registry/* and #zenbu/*
 ├── setup.ts                 # idempotent dep installer
 └── src/services/{{name}}.ts # main service (RPC-accessible via rpc["{{name}}"])
 ```
 
 Each recipe you selected layers additional files on top. See
-`~/.zenbu/plugins/zenbu/packages/zen/templates/plugin/recipes/<name>/` for
+`{{appDir}}/zenbu/packages/zen/templates/plugin/recipes/<name>/` for
 the raw templates.
+
+## Host app
+
+This plugin is wired to `{{appDir}}`. `tsconfig.local.json` maps
+`#registry/*` to `{{appDir}}/types/*`, and `zen link` writes registry
+types into that same directory. To re-target a different app, regenerate
+`tsconfig.local.json` (or set `devAppPath` in `zenbu.plugin.json`).
 
 ## Common edits
 
@@ -30,5 +37,5 @@ the raw templates.
 
 ## References
 
-- Architecture: `~/.zenbu/plugins/zenbu/DOCS.md`
-- Recipes skill overview: `~/.zenbu/plugins/zenbu/skills/zenbu-codebase/SKILL.md`
+- Architecture: `{{appDir}}/zenbu/DOCS.md`
+- Recipes skill overview: `{{appDir}}/zenbu/skills/zenbu-codebase/SKILL.md`

@@ -1,4 +1,5 @@
 {
+  "extends": "./tsconfig.local.json",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -10,13 +11,6 @@
     "jsx": "react-jsx",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/renderer/*"],
-      "#zenbu/*": ["../*"],
-      "#registry/*": ["/Users/robby/.zenbu/registry/*"]
-    },
-    "types": ["node", "bun"]
-  },
-  "include": ["src", "shared", "test", "setup.ts", "/Users/robby/.zenbu/registry"]
+    "baseUrl": "."
+  }
 }

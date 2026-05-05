@@ -318,7 +318,7 @@ fields:
 Per-plugin sections live at `root.plugin.<plugin-name>.*`. Each plugin
 that wants storage declares its own `schema.ts`, runs
 `zen kyju generate` to emit a migration into its `kyju/` dir, then
-`zen link` to plumb the types into `~/.zenbu/registry/db-sections.ts`.
+`zen link` to plumb the types into the host app's `<app>/types/db-sections.ts`.
 
 Inspect the on-disk DB:
 
@@ -382,7 +382,7 @@ edits to `packages/zen/src/**/*.ts` apply on the next invocation.
 | `zen init <name>` | Scaffold a new plugin and register it in `config.jsonc`. |
 | `zen init <name> --with db,view,advice,shortcut` | Scaffold with composable recipes (`packages/zen/templates/plugin/recipes/<name>/`). |
 | `zen setup [--dir .]` | Re-run a plugin's `setup.ts`. If the app is running, surfaces a relaunch confirmation. |
-| `zen link` | Regenerate `~/.zenbu/registry/{services,db-sections,preloads}.ts`. Run from any plugin dir. |
+| `zen link` | Regenerate `<app>/types/{services,db-sections,preloads,events}.ts` for the host app. Run from any plugin dir; resolution walks `tsconfig.local.json` → `manifest.devAppPath` → ancestor app root. |
 | `zen kyju generate [--name tag]` | Diff schema against last snapshot, emit migration. |
 | `zen kyju db --db <path> <root \| collections \| collection \| ...>` | Inspect on-disk DB. |
 | `zen doctor` | Re-run kernel `setup.ts` idempotently. Use after pulling new setup steps. |
@@ -417,7 +417,7 @@ edits to `packages/zen/src/**/*.ts` apply on the next invocation.
   (`ServiceRouter`) and DB types (`DbSections`) are fully generated
   by `zen link`. If a type error appears after changing a service's
   public method signature, the fix is to run `zen link` to regenerate
-  `~/.zenbu/registry/services.ts` — not to cast. The renderer's
+  `<app>/types/services.ts` — not to cast. The renderer's
   `useRpc()` returns `RouterProxy<ServiceRouter>` which statically
   types every `rpc.<service>.<method>(args)` call. Adding `as any`
   defeats the entire type pipeline and will not be accepted.

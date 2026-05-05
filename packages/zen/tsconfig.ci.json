@@ -1,4 +1,5 @@
 {
+  "extends": "./tsconfig.local.json",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -7,11 +8,6 @@
     "noEmit": true,
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
-    "types": ["bun"],
-    "paths": {
-      "#zenbu/*": ["../*"]
-    }
-  },
-  "include": ["src"]
+    "skipLibCheck": true
+  }
 }

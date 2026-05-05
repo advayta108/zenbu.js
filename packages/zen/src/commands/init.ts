@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs"
-import { join, dirname, relative } from "node:path"
+import { join, dirname, relative, resolve, isAbsolute } from "node:path"
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { connectCli } from "../lib/rpc"
@@ -16,7 +16,28 @@ const PRESETS: Record<string, Recipe[]> = {
   mega: ["db", "shortcut", "advice", "view"],
 }
 
-type Opts = { name: string; dir: string; recipes: Recipe[] }
+type Opts = { name: string; dir: string; appDir: string; recipes: Recipe[] }
+
+/**
+ * Walk up from `from` until we hit a dir that has both `zenbu.plugin.json`
+ * and a `config.json` whose `plugins` is an array — the host-app signature.
+ */
+function findHostApp(from: string): string | null {
+  let dir = resolve(from)
+  while (true) {
+    const manifest = join(dir, "zenbu.plugin.json")
+    const config = join(dir, "config.json")
+    if (existsSync(manifest) && existsSync(config)) {
+      try {
+        const parsed = JSON.parse(readFileSync(config, "utf8"))
+        if (Array.isArray(parsed?.plugins)) return dir
+      } catch {}
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+}
 
 function toPascal(name: string): string {
   return name
@@ -100,12 +121,15 @@ function parseRecipeList(value: string): Recipe[] {
 function parseArgs(argv: string[]): Opts | null {
   let name: string | null = null
   let dir: string | null = null
+  let appDir: string | null = null
   const recipes = new Set<Recipe>()
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === "--dir" && i + 1 < argv.length) dir = argv[++i]!
     else if (arg.startsWith("--dir=")) dir = arg.slice("--dir=".length)
+    else if (arg === "--app" && i + 1 < argv.length) appDir = argv[++i]!
+    else if (arg.startsWith("--app=")) appDir = arg.slice("--app=".length)
     else if (arg === "--with" && i + 1 < argv.length)
       parseRecipeList(argv[++i]!).forEach((r) => recipes.add(r))
     else if (arg.startsWith("--with="))
@@ -126,9 +150,29 @@ function parseArgs(argv: string[]): Opts | null {
     console.error(`plugin name must match /^[a-z][a-z0-9-]*$/ (got: ${name})`)
     return null
   }
+  const targetDir = dir ? resolve(dir) : join(process.cwd(), name)
+  // Resolve the host app the new plugin will link into. Explicit `--app`
+  // wins; otherwise walk up from the target dir's parent (the plugin doesn't
+  // exist yet, but its parent is where we want to start the search).
+  const resolvedApp = appDir
+    ? (isAbsolute(appDir) ? appDir : resolve(process.cwd(), appDir))
+    : findHostApp(dirname(targetDir))
+  if (!resolvedApp) {
+    console.error(
+      `zen init: could not detect a host app from ${dirname(targetDir)}.`,
+    )
+    console.error(
+      `         Pass --app <path> or run from inside an app directory`,
+    )
+    console.error(
+      `         (one with both zenbu.plugin.json and config.json#plugins).`,
+    )
+    return null
+  }
   return {
     name,
-    dir: dir ? dir : join(process.cwd(), name),
+    dir: targetDir,
+    appDir: resolvedApp,
     recipes: [...recipes],
   }
 }
@@ -184,7 +228,7 @@ function buildPackageJson(name: string, recipes: Recipe[]): object {
 function printUsage() {
   console.log(`
 Usage:
-  zen init <plugin-name> [--dir <path>] [--with <recipes>] [--preset <name>]
+  zen init <plugin-name> [--dir <path>] [--app <path>] [--with <recipes>] [--preset <name>]
 
 Recipes (composable, comma-separated):
   db        — kyju schema section (root.plugin.<name>.*) + migrations barrel
@@ -195,8 +239,13 @@ Recipes (composable, comma-separated):
 Presets:
   mega      — all recipes
 
+Host app:
+  --app <path>  Path to the host app (the dir with zenbu.plugin.json + config.json).
+                Defaults to walking up from --dir / cwd until one is found.
+
 Examples:
   zen init my-plugin
+  zen init my-plugin --app ../some-app
   zen init my-plugin --with shortcut
   zen init my-plugin --with db,shortcut
   zen init my-plugin --preset mega
@@ -216,7 +265,7 @@ export async function runInit(argv: string[]) {
     process.exit(1)
   }
 
-  const { name, dir, recipes } = opts
+  const { name, dir, appDir, recipes } = opts
   if (existsSync(dir)) {
     console.error(`target directory already exists: ${dir}`)
     process.exit(1)
@@ -234,6 +283,7 @@ export async function runInit(argv: string[]) {
     PascalName: toPascal(name),
     camelName: toCamel(name),
     homedir: homedir(),
+    appDir,
     recipesFlag: recipes.length > 0 ? ` --with ${recipes.join(",")}` : "",
     recipesList:
       recipes.length > 0

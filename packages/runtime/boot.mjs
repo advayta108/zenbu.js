@@ -165,6 +165,10 @@ app.whenReady().then(async () => {
     process.chdir(projectRoot);
     console.log("[runtime] cwd:", process.cwd());
 
+    if (!process.argv.some((a) => a.startsWith("--zen-cwd="))) {
+      process.argv.push(`--zen-cwd=${projectDir}`);
+    }
+
     const configPath = resolveProjectConfig(projectDir);
     process.env.ZENBU_CONFIG_PATH = configPath;
 
@@ -183,48 +187,8 @@ app.whenReady().then(async () => {
     if (runtime) {
       console.log("[runtime] draining services...");
       await runtime.whenIdle();
-
-      let viewRegistry;
-      try {
-        viewRegistry = runtime.get({ key: "view-registry" });
-      } catch (e) {
-        console.log("[runtime] view-registry not available:", e.message);
-      }
-      if (viewRegistry && bootWindow) {
-        let views = viewRegistry.views;
-        if (!views || views.size === 0) {
-          console.log("[runtime] waiting for views to register...");
-          for (let i = 0; i < 50; i++) {
-            await new Promise((r) => setTimeout(r, 200));
-            views = viewRegistry.views;
-            if (views && views.size > 0) break;
-          }
-        }
-        console.log("[runtime] registered views:", views?.size ?? 0);
-        if (views && views.size > 0) {
-          const first = views.values().next().value;
-          if (first?.url) {
-            console.log("[runtime] loading view:", first.scope, first.url);
-            const { WebContentsView } = await import("electron");
-            const contentView = new WebContentsView({
-              webPreferences: {
-                nodeIntegration: true,
-                contextIsolation: false,
-                webSecurity: false,
-              },
-            });
-            bootWindow.contentView.removeChildView(loadingView);
-            bootWindow.contentView.addChildView(contentView);
-            const layout = () => {
-              const { width, height } = bootWindow.getContentBounds();
-              contentView.setBounds({ x: 0, y: 0, width, height });
-            };
-            layout();
-            bootWindow.on("resize", layout);
-            contentView.webContents.loadURL(first.url);
-          }
-        }
-      }
+    } else {
+      console.log("[runtime] warning: no service runtime found");
     }
 
     console.log("[runtime] boot complete");

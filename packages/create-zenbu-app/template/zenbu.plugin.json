@@ -1,5 +1,6 @@
 {
   "name": "app",
+  "uiEntrypoint": "src/renderer",
   "services": [
     "src/main/services/*.ts"
   ]

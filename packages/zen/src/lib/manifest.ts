@@ -9,12 +9,20 @@ export type Manifest = {
   /**
    * Path to a `.ts` file that `export type Events = { ... }`. zen-link
    * intersects every plugin's Events into a single `PluginEvents` type
-   * in `~/.zenbu/registry/events.ts`, which the rpc/event glue uses as
-   * the `TEvents` parameter for `createServer<TEvents>` and
+   * in the host app's `<app>/types/events.ts`, which the rpc/event glue
+   * uses as the `TEvents` parameter for `createServer<TEvents>` and
    * `connectRpc<_, TEvents>`. Lets plugins emit/subscribe to typed
    * events without touching the kernel.
    */
   events?: string
+  /**
+   * Dev-only hint: absolute or relative path to the host app this plugin
+   * links into. Consumed exclusively by `zen link` to resolve the target
+   * `<app>/types/` registry; never read by the kernel or the runtime. The
+   * canonical source is the plugin's gitignored `tsconfig.local.json` —
+   * this field is a fallback for setups where that auto-detection fails.
+   */
+  devAppPath?: string
   setup?: { script?: string; version?: number }
   /**
    * Minimum kernel version required, as a semver range.

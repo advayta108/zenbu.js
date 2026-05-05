@@ -10,8 +10,10 @@
     "outDir": "dist",
     "rootDir": ".",
     "paths": {
-      "@/*": ["./src/renderer/*"]
+      "@/*": ["./src/renderer/*"],
+      "#zenbu/*": ["./zenbu/packages/*"],
+      "#registry/*": ["./types/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "types"]
 }

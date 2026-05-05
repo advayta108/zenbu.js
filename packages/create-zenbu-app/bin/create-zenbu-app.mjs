@@ -31,8 +31,11 @@ async function main() {
 
   const projectDir = path.resolve(process.cwd(), projectName);
   if (fs.existsSync(projectDir)) {
-    console.error(`Error: directory "${projectName}" already exists.`);
-    process.exit(1);
+    const entries = fs.readdirSync(projectDir);
+    if (entries.length > 0) {
+      console.error(`Error: directory "${projectName}" already exists and is not empty.`);
+      process.exit(1);
+    }
   }
 
   console.log(`\nCreating Zenbu app in ${projectDir}\n`);
@@ -71,11 +74,17 @@ async function main() {
       BUN_BIN,
       [setupTs],
       path.join(projectDir, "zenbu"),
-      { ZENBU_STANDALONE: "1" },
+      {
+        ZENBU_STANDALONE: "1",
+        ZENBU_CONFIG_PATH: path.join(projectDir, "config.json"),
+      },
     );
   } else {
     console.log("  ⚠ setup.ts not found in submodule, skipping framework setup");
   }
+
+  console.log("→ Installing app dependencies...");
+  await runCommand("npm", ["install"], projectDir);
 
   console.log(`\n✓ Done! Your Zenbu app is ready.\n`);
   console.log(`  cd ${projectName}`);

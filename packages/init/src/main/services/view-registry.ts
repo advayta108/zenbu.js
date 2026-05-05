@@ -39,15 +39,21 @@ export class ViewRegistryService extends Service {
       label?: string;
     },
   ): Promise<ViewEntry> {
+    console.log(`[view-registry] register("${scope}", root="${root}", config="${configFile}")`);
     const existing = this.views.get(scope);
-    if (existing) return existing;
+    if (existing) {
+      console.log(`[view-registry] "${scope}" already exists at ${existing.url}`);
+      return existing;
+    }
 
     const ws = runtime.getActiveScope() ?? undefined;
+    console.log(`[view-registry] creating reloader for "${scope}"...`);
     const reloaderEntry = await this.ctx.reloader.create(
       scope,
       root,
       configFile,
     );
+    console.log(`[view-registry] reloader created: ${reloaderEntry.url} (port ${reloaderEntry.port})`);
     const entry: ViewEntry = {
       scope,
       url: reloaderEntry.url,
@@ -58,6 +64,7 @@ export class ViewRegistryService extends Service {
     };
     this.views.set(scope, entry);
     await this.syncToDb();
+    console.log(`[view-registry] "${scope}" registered at ${entry.url}`);
     return entry;
   }
 

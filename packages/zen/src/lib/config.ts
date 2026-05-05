@@ -185,3 +185,25 @@ export async function ensurePublishConfig(projectDir: string): Promise<Required<
 
   return config.publish as Required<ZenbuConfig>["publish"]
 }
+
+export function addPluginToLocalConfig(manifestPath: string): void {
+  const configDir = path.join(require("node:os").homedir(), ".zenbu")
+  const configJsonc = path.join(configDir, "config.jsonc")
+  const configJson = path.join(configDir, "config.json")
+  const configPath = fs.existsSync(configJsonc) ? configJsonc : configJson
+
+  let config: { plugins?: string[] } = { plugins: [] }
+  try {
+    const raw = fs.readFileSync(configPath, "utf8")
+    config = JSON.parse(raw.replace(/\/\/.*$/gm, "").replace(/,\s*([\]}])/g, "$1"))
+  } catch {}
+
+  const plugins = Array.isArray(config.plugins) ? config.plugins : []
+  if (!plugins.includes(manifestPath)) {
+    plugins.push(manifestPath)
+  }
+  config.plugins = plugins
+
+  fs.mkdirSync(configDir, { recursive: true })
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
+}

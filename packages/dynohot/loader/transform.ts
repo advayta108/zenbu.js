@@ -460,6 +460,12 @@ const importToGetterVisitor: Visitor<VisitorState> = {
 		}
 	},
 
+	OptionalMemberExpression(path) {
+		if (!path.node.computed) {
+			path.skipKey("property");
+		}
+	},
+
 	ObjectMethod(path) {
 		if (!path.node.computed) {
 			path.skipKey("key");

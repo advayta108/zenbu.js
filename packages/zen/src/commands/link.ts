@@ -1,9 +1,5 @@
 import fs from "node:fs"
 import path from "node:path"
-import os from "node:os"
-
-const ZENBU_DIR = path.join(os.homedir(), ".zenbu")
-const REGISTRY_DIR = path.join(ZENBU_DIR, "registry")
 
 type ServiceEntry = { className: string; key: string; filePath: string }
 type SchemaEntry = { name: string; schemaPath: string }
@@ -19,6 +15,120 @@ function findManifest(from: string): string | null {
     if (parent === dir) return null
     dir = parent
   }
+}
+
+function findFileUp(from: string, name: string): string | null {
+  let dir = path.resolve(from)
+  while (true) {
+    const candidate = path.join(dir, name)
+    if (fs.existsSync(candidate)) return candidate
+    const parent = path.dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+}
+
+/** jsonc-lite: strips // and /* * / comments and trailing commas. */
+function readJsonLoose(filePath: string): any {
+  const raw = fs.readFileSync(filePath, "utf8")
+  const stripped = raw
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1")
+    .replace(/,\s*([\]}])/g, "$1")
+  return JSON.parse(stripped)
+}
+
+/**
+ * Extract the `#registry/*` mapping from a tsconfig (typically a
+ * gitignored `tsconfig.local.json`) and return the absolute directory it
+ * resolves to. Returns null when the alias isn't declared.
+ */
+function readRegistryDirFromTsconfig(tsconfigPath: string): string | null {
+  try {
+    const cfg = readJsonLoose(tsconfigPath)
+    const entry = cfg?.compilerOptions?.paths?.["#registry/*"]
+    if (!Array.isArray(entry) || typeof entry[0] !== "string") return null
+    const raw = entry[0] as string
+    const trimmed = raw.replace(/\/\*$/, "")
+    const baseUrl = typeof cfg?.compilerOptions?.baseUrl === "string"
+      ? path.resolve(path.dirname(tsconfigPath), cfg.compilerOptions.baseUrl)
+      : path.dirname(tsconfigPath)
+    return path.resolve(baseUrl, trimmed)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * An app root is the nearest ancestor (or self) that contains BOTH a
+ * `zenbu.plugin.json` and a `config.json` whose `plugins` is an array.
+ * That signature distinguishes the app from a bare plugin manifest.
+ */
+function findAppRoot(from: string): string | null {
+  let dir = path.resolve(from)
+  while (true) {
+    const manifest = path.join(dir, "zenbu.plugin.json")
+    const config = path.join(dir, "config.json")
+    if (fs.existsSync(manifest) && fs.existsSync(config)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(config, "utf8"))
+        if (Array.isArray(parsed?.plugins)) return dir
+      } catch {}
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+}
+
+/**
+ * Pick the directory `zen link` should write registry types into.
+ * Resolution order:
+ *   1. `--registry <dir>` flag / `ZENBU_REGISTRY_DIR` env (escape hatch)
+ *   2. Nearest `tsconfig.local.json` ancestor's `#registry/*` mapping
+ *      (canonical — this is the same path TS uses to resolve the alias)
+ *   3. The manifest's `devAppPath` field (dev hint, fallback)
+ *   4. Walk up to the host app root and use `<app>/types`
+ *   5. Fail with a message that explains the available knobs
+ */
+function resolveRegistryDir(opts: {
+  manifestPath: string
+  manifest: { devAppPath?: string }
+  registryOverride: string | null
+}): string {
+  if (opts.registryOverride) return path.resolve(opts.registryOverride)
+  if (process.env.ZENBU_REGISTRY_DIR) return path.resolve(process.env.ZENBU_REGISTRY_DIR)
+
+  const manifestDir = path.dirname(opts.manifestPath)
+
+  const tsconfigLocal = findFileUp(manifestDir, "tsconfig.local.json")
+  if (tsconfigLocal) {
+    const fromTs = readRegistryDirFromTsconfig(tsconfigLocal)
+    if (fromTs) return fromTs
+  }
+
+  if (opts.manifest.devAppPath) {
+    return path.resolve(manifestDir, opts.manifest.devAppPath, "types")
+  }
+
+  const appRoot = findAppRoot(manifestDir)
+  if (appRoot) return path.join(appRoot, "types")
+
+  console.error(
+    `zen link: could not determine target types directory for ${opts.manifestPath}.`,
+  )
+  console.error(`         Try one of:`)
+  console.error(
+    `         • run from inside an app dir (with both zenbu.plugin.json and config.json),`,
+  )
+  console.error(
+    `         • add a "devAppPath" field to ${path.basename(opts.manifestPath)} pointing at the host app,`,
+  )
+  console.error(
+    `         • create a tsconfig.local.json with a "#registry/*" path mapping,`,
+  )
+  console.error(`         • or pass --registry <dir>.`)
+  process.exit(1)
 }
 
 function expandGlob(baseDir: string, pattern: string): string[] {
@@ -60,8 +170,8 @@ function discoverServices(baseDir: string, serviceGlobs: string[]): ServiceEntry
   return entries
 }
 
-function relativeFromRegistry(absPath: string): string {
-  let rel = path.relative(REGISTRY_DIR, absPath)
+function relativeFromRegistry(registryDir: string, absPath: string): string {
+  let rel = path.relative(registryDir, absPath)
   if (!rel.startsWith(".")) rel = "./" + rel
   return rel.replace(/\.ts$/, "")
 }
@@ -76,7 +186,10 @@ const SERVICE_BASE_LITERAL = [
   `  | "ctx"`,
 ].join("\n")
 
-function generateServicesFile(allServices: Map<string, ServiceEntry[]>): string {
+function generateServicesFile(
+  registryDir: string,
+  allServices: Map<string, ServiceEntry[]>,
+): string {
   const imports: string[] = []
   const routerEntries: string[] = []
   const usedNames = new Map<string, number>()
@@ -88,7 +201,7 @@ function generateServicesFile(allServices: Map<string, ServiceEntry[]>): string 
   for (const [, services] of allServices) {
     for (const svc of services) {
       const alias = uniqueName(svc.className)
-      const importPath = relativeFromRegistry(svc.filePath)
+      const importPath = relativeFromRegistry(registryDir, svc.filePath)
       imports.push(
         `import type { ${svc.className}${alias !== svc.className ? ` as ${alias}` : ""} } from "${importPath}"`,
       )
@@ -120,7 +233,10 @@ function generateServicesFile(allServices: Map<string, ServiceEntry[]>): string 
   ].join("\n")
 }
 
-function generatePreloadsFile(allPreloads: Map<string, PreloadEntry>): string {
+function generatePreloadsFile(
+  registryDir: string,
+  allPreloads: Map<string, PreloadEntry>,
+): string {
   const imports: string[] = []
   const entries: string[] = []
   const usedAliases = new Map<string, number>()
@@ -134,7 +250,7 @@ function generatePreloadsFile(allPreloads: Map<string, PreloadEntry>): string {
       _p ? c.toUpperCase() : c,
     )
     const alias = uniqueAlias(`${camel}Preload`)
-    const importPath = relativeFromRegistry(preloadPath)
+    const importPath = relativeFromRegistry(registryDir, preloadPath)
     imports.push(`import type { default as ${alias} } from "${importPath}"`)
     const quotedName = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name)
       ? name
@@ -153,7 +269,10 @@ function generatePreloadsFile(allPreloads: Map<string, PreloadEntry>): string {
   ].join("\n")
 }
 
-function generateEventsFile(allEvents: Map<string, EventsEntry>): string {
+function generateEventsFile(
+  registryDir: string,
+  allEvents: Map<string, EventsEntry>,
+): string {
   const imports: string[] = []
   const aliases: string[] = []
   const usedAliases = new Map<string, number>()
@@ -167,7 +286,7 @@ function generateEventsFile(allEvents: Map<string, EventsEntry>): string {
       _p ? c.toUpperCase() : c,
     )
     const alias = uniqueAlias(`Events_${camel}`)
-    const importPath = relativeFromRegistry(eventsPath)
+    const importPath = relativeFromRegistry(registryDir, eventsPath)
     imports.push(`import type { Events as ${alias} } from "${importPath}"`)
     aliases.push(alias)
   }
@@ -196,7 +315,10 @@ function generateEventsFile(allEvents: Map<string, EventsEntry>): string {
   ].join("\n")
 }
 
-function generateDbSectionsFile(allSchemas: Map<string, SchemaEntry>): string {
+function generateDbSectionsFile(
+  registryDir: string,
+  allSchemas: Map<string, SchemaEntry>,
+): string {
   const imports: string[] = []
   const sectionEntries: string[] = []
   const usedAliases = new Map<string, number>()
@@ -210,7 +332,7 @@ function generateDbSectionsFile(allSchemas: Map<string, SchemaEntry>): string {
       name.replace(/(^|[-_])(\w)/g, (_m, _p, c: string) => c.toUpperCase()) +
       "Root"
     const alias = uniqueAlias(pascal)
-    const importPath = relativeFromRegistry(schemaPath)
+    const importPath = relativeFromRegistry(registryDir, schemaPath)
     imports.push(`import type { SchemaRoot as ${alias} } from "${importPath}"`)
     const quotedName = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name)
       ? name
@@ -231,7 +353,7 @@ function generateDbSectionsFile(allSchemas: Map<string, SchemaEntry>): string {
   ].join("\n")
 }
 
-function readExistingRegistry(): {
+function readExistingRegistry(registryDir: string): {
   services: Map<string, ServiceEntry[]>
   schemas: Map<string, SchemaEntry>
   preloads: Map<string, PreloadEntry>
@@ -242,7 +364,7 @@ function readExistingRegistry(): {
   const preloads = new Map<string, PreloadEntry>()
   const events = new Map<string, EventsEntry>()
 
-  const servicesPath = path.join(REGISTRY_DIR, "services.ts")
+  const servicesPath = path.join(registryDir, "services.ts")
   if (fs.existsSync(servicesPath)) {
     const content = fs.readFileSync(servicesPath, "utf8")
     const importRe = /import type \{ (\w+)(?:\s+as\s+(\w+))? \} from "([^"]+)"/g
@@ -252,7 +374,7 @@ function readExistingRegistry(): {
       const className = m[1]!
       const alias = m[2] ?? m[1]!
       const relPath = m[3]!
-      const absPath = path.resolve(REGISTRY_DIR, relPath) + ".ts"
+      const absPath = path.resolve(registryDir, relPath) + ".ts"
       importMap.set(alias, { className, filePath: absPath })
     }
     for (const m of content.matchAll(routerRe)) {
@@ -283,7 +405,7 @@ function readExistingRegistry(): {
     }
   }
 
-  const dbPath = path.join(REGISTRY_DIR, "db-sections.ts")
+  const dbPath = path.join(registryDir, "db-sections.ts")
   if (fs.existsSync(dbPath)) {
     const content = fs.readFileSync(dbPath, "utf8")
     const importRe = /import type \{ SchemaRoot as (\w+) \} from "([^"]+)"/g
@@ -292,7 +414,7 @@ function readExistingRegistry(): {
     for (const m of content.matchAll(importRe)) {
       const alias = m[1]!
       const relPath = m[2]!
-      importMap.set(alias, path.resolve(REGISTRY_DIR, relPath) + ".ts")
+      importMap.set(alias, path.resolve(registryDir, relPath) + ".ts")
     }
     for (const m of content.matchAll(sectionRe)) {
       const name = (m[1] ?? m[2])!
@@ -301,7 +423,7 @@ function readExistingRegistry(): {
       if (schemaPath) schemas.set(name, { name, schemaPath })
     }
   }
-  const preloadsPath = path.join(REGISTRY_DIR, "preloads.ts")
+  const preloadsPath = path.join(registryDir, "preloads.ts")
   if (fs.existsSync(preloadsPath)) {
     const content = fs.readFileSync(preloadsPath, "utf8")
     const importRe = /import type \{ default as (\w+) \} from "([^"]+)"/g
@@ -310,7 +432,7 @@ function readExistingRegistry(): {
     for (const m of content.matchAll(importRe)) {
       const alias = m[1]!
       const relPath = m[2]!
-      importMap.set(alias, path.resolve(REGISTRY_DIR, relPath) + ".ts")
+      importMap.set(alias, path.resolve(registryDir, relPath) + ".ts")
     }
     for (const m of content.matchAll(entryRe)) {
       const name = (m[1] ?? m[2])!
@@ -324,14 +446,14 @@ function readExistingRegistry(): {
   // and joins the `PluginEvents = ...` intersection. Walk back from the
   // import path to the owning plugin's manifest to recover its name —
   // same trick as services.
-  const eventsRegistryPath = path.join(REGISTRY_DIR, "events.ts")
+  const eventsRegistryPath = path.join(registryDir, "events.ts")
   if (fs.existsSync(eventsRegistryPath)) {
     const content = fs.readFileSync(eventsRegistryPath, "utf8")
     const importRe = /import type \{ Events as (\w+) \} from "([^"]+)"/g
     for (const m of content.matchAll(importRe)) {
       const alias = m[1]!
       const relPath = m[2]!
-      const eventsPath = path.resolve(REGISTRY_DIR, relPath) + ".ts"
+      const eventsPath = path.resolve(registryDir, relPath) + ".ts"
       let pluginName: string | null = null
       let dir = path.dirname(eventsPath)
       while (dir !== path.dirname(dir)) {
@@ -354,18 +476,24 @@ function readExistingRegistry(): {
   return { services, schemas, preloads, events }
 }
 
-export async function runLink(argv: string[]) {
-  const explicit = argv.find((a) => !a.startsWith("-"))
-  const manifestPath = explicit
-    ? path.resolve(explicit)
-    : findManifest(process.cwd())
-  if (!manifestPath) {
-    console.error(
-      "Could not find zenbu.plugin.json in current directory or any parent.",
-    )
-    process.exit(1)
+function parseLinkArgs(argv: string[]): {
+  manifestArg: string | null
+  registryOverride: string | null
+} {
+  let manifestArg: string | null = null
+  let registryOverride: string | null = null
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!
+    if (arg === "--registry" && i + 1 < argv.length) registryOverride = argv[++i]!
+    else if (arg.startsWith("--registry=")) registryOverride = arg.slice("--registry=".length)
+    else if (!arg.startsWith("-") && !manifestArg) manifestArg = arg
   }
+  return { manifestArg, registryOverride }
+}
 
+type RegistryState = ReturnType<typeof readExistingRegistry>
+
+function linkOne(manifestPath: string, existing: RegistryState): void {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
   const pluginName = manifest.name
   const baseDir = path.dirname(manifestPath)
@@ -389,8 +517,6 @@ export async function runLink(argv: string[]) {
     : null
   if (eventsEntry) console.log(`  Events: ${eventsEntry.eventsPath}`)
 
-  const existing = readExistingRegistry()
-
   existing.services.set(pluginName, serviceEntries)
   if (schemaEntry) existing.schemas.set(pluginName, schemaEntry)
   // If a plugin removed its `preload` field, drop it from the merged registry.
@@ -399,27 +525,77 @@ export async function runLink(argv: string[]) {
   else existing.preloads.delete(pluginName)
   if (eventsEntry) existing.events.set(pluginName, eventsEntry)
   else existing.events.delete(pluginName)
+}
 
-  fs.mkdirSync(REGISTRY_DIR, { recursive: true })
-  fs.writeFileSync(
-    path.join(REGISTRY_DIR, "services.ts"),
-    generateServicesFile(existing.services),
-  )
-  console.log(`  Wrote registry/services.ts`)
-  fs.writeFileSync(
-    path.join(REGISTRY_DIR, "db-sections.ts"),
-    generateDbSectionsFile(existing.schemas),
-  )
-  console.log(`  Wrote registry/db-sections.ts`)
-  fs.writeFileSync(
-    path.join(REGISTRY_DIR, "preloads.ts"),
-    generatePreloadsFile(existing.preloads),
-  )
-  console.log(`  Wrote registry/preloads.ts`)
-  fs.writeFileSync(
-    path.join(REGISTRY_DIR, "events.ts"),
-    generateEventsFile(existing.events),
-  )
-  console.log(`  Wrote registry/events.ts`)
+/**
+ * When the manifest being linked is the host app's own manifest (sitting
+ * next to its `config.json`), expand the work list to also include every
+ * plugin path declared in `config.json#plugins`. For any other manifest
+ * (a plugin sitting inside or outside the app), only that single manifest
+ * is returned — the caller decides not to touch sibling plugins.
+ */
+function expandAppManifests(manifestPath: string): string[] {
+  const manifestDir = path.dirname(manifestPath)
+  const appRoot = findAppRoot(manifestDir)
+  if (appRoot !== manifestDir) return [manifestPath]
+  const configPath = path.join(appRoot, "config.json")
+  let pluginEntries: string[] = []
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"))
+    if (Array.isArray(config?.plugins)) pluginEntries = config.plugins
+  } catch {}
+  const all = [manifestPath]
+  for (const entry of pluginEntries) {
+    const resolved = path.isAbsolute(entry) ? entry : path.resolve(appRoot, entry)
+    if (path.resolve(resolved) === path.resolve(manifestPath)) continue
+    if (!fs.existsSync(resolved)) {
+      console.warn(`  ⚠ skipping ${entry} (not found at ${resolved})`)
+      continue
+    }
+    all.push(resolved)
+  }
+  return all
+}
+
+export async function runLink(argv: string[]) {
+  const { manifestArg, registryOverride } = parseLinkArgs(argv)
+  const manifestPath = manifestArg
+    ? path.resolve(manifestArg)
+    : findManifest(process.cwd())
+  if (!manifestPath) {
+    console.error(
+      "zen link: could not find zenbu.plugin.json in current directory or any parent.",
+    )
+    process.exit(1)
+  }
+
+  const rootManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+
+  const registryDir = resolveRegistryDir({
+    manifestPath,
+    manifest: rootManifest,
+    registryOverride,
+  })
+  console.log(`Registry: ${registryDir}`)
+
+  const manifestPaths = expandAppManifests(manifestPath)
+
+  fs.mkdirSync(registryDir, { recursive: true })
+  const existing = readExistingRegistry(registryDir)
+  for (const mp of manifestPaths) {
+    linkOne(mp, existing)
+  }
+
+  const writes: Array<[string, string]> = [
+    ["services.ts", generateServicesFile(registryDir, existing.services)],
+    ["db-sections.ts", generateDbSectionsFile(registryDir, existing.schemas)],
+    ["preloads.ts", generatePreloadsFile(registryDir, existing.preloads)],
+    ["events.ts", generateEventsFile(registryDir, existing.events)],
+  ]
+  for (const [name, body] of writes) {
+    const target = path.join(registryDir, name)
+    fs.writeFileSync(target, body)
+    console.log(`  Wrote ${target}`)
+  }
   console.log("Done.")
 }

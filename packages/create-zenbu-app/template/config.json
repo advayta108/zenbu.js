@@ -1,5 +1,6 @@
 {
   "plugins": [
+    "zenbu/packages/init/zenbu.plugin.json",
     "zenbu.plugin.json"
   ]
 }
