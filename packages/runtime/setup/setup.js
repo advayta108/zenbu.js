@@ -199,6 +199,13 @@ async function run() {
       })
     }
 
+    if (fs.existsSync(path.join(PROJECT_DIR, "package.json"))) {
+      quietLabelEl.textContent = "Installing app dependencies…"
+      const pnpmBin = path.join(BIN_DIR, "pnpm")
+      const npmBin = fs.existsSync(pnpmBin) ? pnpmBin : "npm"
+      await runCommand(npmBin, ["install"], PROJECT_DIR)
+    }
+
     fs.writeFileSync(SETUP_VERSION_FILE, SETUP_VERSION)
 
     quietLabelEl.textContent = "Setup complete"
