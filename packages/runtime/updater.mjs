@@ -138,11 +138,15 @@ class Updater {
     await execFileAsync("ditto", ["-xk", this.#downloadedZipPath, extractDir])
 
     const extractedApps = (await fsp.readdir(extractDir)).filter(f => f.endsWith(".app"))
-    if (extractedApps.length === 0) {
+    let newAppPath
+    if (extractedApps.length > 0) {
+      newAppPath = path.join(extractDir, extractedApps[0])
+    } else if (fs.existsSync(path.join(extractDir, "Contents"))) {
+      newAppPath = extractDir
+    } else {
       throw new Error("No .app found in downloaded archive")
     }
 
-    const newAppPath = path.join(extractDir, extractedApps[0])
     const contentsDir = path.join(bundlePath, "Contents")
 
     await execFileAsync("rm", ["-rf", path.join(contentsDir, "MacOS")])
