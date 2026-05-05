@@ -7,8 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { register as registerLoader } from "node:module";
-import { app, BaseWindow, WebContentsView } from "electron";
+import { app, BaseWindow, WebContentsView, ipcMain } from "electron";
 import { bootstrapEnv } from "./env-bootstrap.mjs";
+import { updater } from "./updater.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -64,6 +65,19 @@ function resolveProjectConfig(projectDir) {
   }
   return configPath;
 }
+
+ipcMain.handle("zenbu:updater:check", async () => {
+  return updater.check();
+});
+
+ipcMain.handle("zenbu:updater:download-and-install", async (event) => {
+  const dl = updater.download();
+  dl.on("progress", (p) => {
+    event.sender.send("zenbu:updater:progress", p);
+  });
+  await dl.finished;
+  await updater.install();
+});
 
 app.whenReady().then(async () => {
   try {
@@ -194,8 +208,8 @@ app.whenReady().then(async () => {
             const { WebContentsView } = await import("electron");
             const contentView = new WebContentsView({
               webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
+                nodeIntegration: true,
+                contextIsolation: false,
                 webSecurity: false,
               },
             });
