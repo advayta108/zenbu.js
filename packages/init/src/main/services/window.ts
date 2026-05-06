@@ -645,6 +645,7 @@ export class WindowService extends Service {
         Electron.WebContents,
         { begin: () => void; end: () => void }
       >();
+      const contextMenuDisposers = new Map<string, () => void>();
 
       let currentViewPath =
         db.effectClient.readRoot().plugin.kernel.orchestratorViewPath ??
@@ -669,6 +670,10 @@ export class WindowService extends Service {
         });
 
         view.setBackgroundColor("#000000");
+        contextMenuDisposers.set(
+          windowId,
+          electronContextMenu({ window: view, showInspectElement: true }),
+        );
 
         // If the kernel pre-populated this window with a loading view, keep it
         // on top and add the orchestrator beneath (index 0 = bottom of stack).
@@ -862,6 +867,8 @@ export class WindowService extends Service {
           } catch {}
         }
         scrollTouchHandlers.clear();
+        for (const dispose of contextMenuDisposers.values()) dispose();
+        contextMenuDisposers.clear();
         this.views = new Map();
       };
 
@@ -923,10 +930,6 @@ export class WindowService extends Service {
       return () => {
         globalShortcut.unregister(accelerator);
       };
-    });
-
-    this.setup("context-menu", () => {
-      return electronContextMenu({ showInspectElement: true });
     });
 
     this.setup("dock-menu", () => {
