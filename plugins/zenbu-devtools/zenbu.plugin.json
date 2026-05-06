@@ -1,0 +1,5 @@
+{
+  "name": "devtools",
+  "uiEntrypoint": "src/renderer",
+  "services": ["src/main/services/*.ts"]
+}

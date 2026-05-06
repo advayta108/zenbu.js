@@ -9,6 +9,7 @@ import {
   clipboard,
   dialog,
   globalShortcut,
+  screen,
   shell,
 } from "electron";
 import * as Effect from "effect/Effect";
@@ -77,6 +78,17 @@ export class WindowService extends Service {
       agentId: string;
     }
   >();
+
+  splitRegistration: { name: string; scope: string } | null = null;
+
+  registerSplitPanel(opts: { name: string; scope: string }) {
+    this.splitRegistration = opts;
+    return () => {
+      if (this.splitRegistration === opts) {
+        this.splitRegistration = null;
+      }
+    };
+  }
 
   async createWindowWithAgent() {
     const { baseWindow, db } = this.ctx;
@@ -646,6 +658,150 @@ export class WindowService extends Service {
         { begin: () => void; end: () => void }
       >();
       const contextMenuDisposers = new Map<string, () => void>();
+      const splitPanels = new Map<
+        string,
+        {
+          panel: WebContentsView;
+          separator: WebContentsView;
+          overlay: WebContentsView | null;
+          ratio: number;
+          layout: () => void;
+        }
+      >();
+
+      const SEPARATOR_WIDTH = 4;
+      const MIN_RATIO = 0.2;
+      const MAX_RATIO = 0.8;
+
+      const openSplit = (windowId: string) => {
+        const entry = viewEntries.get(windowId);
+        if (!entry || splitPanels.has(windowId) || !this.splitRegistration) return;
+        const { win, view } = entry;
+
+        const panel = new WebContentsView({
+          webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+        });
+        panel.setBackgroundColor("#1e1e1e");
+
+        const separator = new WebContentsView({
+          webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+        });
+        separator.setBackgroundColor("#2d2d2d");
+
+        const state = { panel, separator, overlay: null as WebContentsView | null, ratio: 0.5, layout: () => {} };
+
+        const doLayout = () => {
+          if (win.isDestroyed()) return;
+          const { width, height } = win.getContentBounds();
+          const mainWidth = Math.round(width * state.ratio);
+          const panelWidth = width - mainWidth - SEPARATOR_WIDTH;
+          view.setBounds({ x: 0, y: 0, width: mainWidth, height });
+          separator.setBounds({ x: mainWidth, y: 0, width: SEPARATOR_WIDTH, height });
+          panel.setBounds({ x: mainWidth + SEPARATOR_WIDTH, y: 0, width: panelWidth, height });
+        };
+        state.layout = doLayout;
+
+        win.contentView.addChildView(separator);
+        win.contentView.addChildView(panel);
+        doLayout();
+        win.on("resize", doLayout);
+
+        const sepHtml = `<!DOCTYPE html><html><head><style>
+          *{margin:0;padding:0}body{height:100vh;cursor:col-resize;background:#2d2d2d;-webkit-app-region:no-drag}
+        </style><script>
+          document.addEventListener('mousedown',()=>console.log('__split_drag_start__'));
+        </script></head><body></body></html>`;
+        separator.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(sepHtml)}`);
+
+        separator.webContents.on("console-message", (e) => {
+          if (e.message !== "__split_drag_start__") return;
+
+          const startPoint = screen.getCursorScreenPoint();
+          const startRatio = state.ratio;
+
+          const overlay = new WebContentsView({
+            webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+          });
+          overlay.setBackgroundColor("#00000000");
+          const overlayHtml = `<!DOCTYPE html><html><head><style>
+            *{margin:0;padding:0}html,body{height:100%;background:transparent;cursor:col-resize}
+          </style><script>
+            document.addEventListener('mouseup',()=>console.log('__split_drag_end__'));
+          </script></head><body></body></html>`;
+          const { width: cw, height: ch } = win.getContentBounds();
+          overlay.setBounds({ x: 0, y: 0, width: cw, height: ch });
+          win.contentView.addChildView(overlay);
+          overlay.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml)}`);
+          state.overlay = overlay;
+
+          const poll = setInterval(() => {
+            if (win.isDestroyed()) { clearInterval(poll); return; }
+            const cur = screen.getCursorScreenPoint();
+            const dx = cur.x - startPoint.x;
+            const contentWidth = win.getContentBounds().width;
+            const newRatio = Math.min(MAX_RATIO, Math.max(MIN_RATIO, startRatio + dx / contentWidth));
+            state.ratio = newRatio;
+            doLayout();
+          }, 16);
+
+          const cleanup = () => {
+            clearInterval(poll);
+            if (!win.isDestroyed() && state.overlay) {
+              win.contentView.removeChildView(state.overlay);
+              if (!state.overlay.webContents.isDestroyed()) state.overlay.webContents.close();
+              state.overlay = null;
+            }
+          };
+
+          overlay.webContents.on("console-message", (e2) => {
+            if (e2.message === "__split_drag_end__") cleanup();
+          });
+          overlay.webContents.once("destroyed", cleanup);
+        });
+
+        const registry = (
+          db.effectClient.readRoot().plugin.kernel.viewRegistry ?? []
+        ).find((v) => v.scope === this.splitRegistration!.scope);
+        if (!registry) return;
+
+        const viewUrl = new URL(registry.url);
+        viewUrl.searchParams.set("wsPort", String(http.port));
+        viewUrl.searchParams.set("wsToken", http.authToken);
+        viewUrl.searchParams.set("windowId", windowId);
+        panel.webContents.loadURL(viewUrl.toString());
+
+        contextMenuDisposers.set(
+          `${windowId}:panel`,
+          electronContextMenu({ window: panel, showInspectElement: true }),
+        );
+
+        splitPanels.set(windowId, state);
+      };
+
+      const closeSplit = (windowId: string) => {
+        const entry = viewEntries.get(windowId);
+        const split = splitPanels.get(windowId);
+        if (!entry || !split) return;
+        const { win, view } = entry;
+
+        if (split.overlay && !split.overlay.webContents.isDestroyed()) {
+          win.contentView.removeChildView(split.overlay);
+          split.overlay.webContents.close();
+        }
+        win.contentView.removeChildView(split.separator);
+        win.contentView.removeChildView(split.panel);
+        if (!split.separator.webContents.isDestroyed()) split.separator.webContents.close();
+        if (!split.panel.webContents.isDestroyed()) split.panel.webContents.close();
+        win.off("resize", split.layout);
+
+        contextMenuDisposers.get(`${windowId}:panel`)?.();
+        contextMenuDisposers.delete(`${windowId}:panel`);
+
+        splitPanels.delete(windowId);
+
+        const { width, height } = win.getContentBounds();
+        view.setBounds({ x: 0, y: 0, width, height });
+      };
 
       let currentViewPath =
         db.effectClient.readRoot().plugin.kernel.orchestratorViewPath ??
@@ -672,7 +828,20 @@ export class WindowService extends Service {
         view.setBackgroundColor("#000000");
         contextMenuDisposers.set(
           windowId,
-          electronContextMenu({ window: view, showInspectElement: true }),
+          electronContextMenu({
+            window: view,
+            showInspectElement: true,
+            append: () => {
+              const reg = this.splitRegistration;
+              if (!reg) return [];
+              return [
+                { type: "separator" as const },
+                splitPanels.has(windowId)
+                  ? { label: `Close ${reg.name}`, click: () => closeSplit(windowId) }
+                  : { label: `Open ${reg.name}`, click: () => openSplit(windowId) },
+              ];
+            },
+          }),
         );
 
         // If the kernel pre-populated this window with a loading view, keep it
@@ -693,6 +862,11 @@ export class WindowService extends Service {
         }
 
         const layout = () => {
+          const split = splitPanels.get(windowId);
+          if (split) {
+            split.layout();
+            return;
+          }
           const { width, height } = win.getContentBounds();
           view.setBounds({ x: 0, y: 0, width, height });
         };
@@ -846,6 +1020,7 @@ export class WindowService extends Service {
       };
 
       const teardownAllViews = () => {
+        for (const windowId of [...splitPanels.keys()]) closeSplit(windowId);
         for (const { win, view } of viewEntries.values()) {
           try {
             if (!win.isDestroyed()) {

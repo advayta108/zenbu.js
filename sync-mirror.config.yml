@@ -17,6 +17,7 @@ tracked:
   - packages/create-zenbu-app/
   - packages/runtime/
   - packages/init/
+  - plugins/
   - setup/
 
 remove:

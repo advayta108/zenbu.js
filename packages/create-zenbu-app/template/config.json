@@ -1,6 +1,7 @@
 {
   "plugins": [
     "zenbu/packages/init/zenbu.plugin.json",
+    "zenbu/plugins/zenbu-devtools/zenbu.plugin.json",
     "zenbu.plugin.json"
   ]
 }
