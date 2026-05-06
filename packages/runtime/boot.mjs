@@ -192,6 +192,13 @@ app.whenReady().then(async () => {
     const configPath = resolveProjectConfig(projectDir);
     process.env.ZENBU_CONFIG_PATH = configPath;
 
+    try {
+      const configRaw = await fs.promises.readFile(configPath, "utf8");
+      globalThis.__zenbu_app_config__ = JSON.parse(configRaw);
+    } catch {
+      globalThis.__zenbu_app_config__ = {};
+    }
+
     const url = `zenbu:plugins?config=${encodeURIComponent(configPath)}`;
     if (verbose) console.log("[boot] loading plugins from:", configPath);
 

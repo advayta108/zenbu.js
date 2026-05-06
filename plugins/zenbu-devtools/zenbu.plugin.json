@@ -1,4 +1,6 @@
 {
   "name": "devtools",
-  "services": ["src/main/services/*.ts"]
+  "services": ["src/main/services/*.ts"],
+  "schema": "./shared/schema.ts",
+  "migrations": "./kyju"
 }

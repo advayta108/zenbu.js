@@ -80,6 +80,8 @@ export class WindowService extends Service {
   >();
 
   splitRegistration: { name: string; scope: string } | null = null;
+  private _openSplitAll: (() => void) | null = null;
+  private _closeSplitAll: (() => void) | null = null;
 
   registerSplitPanel(opts: { name: string; scope: string }) {
     this.splitRegistration = opts;
@@ -89,6 +91,9 @@ export class WindowService extends Service {
       }
     };
   }
+
+  openSplitAll() { this._openSplitAll?.() }
+  closeSplitAll() { this._closeSplitAll?.() }
 
   async createWindowWithAgent() {
     const { baseWindow, db } = this.ctx;
@@ -724,7 +729,7 @@ export class WindowService extends Service {
           });
           overlay.setBackgroundColor("#00000000");
           const overlayHtml = `<!DOCTYPE html><html><head><style>
-            *{margin:0;padding:0}html,body{height:100%;background:transparent;cursor:col-resize}
+            *{margin:0;padding:0}html,body{height:100%;background:rgba(0,0,0,0.005);cursor:col-resize}
           </style><script>
             document.addEventListener('mouseup',()=>console.log('__split_drag_end__'));
             document.addEventListener('mousemove',e=>{if(e.buttons===0)console.log('__split_drag_end__')},{once:true});
@@ -753,8 +758,10 @@ export class WindowService extends Service {
             const dx = cur.x - startPoint.x;
             const contentWidth = win.getContentBounds().width;
             const newRatio = Math.min(MAX_RATIO, Math.max(MIN_RATIO, startRatio + dx / contentWidth));
-            state.ratio = newRatio;
-            doLayout();
+            if (newRatio !== state.ratio) {
+              state.ratio = newRatio;
+              doLayout();
+            }
           }, 16);
 
           overlay.webContents.on("console-message", (e2) => {
@@ -805,6 +812,13 @@ export class WindowService extends Service {
 
         const { width, height } = win.getContentBounds();
         view.setBounds({ x: 0, y: 0, width, height });
+      };
+
+      this._openSplitAll = () => {
+        for (const windowId of viewEntries.keys()) openSplit(windowId);
+      };
+      this._closeSplitAll = () => {
+        for (const windowId of [...splitPanels.keys()]) closeSplit(windowId);
       };
 
       let currentViewPath =
@@ -1075,6 +1089,8 @@ export class WindowService extends Service {
       return () => {
         unsub();
         this._mountNewWindows = null;
+        this._openSplitAll = null;
+        this._closeSplitAll = null;
         teardownAllViews();
       };
     });

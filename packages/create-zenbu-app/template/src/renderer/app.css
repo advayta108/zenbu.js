@@ -1,3 +1,5 @@
+@import "#zenbu/init/src/renderer/styles/app.css";
+
 * {
   box-sizing: border-box;
 }
