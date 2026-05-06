@@ -28,8 +28,8 @@ export function AgentSidebar({
     <aside
       style={{
         width: 220,
-        background: "var(--zenbu-panel-bg, #0a0a0a)",
-        borderLeft: "1px solid var(--zenbu-panel-border, #1a1a1a)",
+        background: "var(--zenbu-panel)",
+        borderLeft: "1px solid var(--zenbu-panel-border)",
         display: "flex",
         flexDirection: "column",
         overflow: "auto",
@@ -43,7 +43,7 @@ export function AgentSidebar({
           fontWeight: 600,
           textTransform: "uppercase",
           letterSpacing: "0.04em",
-          color: "var(--muted-foreground, #777)",
+          color: "var(--muted-foreground)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
@@ -56,7 +56,7 @@ export function AgentSidebar({
             border: 0,
             background: "transparent",
             cursor: "pointer",
-            color: "var(--muted-foreground, #777)",
+            color: "var(--muted-foreground)",
             fontSize: 16,
             lineHeight: 1,
             padding: 0,
@@ -68,7 +68,7 @@ export function AgentSidebar({
       </div>
       <div style={{ display: "flex", flexDirection: "column", padding: "0 6px 6px" }}>
         {agents.length === 0 && (
-          <div style={{ padding: 12, fontSize: 12, color: "var(--muted-foreground, #777)" }}>
+          <div style={{ padding: 12, fontSize: 12, color: "var(--muted-foreground)" }}>
             No agents yet
           </div>
         )}
@@ -85,9 +85,9 @@ export function AgentSidebar({
                 borderRadius: 6,
                 border: 0,
                 background: active
-                  ? "var(--zenbu-accent, rgba(255,255,255,0.08))"
+                  ? "color-mix(in srgb, var(--foreground) 8%, transparent)"
                   : "transparent",
-                color: "var(--foreground, #e5e5e5)",
+                color: "var(--foreground)",
                 fontSize: 13,
                 cursor: "pointer",
                 marginBottom: 2,

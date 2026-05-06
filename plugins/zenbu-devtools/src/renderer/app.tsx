@@ -22,7 +22,7 @@ export function ShellApp() {
   }, [state, agents, rpc])
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "var(--zenbu-panel-bg, #0a0a0a)" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "var(--zenbu-panel)" }}>
       <Titlebar onToggleSidebar={() => (rpc as any).devtools.toggleSidebar(viewId)} />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <main style={{ flex: 1, minWidth: 0, position: "relative" }}>
@@ -40,7 +40,7 @@ export function ShellApp() {
               display: "grid",
               placeItems: "center",
               height: "100%",
-              color: "var(--muted-foreground, #777)",
+              color: "var(--muted-foreground)",
               fontSize: 13,
             }}>
               No agent selected

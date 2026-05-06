@@ -7,7 +7,7 @@ export function Titlebar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         alignItems: "center",
         justifyContent: "flex-end",
         padding: "0 8px",
-        background: "var(--zenbu-panel-bg, #0a0a0a)",
+        background: "var(--zenbu-panel)",
         flexShrink: 0,
       }}
     >
@@ -22,7 +22,7 @@ export function Titlebar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           cursor: "pointer",
           display: "grid",
           placeItems: "center",
-          color: "var(--muted-foreground, #888)",
+          color: "var(--muted-foreground)",
           padding: 0,
         }}
         title="Toggle agents"
