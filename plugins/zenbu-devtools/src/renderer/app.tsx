@@ -29,7 +29,7 @@ export function ShellApp() {
           {activeAgentId ? (
             <View
               id={`devtools-chat-${activeAgentId}`}
-              scope="chat"
+              scope="devtools-chat"
               props={{ agentId: activeAgentId }}
               persisted
               pinned

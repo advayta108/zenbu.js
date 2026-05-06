@@ -33,6 +33,11 @@ export class DevtoolsService extends Service {
 
     await this.ctx.viewRegistry.register("devtools", viewRoot, configFile)
 
+    const initChatDir = path.resolve(serviceDir, "../../../../../packages/init/src/renderer")
+    const initViteConfig = path.resolve(serviceDir, "../../../../../packages/init/src/renderer/vite.config.ts")
+    const chatEntry = await this.ctx.viewRegistry.register("devtools-chat-server", initChatDir, initViteConfig)
+    this.ctx.viewRegistry.registerAlias("devtools-chat", chatEntry.scope, "/views/chat")
+
     this.setup("split-panel", () => {
       return this.ctx.window.registerSplitPanel({
         name: "Devtools",
