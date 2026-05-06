@@ -926,16 +926,7 @@ export class WindowService extends Service {
     });
 
     this.setup("context-menu", () => {
-      const handler = (
-        _event: Electron.Event,
-        contents: Electron.WebContents,
-      ) => {
-        electronContextMenu({ window: contents, showInspectElement: true });
-      };
-      app.on("web-contents-created", handler);
-      return () => {
-        app.off("web-contents-created", handler);
-      };
+      return electronContextMenu({ showInspectElement: true });
     });
 
     this.setup("dock-menu", () => {
