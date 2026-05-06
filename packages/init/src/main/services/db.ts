@@ -13,6 +13,9 @@ import { Service, runtime } from "../runtime";
 import { trace as traceSpan } from "../../../shared/tracer";
 import { addDb, resolveDbPath } from "../../../shared/db-registry";
 import { HttpService } from "./http";
+import { createLogger } from "../../../shared/log";
+
+const log = createLogger("db");
 
 type EffectSectionProxy<S> = {
   [K in keyof S]: EffectFieldNode<S[K]>;
@@ -139,8 +142,8 @@ export async function discoverSections(
     const raw = await fs.readFile(resolvedConfigPath, "utf8");
     config = parseJsonc(raw) as { plugins: string[] };
   } catch (error) {
-    console.error(
-      `[db] failed to read plugin config at ${resolvedConfigPath}: ${
+    log.error(
+      `failed to read plugin config at ${resolvedConfigPath}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -188,8 +191,8 @@ export async function discoverSections(
         const manifest = JSON.parse(raw);
         pluginName = manifest.name ?? pluginName;
         if (!manifest.name || !manifest.schema) {
-          console.error(
-            `[db] skipping manifest without name/schema: ${manifestPath}`,
+          log.error(
+            `skipping manifest without name/schema: ${manifestPath}`,
           );
           return null;
         }
@@ -249,8 +252,8 @@ export async function discoverSections(
 
                 return { migrations, failed: false as const };
               } catch (error) {
-                console.error(
-                  `[db] failed to load migrations from ${manifestPath}: ${
+                log.error(
+                  `failed to load migrations from ${manifestPath}: ${
                     error instanceof Error ? error.message : String(error)
                   }`,
                 );
@@ -272,16 +275,16 @@ export async function discoverSections(
         const schema =
           schemaResult.schemaModule.schema ?? schemaResult.schemaModule.default;
         if (!schema?.shape) {
-          console.error(
-            `[db] schema module did not export a valid schema: ${schemaResult.schemaPath}`,
+          log.error(
+            `schema module did not export a valid schema: ${schemaResult.schemaPath}`,
           );
           return null;
         }
 
         return { name: manifest.name, schema, migrations: migrationsResult.migrations };
       } catch (error) {
-        console.error(
-          `[db] failed to load section from ${manifestPath}: ${
+        log.error(
+          `failed to load section from ${manifestPath}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -310,8 +313,8 @@ export async function discoverSections(
   const sorted = [...perPluginTimings].sort((a, b) => b.totalMs - a.totalMs);
   const sum = (k: keyof (typeof perPluginTimings)[number]) =>
     perPluginTimings.reduce((acc, p) => acc + (p[k] as number), 0);
-  console.log("[db.discover] per-plugin breakdown (ms, parallel):");
-  console.log(
+  log.verbose("per-plugin breakdown (ms, parallel):");
+  log.verbose(
     `  ${"plugin".padEnd(28)} ${"total".padStart(6)} ${"man".padStart(
       5,
     )} ${"resS".padStart(5)} ${"impS".padStart(6)} ${"resM".padStart(
@@ -319,7 +322,7 @@ export async function discoverSections(
     )} ${"impM".padStart(6)}`,
   );
   for (const p of sorted) {
-    console.log(
+    log.verbose(
       `  ${p.name.padEnd(28)} ${String(p.totalMs).padStart(6)} ${String(
         p.manifestMs,
       ).padStart(5)} ${String(p.resolveSchemaMs).padStart(5)} ${String(
@@ -329,7 +332,7 @@ export async function discoverSections(
       ).padStart(6)}`,
     );
   }
-  console.log(
+  log.verbose(
     `  ${"SUM(cpu)".padEnd(28)} ${String(sum("totalMs")).padStart(6)} ${String(
       sum("manifestMs"),
     ).padStart(5)} ${String(sum("resolveSchemaMs")).padStart(5)} ${String(
@@ -338,7 +341,7 @@ export async function discoverSections(
       sum("importMigrationsMs"),
     ).padStart(6)}`,
   );
-  console.log(
+  log.verbose(
     `  (wall time: look at db.discover-sections span — should be ~max(totalMs) not SUM)`,
   );
 
@@ -402,7 +405,7 @@ export class DbService extends Service {
     try {
       await this.db.flush();
     } catch (err) {
-      console.error("[db] flush failed:", err);
+      log.error("flush failed:", err);
     }
   }
 
@@ -475,10 +478,10 @@ export class DbService extends Service {
       this.sectionsHash = sectionsHash;
       this._dbPath = dbPath;
       addDb(dbPath).catch((err) => {
-        console.error("[db] failed to bump registry lastUsedAt:", err);
+        log.error("failed to bump registry lastUsedAt:", err);
       });
-      console.log(
-        `[db] ready at ${dbPath} (source: ${resolved.source}, sections: ${sections
+      log.verbose(
+        `ready at ${dbPath} (source: ${resolved.source}, sections: ${sections
           .map((s) => `${s.name}@v${s.migrations.length}`)
           .join(", ")})`,
       );

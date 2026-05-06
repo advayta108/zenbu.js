@@ -14,6 +14,9 @@ import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { HttpService } from "./http";
 import { validSelectionFromTemplate } from "../../../shared/agent-ops";
+import { createLogger } from "../../../shared/log";
+
+const log = createLogger("agent");
 
 const DEFAULT_SKILL_ROOT = path.join(
   os.homedir(),
@@ -190,7 +193,7 @@ export class AgentService extends Service {
       if (wasInterrupted) return;
       queueMicrotask(() => {
         this.drainQueueHead(agentId).catch((err) => {
-          console.warn(`[agent ${agentId}] drainQueueHead failed:`, err);
+          log.warn(`drainQueueHead failed for ${agentId}:`, err);
         });
       });
     }
@@ -363,13 +366,13 @@ export class AgentService extends Service {
       if (parsed.ok) {
         await this.setAgentTitle(agentId, { kind: "set", value: parsed.title });
       } else {
-        console.warn(
-          `[agent] title generation failed for ${agentId}: ${parsed.error}`,
+        log.warn(
+          `title generation failed for ${agentId}: ${parsed.error}`,
         );
         await this.setAgentTitle(agentId, { kind: "not-available" });
       }
     } catch (err) {
-      console.error(`[agent] title generation error for ${agentId}:`, err);
+      log.error(`title generation error for ${agentId}:`, err);
       await this.setAgentTitle(agentId, { kind: "not-available" });
     }
   }
@@ -431,7 +434,7 @@ export class AgentService extends Service {
 
     if (isFirstMessage && text) {
       this.generateTitle(agentId, text).catch((err) => {
-        console.error(`[agent] background title generation failed:`, err);
+        log.error(`background title generation failed:`, err);
       });
     }
 
@@ -502,7 +505,7 @@ export class AgentService extends Service {
     if (!agent) {
       await reconcileAgentDbProcessState(this.agentDb(), this.processes.keys())
         .catch((err) => {
-          console.warn("[agent] interrupt reconcile failed:", err);
+          log.warn("interrupt reconcile failed:", err);
         });
       if (text) {
         await this.appendUserPrompt(agentId, text);
@@ -567,14 +570,14 @@ export class AgentService extends Service {
       try {
         await process.changeStartCommand(command, args);
       } catch (err) {
-        console.error(`[agent] changeStartCommand failed for ${agentId}:`, err);
+        log.error(`changeStartCommand failed for ${agentId}:`, err);
         await this.markProcessErrored(agentId);
       }
     } else {
       try {
         await this.ensureProcess(agentId);
       } catch (err) {
-        console.error(`[agent] ensureProcess failed for ${agentId}:`, err);
+        log.error(`ensureProcess failed for ${agentId}:`, err);
         await this.markProcessErrored(agentId);
       }
     }
@@ -741,7 +744,7 @@ export class AgentService extends Service {
       this.agentDb(),
       this.processes.keys(),
     ).catch((err) => {
-      console.warn("[agent] startup process-state reconcile failed:", err);
+      log.warn("startup process-state reconcile failed:", err);
     });
 
     this.setup("agent-cleanup", () => {
@@ -761,18 +764,18 @@ export class AgentService extends Service {
           const record = kernel.agents.find((a) => a.id === agentId);
           const mode = record?.reloadMode ?? "keep-alive";
           if (mode === "keep-alive") {
-            console.log(`[agent] keeping ${agentId} alive across reload`);
+            log.verbose(`keeping ${agentId} alive across reload`);
             continue;
           }
           const state = agent.getState();
           if (state.kind === "prompting") {
-            console.log(
-              `[agent] marking ${agentId} for auto-continue (was prompting)`,
+            log.verbose(
+              `marking ${agentId} for auto-continue (was prompting)`,
             );
             this.pendingContinues.add(agentId);
           } else {
-            console.log(
-              `[agent] skipping auto-continue for ${agentId} (state: ${state.kind})`,
+            log.verbose(
+              `skipping auto-continue for ${agentId} (state: ${state.kind})`,
             );
           }
           await agent.close().catch(() => {});
@@ -787,29 +790,29 @@ export class AgentService extends Service {
     this.pendingContinues.clear();
 
     if (pending.length > 0) {
-      console.log(
-        `[agent] auto-continuing ${pending.length} agent(s):`,
+      log.verbose(
+        `auto-continuing ${pending.length} agent(s):`,
 
         pending,
       );
       Promise.all(
         pending.map(async (agentId) => {
-          console.log(`[agent] auto-continue starting for ${agentId}`);
+          log.verbose(`auto-continue starting for ${agentId}`);
           try {
             await this.appendUserPrompt(agentId, "continue");
-            console.log(
-              `[agent] auto-continue appended user prompt for ${agentId}`,
+            log.verbose(
+              `auto-continue appended user prompt for ${agentId}`,
             );
             await this.send(agentId, "continue");
-            console.log(`[agent] auto-continue sent for ${agentId}`);
+            log.verbose(`auto-continue sent for ${agentId}`);
           } catch (e) {
-            console.error(`[agent] auto-continue failed for ${agentId}:`, e);
+            log.error(`auto-continue failed for ${agentId}:`, e);
           }
         }),
       );
     }
 
-    console.log(`[agent] service ready (${this.processes.size} processes)`);
+    log.verbose(`service ready (${this.processes.size} processes)`);
   }
 }
 

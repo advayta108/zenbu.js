@@ -9,7 +9,10 @@ import {
   makeViewAppState,
 } from "../../../shared/agent-ops";
 import { appendTokenToEditorState } from "../../../shared/editor-state";
+import { createLogger } from "../../../shared/log";
 import type { TokenPayload } from "../../../shared/tokens";
+
+const log = createLogger("insert");
 
 export type InsertTokenResult = {
   delivered: "live" | "persisted";
@@ -104,7 +107,7 @@ export class InsertService extends Service {
         k.viewState = { ...k.viewState, [args.viewId]: next };
       }),
     ).catch((err) => {
-      console.error("[insert] persist failed:", err);
+      log.error("persist failed:", err);
     });
 
     return { delivered: "persisted" };
@@ -165,14 +168,14 @@ export class InsertService extends Service {
         k.viewState = { ...k.viewState, [view.id]: next };
       }),
     ).catch((err) => {
-      console.error("[insert] insertTokenForAgent persist failed:", err);
+      log.error("insertTokenForAgent persist failed:", err);
       ok = false;
     });
     return { ok };
   }
 
   evaluate() {
-    console.log("[insert] service ready");
+    log.verbose("service ready");
   }
 }
 

@@ -15,7 +15,11 @@ import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid";
 import { makeCollection } from "@zenbu/kyju/schema";
 import electronContextMenu from "electron-context-menu";
+import { createLogger } from "../../../shared/log";
 import { Service, runtime } from "../runtime";
+
+const log = createLogger("window");
+const zenbuLog = createLogger("zenbu");
 import { DbService } from "./db";
 import { HttpService } from "./http";
 import { CoreRendererService } from "./core-renderer";
@@ -645,26 +649,26 @@ export class WindowService extends Service {
       let currentViewPath =
         db.effectClient.readRoot().plugin.kernel.orchestratorViewPath ??
         DEFAULT_VIEW_PATH;
-      console.log("[window] currentViewPath:", currentViewPath);
-      console.log("[window] boot windows:", (globalThis as any).__zenbu_boot_windows__?.length ?? 0);
-      console.log("[window] baseWindow windows:", baseWindow.windows.size);
+      log.verbose("currentViewPath:", currentViewPath);
+      log.verbose("boot windows:", (globalThis as any).__zenbu_boot_windows__?.length ?? 0);
+      log.verbose("baseWindow windows:", baseWindow.windows.size);
 
       const attachView = (
         windowId: string,
         win: Electron.BaseWindow,
         viewPath: string,
       ) => {
-        console.log("[window] attachView:", windowId, viewPath);
+        const partition = (globalThis as any).__zenbu_renderer_partition__ ?? "persist:renderer";
         const view = new WebContentsView({
           webPreferences: {
             sandbox: true,
             contextIsolation: true,
             nodeIntegration: false,
-            partition: "persist:renderer",
+            partition,
           },
         });
 
-        view.setBackgroundColor("#F4F4F4");
+        view.setBackgroundColor("#000000");
 
         // If the kernel pre-populated this window with a loading view, keep it
         // on top and add the orchestrator beneath (index 0 = bottom of stack).
@@ -677,6 +681,10 @@ export class WindowService extends Service {
           win.contentView.addChildView(view, 0);
         } else {
           win.contentView.addChildView(view);
+          view.webContents.once("did-finish-load", () => {
+            if (!win.isDestroyed() && !win.isVisible()) win.show();
+            bootBus.emit("ready", { windowId });
+          });
         }
 
         const layout = () => {
@@ -709,7 +717,7 @@ export class WindowService extends Service {
                 loadingView.webContents.close();
               }
             } catch (err) {
-              console.warn("[window] loading view swap failed:", err);
+              log.warn("loading view swap failed:", err);
             }
             (win as any).__zenbu_loading_view__ = null;
             bootBus.emit("ready", { windowId });
@@ -718,8 +726,8 @@ export class WindowService extends Service {
           // Failsafe: if the orchestrator errors out, still swap so the user
           // isn't stuck staring at the loading spinner forever.
           view.webContents.once("did-fail-load", (_e, code, desc) => {
-            console.error(
-              `[window] orchestrator failed to load (${code}): ${desc}`,
+            log.error(
+              `orchestrator failed to load (${code}): ${desc}`,
             );
             swap();
           });
@@ -761,7 +769,7 @@ export class WindowService extends Service {
         }
         mark("orchestrator-load-start", { windowId });
         if (windowId === MAIN_WINDOW_ID) {
-          console.log(`[zenbu] open in browser: ${url}`);
+          zenbuLog.verbose(`open in browser: ${url}`);
         }
         view.webContents.loadURL(url);
 
@@ -1018,7 +1026,7 @@ export class WindowService extends Service {
       };
     });
 
-    console.log(`[window] service ready (${baseWindow.windows.size} windows)`);
+    log.verbose(`service ready (${baseWindow.windows.size} windows)`);
   }
 }
 

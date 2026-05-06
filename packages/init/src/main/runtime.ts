@@ -19,7 +19,6 @@ interface ServiceSlot {
   status: "blocked" | "evaluating" | "ready" | "failed"
 }
 
-console.log("[kernel] runtime edit check")
 
 type DepRef = typeof Service | string
 type OptionalDep = { __optional: true; ref: DepRef }
@@ -451,11 +450,8 @@ export class ServiceRuntime {
       slot.status = "ready"
       if (!wasReady) {
         const endedAt = Date.now()
-        bootBus.emit("service:end", {
-          key,
-          at: endedAt,
-          durationMs: endedAt - startedAt,
-        })
+        const durationMs = endedAt - startedAt
+        bootBus.emit("service:end", { key, at: endedAt, durationMs })
       }
     } catch (e) {
       slot.status = "failed"

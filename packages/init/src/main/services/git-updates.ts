@@ -53,8 +53,8 @@ const BUN_BIN = path.join(
 )
 
 /**
- * Prefer `~/.zenbu/config.jsonc` if present (supports comments + trailing
- * commas), fall back to `config.json`. Mirrors `installer.ts`'s lookup.
+ * Prefer config.jsonc if present (supports comments + trailing
+ * commas), fall back to config.json. Mirrors installer.ts lookup.
  */
 async function resolveConfigPath(): Promise<string> {
   if (process.env.ZENBU_CONFIG_PATH) return process.env.ZENBU_CONFIG_PATH

@@ -1,4 +1,4 @@
-process.on("uncaughtException", (err) => { if (err.code === "EPIPE") return; console.error?.("[runtime] uncaught:", err); });
+process.on("uncaughtException", (err) => { if (err.code === "EPIPE") return; console.error?.("[boot] uncaught:", err); });
 process.stdout?.on?.("error", () => {});
 process.stderr?.on?.("error", () => {});
 
@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { register as registerLoader } from "node:module";
-import { app, BaseWindow, WebContentsView, ipcMain } from "electron";
+import { app, BaseWindow, WebContentsView, ipcMain, session } from "electron";
 import { bootstrapEnv } from "./env-bootstrap.mjs";
 import { updater } from "./updater.mjs";
 
@@ -53,14 +53,14 @@ function resolveProjectDir() {
 function resolveManifest(projectDir) {
   const manifest = path.join(projectDir, "zenbu.plugin.json");
   if (fs.existsSync(manifest)) return manifest;
-  console.error(`[runtime] zenbu.plugin.json not found in ${projectDir}`);
+    console.error(`[boot] zenbu.plugin.json not found in ${projectDir}`);
   process.exit(1);
 }
 
 function resolveProjectConfig(projectDir) {
   const configPath = path.join(projectDir, "config.json");
   if (!fs.existsSync(configPath)) {
-    console.error(`[runtime] config.json not found in ${projectDir}`);
+    console.error(`[boot] config.json not found in ${projectDir}`);
     process.exit(1);
   }
   return configPath;
@@ -81,7 +81,8 @@ ipcMain.handle("zenbu:updater:download-and-install", async (event) => {
 
 app.whenReady().then(async () => {
   try {
-    console.log("[runtime] booting...");
+    const verbose = process.env.ZENBU_VERBOSE === "1";
+    console.log("[boot] starting...");
 
     bootstrapEnv();
 
@@ -101,9 +102,11 @@ app.whenReady().then(async () => {
       ? `${zenbuNodeModules}${path.delimiter}${existing}`
       : zenbuNodeModules;
 
-    console.log("[runtime] project:", projectDir);
-    console.log("[runtime] manifest:", manifestPath);
-    console.log("[runtime] packages:", packagesDir);
+    if (verbose) {
+      console.log("[boot] project:", projectDir);
+      console.log("[boot] manifest:", manifestPath);
+      console.log("[boot] packages:", packagesDir);
+    }
 
     const zenbuLoaderPath = pathToFileURL(
       path.join(__dirname, "zenbu-loader-hooks.js"),
@@ -139,31 +142,48 @@ app.whenReady().then(async () => {
     );
     registerDynohot({ ignore: /[/\\]node_modules[/\\]/ });
 
+    const loadingHtmlPath = path.join(projectDir, "loading.html");
+    const hasLoadingPage = fs.existsSync(loadingHtmlPath);
+
     const bootWindow = new BaseWindow({
       width: 900,
       height: 700,
-      show: true,
+      show: hasLoadingPage,
       titleBarStyle: "hidden",
       trafficLightPosition: { x: 12, y: 10 },
-      backgroundColor: "#F4F4F4",
+      backgroundColor: "#000000",
     });
-    const loadingView = new WebContentsView({
-      webPreferences: { nodeIntegration: true, contextIsolation: false },
-    });
-    loadingView.setBackgroundColor("#F4F4F4");
-    bootWindow.contentView.addChildView(loadingView);
-    const layoutView = () => {
-      const { width, height } = bootWindow.getContentBounds();
-      loadingView.setBounds({ x: 0, y: 0, width, height });
-    };
-    layoutView();
-    bootWindow.on("resize", layoutView);
-    bootWindow.__zenbu_loading_view__ = loadingView;
+
+    if (hasLoadingPage) {
+      const loadingView = new WebContentsView({
+        webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
+      });
+      loadingView.setBackgroundColor("#000000");
+      bootWindow.contentView.addChildView(loadingView);
+      const layoutView = () => {
+        const { width, height } = bootWindow.getContentBounds();
+        loadingView.setBounds({ x: 0, y: 0, width, height });
+      };
+      layoutView();
+      bootWindow.on("resize", layoutView);
+      loadingView.webContents.loadFile(loadingHtmlPath);
+      bootWindow.__zenbu_loading_view__ = loadingView;
+    }
 
     globalThis.__zenbu_boot_windows__ = [{ windowId: "main", win: bootWindow }];
 
+    const appSlug = path.basename(projectDir);
+    const rendererPartition = `persist:renderer-${appSlug}`;
+    globalThis.__zenbu_renderer_partition__ = rendererPartition;
+
+    // Clear ServiceWorker storage for the renderer partition to prevent
+    // corrupt SW databases from blocking navigation (~1s stall).
+    session.fromPartition(rendererPartition).clearStorageData({
+      storages: ["serviceworkers"],
+    }).catch(() => {});
+
     process.chdir(projectRoot);
-    console.log("[runtime] cwd:", process.cwd());
+    if (verbose) console.log("[boot] cwd:", process.cwd());
 
     if (!process.argv.some((a) => a.startsWith("--zen-cwd="))) {
       process.argv.push(`--zen-cwd=${projectDir}`);
@@ -173,7 +193,7 @@ app.whenReady().then(async () => {
     process.env.ZENBU_CONFIG_PATH = configPath;
 
     const url = `zenbu:plugins?config=${encodeURIComponent(configPath)}`;
-    console.log("[runtime] loading plugins from:", configPath);
+    if (verbose) console.log("[boot] loading plugins from:", configPath);
 
     const mod = await import(url, { with: { hot: "import" } });
     if (typeof mod.default === "function") {
@@ -185,13 +205,13 @@ app.whenReady().then(async () => {
 
     const runtime = globalThis.__zenbu_service_runtime__;
     if (runtime) {
-      console.log("[runtime] draining services...");
+      if (verbose) console.log("[boot] draining services...");
       await runtime.whenIdle();
     } else {
-      console.log("[runtime] warning: no service runtime found");
+      console.warn("[boot] no service runtime found");
     }
 
-    console.log("[runtime] boot complete");
+    console.log("[boot] ready");
 
     let shutdownState = "idle";
     app.on("before-quit", (e) => {
@@ -200,10 +220,10 @@ app.whenReady().then(async () => {
       if (shutdownState === "running") return;
       shutdownState = "running";
 
-      console.log("[runtime] shutting down...");
+      console.log("[boot] shutting down...");
 
       const hardKillTimer = setTimeout(() => {
-        console.warn("[runtime] shutdown timed out — forcing SIGKILL");
+        console.warn("[boot] shutdown timed out — forcing SIGKILL");
         process.kill(process.pid, "SIGKILL");
       }, 2000);
 
@@ -221,7 +241,7 @@ app.whenReady().then(async () => {
           const { closeAllWatchers } = await import(dynohotPausePath);
           await closeAllWatchers();
         } catch (err) {
-          console.error("[runtime] closeAllWatchers failed:", err);
+          console.error("[boot] closeAllWatchers failed:", err);
         }
         process.kill(process.pid, "SIGKILL");
       };
@@ -234,7 +254,7 @@ app.whenReady().then(async () => {
             return finalize();
           })
           .catch((err) => {
-            console.error("[runtime] shutdown failed:", err);
+            console.error("[boot] shutdown failed:", err);
             clearTimeout(hardKillTimer);
             finalize();
           });
@@ -244,7 +264,7 @@ app.whenReady().then(async () => {
       }
     });
   } catch (error) {
-    console.error("[runtime] failed to start:", error);
+    console.error("[boot] failed to start:", error);
     app.exit(1);
   }
 });

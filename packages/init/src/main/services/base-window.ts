@@ -2,6 +2,9 @@ import { BaseWindow } from "electron"
 import { nanoid } from "nanoid"
 import { Service, runtime } from "../runtime"
 import { MAIN_WINDOW_ID } from "../../../shared/schema"
+import { createLogger } from "../../../shared/log"
+
+const log = createLogger("base-window")
 
 type WindowBounds = { x: number; y: number; width: number; height: number }
 type SavedWindow = { windowId: string; bounds: WindowBounds }
@@ -94,7 +97,7 @@ export class BaseWindowService extends Service {
     })
     // 
 
-    console.log(`[base-window] ready (${this.windows.size} windows)`)
+    log.verbose(`ready (${this.windows.size} windows)`)
   }
 }
 

@@ -4,7 +4,10 @@ import { nanoid } from "nanoid"
 import { Service, runtime } from "../runtime"
 import { ServerService } from "./server"
 import { ReloaderService } from "./reloader"
+import { createLogger } from "../../../shared/log"
 import type { Duplex } from "stream"
+
+const log = createLogger("http")
 
 type ConnectedCallback = (id: string, ws: WebSocket) => void
 type DisconnectedCallback = (id: string) => void
@@ -145,7 +148,7 @@ export class HttpService extends Service {
       }
     })
 
-    console.log(`[http] service ready on port ${this.port}`)
+    log.verbose(`service ready on port ${this.port}`)
   }
 }
 

@@ -2,6 +2,9 @@ import fsp from "node:fs/promises"
 import path from "node:path"
 import { session, net } from "electron"
 import { Service, runtime } from "../runtime"
+import { createLogger } from "../../../shared/log"
+
+const log = createLogger("local-file-protocol")
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -58,7 +61,7 @@ export class LocalFileProtocolService extends Service {
         })
       })
 
-      console.log(`[local-file-protocol] registered "${scheme}://" protocol`)
+      log.verbose(`registered "${scheme}://" protocol`)
 
       return () => {
         try {

@@ -4,6 +4,8 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
 
+const _verbose = process.env.ZENBU_VERBOSE === "1"
+
 const _runtimeDir = path.dirname(new URL(import.meta.url).pathname)
 const _require = createRequire(path.join(_runtimeDir, "package.json"))
 const { subscribe } = _require("@parcel/watcher")
@@ -112,7 +114,7 @@ function handleDirEvent(dir, filename) {
       glob.snapshot = nextSnapshot
       try {
         entry.hot?.invalidate?.()
-        console.log(`[zenbu-loader] invalidated barrel (${filename} added/removed in ${dir})`)
+        if (_verbose) console.log(`[zenbu-loader] invalidated barrel (${filename} added/removed in ${dir})`)
       } catch (err) {
         console.error("[zenbu-loader] invalidate failed:", err)
       }
@@ -235,7 +237,7 @@ function loadImpl(url, context, nextLoad) {
         context.hot.watch(pathToFileURL(watchPath))
       }
     }
-    console.log(`[zenbu-loader] generated plugin root for ${path.basename(configPath)} (${source.split("\n").filter(Boolean).length} imports, ${watchPaths.size} watches)`)
+    if (_verbose) console.log(`[zenbu-loader] generated plugin root for ${path.basename(configPath)} (${source.split("\n").filter(Boolean).length} imports, ${watchPaths.size} watches)`)
     return { format: "module", source, shortCircuit: true }
   }
 
@@ -254,7 +256,7 @@ function loadImpl(url, context, nextLoad) {
         ensureDirWatcher(glob.dir)
       }
     }
-    console.log(`[zenbu-loader] generated barrel for ${path.basename(manifestPath)} (${source.split("\n").filter(Boolean).length} imports, ${watchPaths.size} watches, ${globs.length} globs)`)
+    if (_verbose) console.log(`[zenbu-loader] generated barrel for ${path.basename(manifestPath)} (${source.split("\n").filter(Boolean).length} imports, ${watchPaths.size} watches, ${globs.length} globs)`)
     return { format: "module", source, shortCircuit: true }
   }
   return nextLoad(url, context)
@@ -262,7 +264,6 @@ function loadImpl(url, context, nextLoad) {
 
 export function load(url, context, nextLoad) {
   const start = Date.now()
-  try { fs.appendFileSync(path.join(os.tmpdir(), "zenbu-loaded-urls.txt"), url + "\n") } catch {}
   try {
     return loadImpl(url, context, nextLoad)
   } finally {
@@ -270,3 +271,4 @@ export function load(url, context, nextLoad) {
     stats.loadMs += Date.now() - start
   }
 }
+

@@ -5,6 +5,9 @@ import * as Effect from "effect/Effect";
 import { Service, runtime } from "../runtime";
 import { ReloaderService, type ReloaderEntry } from "./reloader";
 import { DbService } from "./db";
+import { createLogger } from "../../../shared/log";
+
+const log = createLogger("view-registry");
 
 interface ViewEntry {
   scope: string;
@@ -38,20 +41,20 @@ export class ViewRegistryService extends Service {
       label?: string;
     },
   ): Promise<ViewEntry> {
-    console.log(`[view-registry] register("${scope}", root="${root}", config="${configFile}")`);
+    log.verbose(`register("${scope}", root="${root}", config="${configFile}")`);
     const existing = this.views.get(scope);
     if (existing) {
-      console.log(`[view-registry] "${scope}" already exists at ${existing.url}`);
+      log.verbose(`"${scope}" already exists at ${existing.url}`);
       return existing;
     }
 
-    console.log(`[view-registry] creating reloader for "${scope}"...`);
+    log.verbose(`creating reloader for "${scope}"...`);
     const reloaderEntry = await this.ctx.reloader.create(
       scope,
       root,
       configFile,
     );
-    console.log(`[view-registry] reloader created: ${reloaderEntry.url} (port ${reloaderEntry.port})`);
+    log.verbose(`reloader created: ${reloaderEntry.url} (port ${reloaderEntry.port})`);
     const entry: ViewEntry = {
       scope,
       url: reloaderEntry.url,
@@ -61,7 +64,7 @@ export class ViewRegistryService extends Service {
     };
     this.views.set(scope, entry);
     await this.syncToDb();
-    console.log(`[view-registry] "${scope}" registered at ${entry.url}`);
+    log.verbose(`"${scope}" registered at ${entry.url}`);
     return entry;
   }
 

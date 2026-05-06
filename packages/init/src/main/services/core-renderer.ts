@@ -5,6 +5,9 @@ import { Service, runtime } from "../runtime"
 import { ReloaderService } from "./reloader"
 import { DbService } from "./db"
 import { mark } from "../../../shared/tracer"
+import { createLogger } from "../../../shared/log"
+
+const log = createLogger("core-renderer")
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -30,7 +33,7 @@ async function resolveRendererRoot(): Promise<{ rendererRoot: string; configFile
           try { await fsp.access(viteConfig); cf = viteConfig } catch {}
           try { await fsp.access(rendererDir) } catch { continue }
 
-          console.log(`[core-renderer] using project renderer: ${rendererDir}`)
+          log.verbose(`using project renderer: ${rendererDir}`)
           return { rendererRoot: rendererDir, configFile: cf }
         } catch { continue }
       }
@@ -42,7 +45,7 @@ async function resolveRendererRoot(): Promise<{ rendererRoot: string; configFile
       try { await fsp.access(viteConfig); cf = viteConfig } catch {}
       try {
         await fsp.access(rendererDir)
-        console.log(`[core-renderer] using default project renderer: ${rendererDir}`)
+        log.verbose(`using default project renderer: ${rendererDir}`)
         return { rendererRoot: rendererDir, configFile: cf }
       } catch {}
     } catch {}
@@ -78,7 +81,7 @@ export class CoreRendererService extends Service {
     }
 
     mark("vite-ready", { url: this.url })
-    console.log(`[core-renderer] ready at ${this.url}`)
+    log.verbose(`ready at ${this.url}`)
   }
 }
 

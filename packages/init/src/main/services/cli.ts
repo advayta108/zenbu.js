@@ -9,6 +9,9 @@ import { RpcService } from "./rpc";
 import { INTERNAL_DIR, RUNTIME_JSON } from "../../../shared/paths";
 import { MAIN_WINDOW_ID } from "../../../shared/schema";
 import { makeWindowAppState } from "../../../shared/agent-ops";
+import { createLogger } from "../../../shared/log";
+
+const log = createLogger("cli");
 
 export type WindowMode = "default" | "reuse" | "new";
 
@@ -172,7 +175,7 @@ export class CliService extends Service {
 
   evaluate() {
     this.writeRuntimeJson().catch((err) => {
-      console.error("[cli] writeRuntimeJson failed:", err);
+      log.error("writeRuntimeJson failed:", err);
     });
     this.setup("runtime-json-cleanup", () => {
       return async () => {
@@ -181,7 +184,7 @@ export class CliService extends Service {
         } catch {}
       };
     });
-    console.log("[cli] service ready");
+    log.verbose("service ready");
   }
 }
 

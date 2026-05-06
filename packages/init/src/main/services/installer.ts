@@ -3,6 +3,9 @@ import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { Service, runtime } from "../runtime"
+import { createLogger } from "../../../shared/log"
+
+const log = createLogger("installer")
 
 type InstalledPlugin = {
   manifestPath: string
@@ -200,7 +203,7 @@ export class InstallerService extends Service {
 
   evaluate() {
     this.initState().catch((err) => {
-      console.error("[installer] init failed:", err)
+      log.error("init failed:", err)
     })
   }
 
@@ -221,7 +224,7 @@ export class InstallerService extends Service {
     this.needsSetup =
       this.pluginRoot !== "" &&
       !(await pathExists(path.join(this.pluginRoot, "node_modules")))
-    console.log(`[installer] service ready (needsSetup: ${this.needsSetup}, root: ${this.pluginRoot})`)
+    log.verbose(`service ready (needsSetup: ${this.needsSetup}, root: ${this.pluginRoot})`)
   }
 
   getPluginRoot(): string {

@@ -1,7 +1,10 @@
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Service, runtime } from "../runtime"
+import { createLogger } from "../../../shared/log"
 import { registerContentScript } from "./advice-config"
+
+const log = createLogger("drag-region")
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SCRIPT_PATH = path.resolve(
@@ -30,7 +33,7 @@ export class DragRegionService extends Service {
     this.setup("register-content-script", () =>
       registerContentScript("*", SCRIPT_PATH),
     )
-    console.log(`[drag-region] content script registered: ${SCRIPT_PATH}`)
+    log.verbose(`content script registered: ${SCRIPT_PATH}`)
   }
 }
 

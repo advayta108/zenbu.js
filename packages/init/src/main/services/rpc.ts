@@ -3,7 +3,10 @@ import { createServer, createRpcRouter } from "@zenbu/zenrpc";
 import type { AnyRouter } from "@zenbu/zenrpc";
 import { Service, runtime } from "../runtime";
 import { HttpService } from "./http";
+import { createLogger } from "../../../shared/log";
 import type { PluginEvents } from "#registry/events";
+
+const log = createLogger("rpc");
 /**
  * not great come back to this
  */
@@ -91,7 +94,7 @@ export class RpcService extends Service {
       };
     });
 
-    console.log("[rpc] service ready");
+    log.verbose("service ready");
   }
 }
 

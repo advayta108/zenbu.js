@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url"
 import { createServer as createNetServer } from "node:net"
 import { Service, runtime } from "../runtime"
 import { INTERNAL_DIR } from "../../../shared/paths"
+import { createLogger } from "../../../shared/log"
+
+const log = createLogger("reloader")
 
 interface RendererServerOptions {
   id: string
@@ -67,9 +70,8 @@ async function warmupRendererEntrypoints(server: ViteDevServer, root: string): P
   try {
     const urls = await rendererWarmupUrls(root)
     await Promise.all(urls.map((url) => server.warmupRequest(url)))
-    await server.waitForRequestsIdle()
   } catch (e) {
-    console.warn("[reloader] renderer warmup failed:", e)
+    log.warn("renderer warmup failed:", e)
   }
 }
 
@@ -85,11 +87,6 @@ function getEphemeralPort(): Promise<number> {
 }
 
 async function startRendererServer(options: RendererServerOptions): Promise<ViteDevServer> {
-  // Vite plugins (theme/advice/react/tailwind) are injected by
-  // `defineZenbuViewConfig` in each renderer's vite.config.ts. This
-  // function only handles per-renderer runtime config (port, cacheDir,
-  // fs.strict). Renderers without a config file are vanilla — used for
-  // ad-hoc cases that don't need the full plugin stack.
   let server: ViteDevServer
 
   const port = options.port || await getEphemeralPort()
@@ -176,7 +173,7 @@ export class ReloaderService extends Service {
     const port = typeof address === "object" && address ? address.port : 5173
     const entry: ReloaderEntry = { id, root, url: `http://localhost:${port}`, port, viteServer }
     this.servers.set(id, entry)
-    console.log(`[reloader] ${id} ready at ${entry.url}`)
+    log.verbose(`${id} ready at ${entry.url}`)
     return entry
   }
 
@@ -208,8 +205,8 @@ export class ReloaderService extends Service {
         )
         results.forEach((res, i) => {
           if (res.status === "rejected") {
-            console.error(
-              `[reloader] viteServer.close failed for ${entries[i].id}:`,
+            log.error(
+              `viteServer.close failed for ${entries[i].id}:`,
               res.reason,
             )
           }
@@ -217,7 +214,7 @@ export class ReloaderService extends Service {
       }
     })
 
-    console.log(`[reloader] service ready (${this.servers.size} servers)`)
+    log.verbose(`service ready (${this.servers.size} servers)`)
   }
 }
 

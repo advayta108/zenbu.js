@@ -2,6 +2,9 @@ import http from "node:http"
 import { randomBytes, timingSafeEqual } from "node:crypto"
 import { WebSocketServer } from "ws"
 import { Service, runtime } from "../runtime"
+import { createLogger } from "../../../shared/log"
+
+const log = createLogger("server")
 
 type UpgradeHandler = (req: http.IncomingMessage, socket: import("stream").Duplex, head: Buffer) => boolean
 
@@ -43,7 +46,7 @@ export class ServerService extends Service {
           resolve(typeof addr === "object" && addr ? addr.port : 0)
         })
       })
-      console.log(`[server] listening on port ${this.port}`)
+      log.verbose(`listening on port ${this.port}`)
     }
 
     this.setup("server-cleanup", () => {

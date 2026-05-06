@@ -6,6 +6,9 @@ import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { RpcService } from "./rpc";
 import { registerContentScript } from "./advice-config";
+import { createLogger } from "../../../shared/log";
+
+const log = createLogger("shortcut");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CAPTURE_SCRIPT_PATH = path.resolve(
@@ -126,8 +129,8 @@ export class ShortcutService extends Service {
     };
     this.entries.set(def.id, entry);
     void this.syncRegistryToDb();
-    console.log(
-      `[shortcut] registered "${entry.id}" (${entry.defaultBinding}) scope=${
+    log.verbose(
+      `registered "${entry.id}" (${entry.defaultBinding}) scope=${
         entry.scope
       }${captureAtWebContents ? " [wc-capture]" : ""}`,
     );
@@ -135,7 +138,7 @@ export class ShortcutService extends Service {
       if (this.entries.get(def.id) === entry) {
         this.entries.delete(def.id);
         void this.syncRegistryToDb();
-        console.log(`[shortcut] unregistered "${def.id}"`);
+        log.verbose(`unregistered "${def.id}"`);
       }
     };
   }
@@ -217,8 +220,8 @@ export class ShortcutService extends Service {
     const entry = this.entries.get(id);
     const effectiveScope = entry?.scope ?? scope ?? "global";
     const originScope = scope ?? effectiveScope;
-    console.log(
-      `[shortcut] dispatch "${id}" scope=${effectiveScope} origin=${originScope} windowId=${windowId}`,
+    log.verbose(
+      `dispatch "${id}" scope=${effectiveScope} origin=${originScope} windowId=${windowId}`,
     );
 
     const ctx: DispatchContext = {
@@ -232,7 +235,7 @@ export class ShortcutService extends Service {
       try {
         await entry.handler(ctx);
       } catch (err) {
-        console.error(`[shortcut] handler for "${id}" threw:`, err);
+        log.error(`handler for "${id}" threw:`, err);
       }
     }
 
@@ -245,7 +248,7 @@ export class ShortcutService extends Service {
         ts: Date.now(),
       });
     } catch (err) {
-      console.error(`[shortcut] emit failed for "${id}":`, err);
+      log.error(`emit failed for "${id}":`, err);
     }
 
     return { ok: true };
@@ -269,8 +272,8 @@ export class ShortcutService extends Service {
 
     this.setup("content-script", () => {
       const remove = registerContentScript("*", CAPTURE_SCRIPT_PATH);
-      console.log(
-        "[shortcut] registered capture content script:",
+      log.verbose(
+        "registered capture content script:",
         CAPTURE_SCRIPT_PATH,
       );
       return remove;
@@ -337,7 +340,7 @@ export class ShortcutService extends Service {
         root.plugin.kernel.shortcutRegistry = snapshot;
       }),
     ).catch((err) => {
-      console.error("[shortcut] failed to sync registry to db:", err);
+      log.error("failed to sync registry to db:", err);
     });
   }
 }

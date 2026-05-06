@@ -2,6 +2,9 @@ import fs from "node:fs"
 import fsp from "node:fs/promises"
 import path from "node:path"
 import { Service, runtime } from "../runtime"
+import { createLogger } from "../../../shared/log"
+
+const log = createLogger("file-scanner")
 
 type FileEntry = { path: string; name: string }
 
@@ -75,7 +78,7 @@ export class FileScannerService extends Service {
       }
     })
 
-    console.log(`[file-scanner] service ready`)
+    log.verbose(`service ready`)
   }
 
   private getOrCreateCache(cwd: string): CwdCache {

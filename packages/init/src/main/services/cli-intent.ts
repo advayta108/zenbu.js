@@ -3,6 +3,9 @@ import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { MAIN_WINDOW_ID } from "../../../shared/schema";
 import { makeWindowAppState } from "../../../shared/agent-ops";
+import { createLogger } from "../../../shared/log";
+
+const log = createLogger("cli-intent");
 
 export class CliIntentService extends Service {
   static key = "cli-intent";
@@ -57,8 +60,8 @@ export class CliIntentService extends Service {
             for (const id of droppedViewIds) delete nextViewState[id];
             kernel.viewState = nextViewState;
           }
-          console.log(
-            `[cli-intent] pruned ${prunedWindows.length} orphaned windows`,
+          log.verbose(
+            `pruned ${prunedWindows.length} orphaned windows`,
           );
         }
 
@@ -106,10 +109,10 @@ export class CliIntentService extends Service {
         }
       }),
     ).catch((err) => {
-      console.error("[cli-intent] Failed to apply CLI intent:", err);
+      log.error("Failed to apply CLI intent:", err);
     });
 
-    console.log("[cli-intent] applied");
+    log.verbose("applied");
   }
 }
 
