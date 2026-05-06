@@ -1,0 +1,10 @@
+{
+  "name": "zenbu-devtools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "nanoid": "^5.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}
