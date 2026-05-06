@@ -28,7 +28,7 @@ import {
 // What gets injected (every renderer, no opt-out):
 //   - @vitejs/plugin-react       (JSX + React Fast Refresh)
 //   - @tailwindcss/vite          (Tailwind v4 utility extraction)
-//   - themeStylesheetPlugin      (global.css + workspace.css link tags)
+//   - themeStylesheetPlugin      (global.css link tag)
 //   - advicePreludePlugin        (per-iframe advice/content-script prelude)
 //   - resolveAdviceRuntime       (alias `@zenbu/advice/runtime` to source)
 //   - zenbuAdviceTransform       (babel transform wrapping top-level fns
@@ -51,8 +51,7 @@ import {
 // CSS contract (plugins follow this in their app.css):
 //   @import "#zenbu/init/src/renderer/styles/app.css";
 // inherits Tailwind v4 + shadcn theme vars + chat animations + shared
-// `@source` rules. Workspace `theme.css` overrides cascade in via the
-// link tag injected by themeStylesheetPlugin.
+// `@source` rules.
 // ---------------------------------------------------------------------------
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))

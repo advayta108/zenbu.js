@@ -30,15 +30,15 @@ import { useWsConnection, type WsConnectionState } from "./ws-connection";
 //      scope+props. Child reads props reactively via useViewProps() backed
 //      by a kyju subscription. Survives reload.
 //
-//   2. Ephemeral (workspace shell, utility sidebar, anything render-bound):
-//      <View id="workspace-shell:<windowId>" scope="workspace" props={{...}} />
+//   2. Ephemeral (utility sidebar, anything render-bound):
+//      <View id="utility:<windowId>" scope="utility" props={{...}} />
 //      No kyju row written. Props ride the URL query string. Child still
 //      reads them via useViewProps() (URL fallback path).
 //
 // The View component is responsible for:
 //   - Looking up the registry entry for `scope` to resolve the iframe URL.
-//   - Inheriting wsPort/wsToken/windowId/workspaceId from the current
-//     iframe's URL (caller doesn't pass these).
+//   - Inheriting wsPort/wsToken/windowId from the current iframe's URL
+//     (caller doesn't pass these).
 //   - Mounting the iframe through a body-level container so style/scroll
 //     state survives mount/unmount transitions across pinned views.
 //   - LRU-evicting unpinned iframes when the cache exceeds VIEW_CACHE_CAP.
@@ -52,10 +52,10 @@ const VIEW_CACHE_CAP = 8;
 
 // Props the child can never override on its own URL: they're always
 // inherited from the parent iframe (connection plumbing + identity).
-// Everything else — including `workspaceId` — flows through the normal
-// caller-props path, which makes those values just-another-prop in the
-// mental model: discoverable via `useViewProps()`, reactive when the
-// view is persisted, seedable by the parent.
+// Everything else flows through the normal caller-props path, which
+// makes those values just-another-prop in the mental model:
+// discoverable via `useViewProps()`, reactive when the view is
+// persisted, seedable by the parent.
 const INHERITED_ONLY_KEYS = new Set([
   "wsPort",
   "wsToken",
@@ -204,15 +204,14 @@ export function getViewIframe(id: string): HTMLIFrameElement | null {
 // ---------------------------------------------------------------------------
 // Env inheritance: every iframe in this app is loaded with these query keys.
 // The current iframe's URL is the source; new child iframes get the same
-// values (so connection bits and window/workspace context are transparent
-// to callers of <View>).
+// values (so connection bits and window context are transparent to
+// callers of <View>).
 // ---------------------------------------------------------------------------
 
 type Env = {
   wsPort: string;
   wsToken: string;
   windowId: string;
-  workspaceId: string | null;
 };
 
 let cachedEnv: Env | null = null;
@@ -223,7 +222,6 @@ function getEnv(): Env {
     wsPort: params.get("wsPort") ?? "",
     wsToken: params.get("wsToken") ?? "",
     windowId: params.get("windowId") ?? "",
-    workspaceId: params.get("workspaceId") ?? null,
   };
   return cachedEnv;
 }
@@ -255,18 +253,8 @@ function buildChildUrl(args: {
   qs.set("wsPort", env.wsPort);
   qs.set("wsToken", env.wsToken);
   qs.set("windowId", env.windowId);
-  // workspaceId: caller props win, env is the fallback. The orchestrator
-  // iframe has no workspaceId in its own URL (workspaces activate after
-  // the window opens), so when it mounts <WorkspaceFrame>, the workspace
-  // id arrives via props. Without this override, the workspace iframe
-  // loads with no ?workspaceId=, which both breaks per-workspace theme
-  // injection and disables workspace-scoped advice filtering (advice
-  // from one workspace's plugin leaks into other workspaces' iframes).
-  const workspaceId = props.workspaceId ?? env.workspaceId;
-  if (workspaceId) qs.set("workspaceId", workspaceId);
   for (const [k, v] of Object.entries(props)) {
-    if (INHERITED_ONLY_KEYS.has(k)) continue; // env-only, caller can't override
-    if (k === "workspaceId") continue; // already written above
+    if (INHERITED_ONLY_KEYS.has(k)) continue;
     qs.set(k, v);
   }
 
@@ -664,10 +652,10 @@ function ViewPropsResolver({
   }, []);
 
   // URL-derived initial props. We expose the full query bag (including
-  // the env-shaped keys like `windowId`, `workspaceId`, `viewId`) — they
-  // arrived as parent-passed values and the child has every right to
-  // read them. `wsPort`/`wsToken` come along for the ride; children
-  // that don't care can ignore them.
+  // the env-shaped keys like `windowId`, `viewId`) — they arrived as
+  // parent-passed values and the child has every right to read them.
+  // `wsPort`/`wsToken` come along for the ride; children that don't
+  // care can ignore them.
   const urlProps = useMemo(() => {
     const p = new URLSearchParams(window.location.search);
     const out: Record<string, string> = {};
@@ -699,8 +687,8 @@ function KyjuRowPropsBridge({
   children: ReactNode;
 }): ReactElement {
   // Resolution rule: start with the URL bag (which always includes the
-  // platform-set keys: wsPort/wsToken/windowId/workspaceId/viewId, plus
-  // every prop the parent serialized at mount time). Overlay the kyju
+  // platform-set keys: wsPort/wsToken/windowId/viewId, plus every prop
+  // the parent serialized at mount time). Overlay the kyju
   // row's `props` on top — that's the reactive surface for persisted
   // views. Ephemeral views (no row) just see the URL bag.
   //

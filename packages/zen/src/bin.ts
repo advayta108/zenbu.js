@@ -46,7 +46,7 @@ function printUsage() {
 zen — Zenbu CLI
 
 Usage:
-  zen [path] [-r|-n] [-d <path>] [--blocking]    Open a workspace at path (default: cwd)
+  zen [path] [-r|-n] [-d <path>] [--blocking]    Open app at path (default: cwd)
   zen launch [--blocking] [--runtime <ver>]      Launch standalone app via Electron + boot.mjs
   zen runtime [install|list|remove] [version]    Manage Electron runtime versions
   zen setup-app [--name "App"] [--runtime <ver>] Create a native .app bundle
@@ -62,7 +62,7 @@ Usage:
   zen profile heap [--out <path>]                Heap snapshot of the kernel main process
 
 Open flags:
-  -r, --reuse-window   Swap workspace on the last focused window
+  -r, --reuse-window   Reuse the last focused window
   -n, --new-window     Always open a new window
   -d, --db <path>      Use the DB at <path> for this launch (creates if missing)
 `)

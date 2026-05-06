@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url"
 import { homedir } from "node:os"
 import type { Plugin } from "vite"
 import { zenbuAdvicePlugin } from "@zenbu/advice/vite"
-import { runtime } from "../main/runtime"
 import {
   getAdvice,
   getAllScopes,
@@ -12,7 +11,6 @@ import {
   getAllContentScriptPaths,
   type ViewAdviceEntry,
 } from "../main/services/advice-config"
-import type { DbService } from "../main/services/db"
 
 // ---------------------------------------------------------------------------
 // Vite plugins shared by every renderer (kernel + plugin).
@@ -66,39 +64,19 @@ async function readCssFile(filePath: string | null): Promise<string> {
   }
 }
 
-async function resolveWorkspaceThemePath(
-  workspaceId: string | undefined,
-): Promise<string | null> {
-  if (!workspaceId) return null
-  try {
-    const db = runtime.get<DbService>({ key: "db" })
-    const root = db.client.readRoot()
-    const workspace = root.plugin.kernel.workspaces?.find(
-      (w: { id: string }) => w.id === workspaceId,
-    )
-    for (const cwd of workspace?.cwds ?? []) {
-      const themePath = resolve(cwd, ".zenbu", "theme.css")
-      if (await fileExists(themePath)) return themePath
-    }
-  } catch (err) {
-    console.error("[theme] failed to resolve workspace theme:", err)
-  }
-  return null
-}
-
 function getScopeFromPath(urlPath: string): string | null {
   const viewMatch = urlPath.match(/^\/views\/([^/]+)\//)
   return viewMatch ? viewMatch[1] : null
 }
 
 /**
- * Resolve the view scope for a request. Aliased views (chat, plugins,
- * workspace) live under `/views/<scope>/` on the core renderer, so the
- * path tells us the scope. Own-server plugins (e.g. bottom-terminal,
+ * Resolve the view scope for a request. Aliased views (chat, plugins)
+ * live under `/views/<scope>/` on the core renderer, so the path tells
+ * us the scope. Own-server plugins (e.g. bottom-terminal,
  * event-log-viewer) load `/index.html` directly on their own Vite port
- * — there's no scope segment in the path. For those, the workspace /
- * orchestrator passes `?scope=<scope>` in the iframe URL and we read it
- * from the query.
+ * — there's no scope segment in the path. For those, the orchestrator
+ * passes `?scope=<scope>` in the iframe URL and we read it from the
+ * query.
  */
 function resolveScope(
   urlPath: string,
@@ -113,27 +91,12 @@ function resolveScope(
   return params.get("scope")
 }
 
-function parsePreludeId(id: string): {
-  scope: string
-  workspaceId?: string
-} {
+function parsePreludeId(id: string): { scope: string } {
   const rest = id.slice(RESOLVED_PREFIX.length)
   const queryIdx = rest.indexOf("?")
   if (queryIdx < 0) return { scope: rest }
   const scope = rest.slice(0, queryIdx)
-  const params = new URLSearchParams(rest.slice(queryIdx + 1))
-  const workspaceId = params.get("workspaceId") ?? undefined
-  return { scope, workspaceId }
-}
-
-function extractWorkspaceIdFromUrl(
-  url: string | undefined,
-): string | undefined {
-  if (!url) return undefined
-  const queryIdx = url.indexOf("?")
-  if (queryIdx < 0) return undefined
-  const params = new URLSearchParams(url.slice(queryIdx + 1))
-  return params.get("workspaceId") ?? undefined
+  return { scope }
 }
 
 function generatePreludeCode(entries: ViewAdviceEntry[]): string {
@@ -184,10 +147,9 @@ export function resolveAdviceRuntime(): Plugin {
 }
 
 /**
- * Injects a `<link rel="stylesheet">` for the global + workspace theme
- * CSS into every iframe's HTML, and serves those stylesheets from a
- * virtual `/@zenbu-theme/` namespace. Workspace `theme.css` overrides
- * cascade over the kernel's shadcn defaults.
+ * Injects a `<link rel="stylesheet">` for the global theme CSS into
+ * every iframe's HTML, and serves the stylesheet from a virtual
+ * `/@zenbu-theme/` namespace.
  */
 export function themeStylesheetPlugin(): Plugin {
   return {
@@ -200,17 +162,9 @@ export function themeStylesheetPlugin(): Plugin {
         if (!url.startsWith(THEME_PREFIX)) return next()
 
         const parsed = new URL(url, "http://localhost")
-        let css = ""
-        if (parsed.pathname === `${THEME_PREFIX}global.css`) {
-          css = await readCssFile(GLOBAL_THEME_PATH)
-        } else if (parsed.pathname === `${THEME_PREFIX}workspace.css`) {
-          const workspaceId =
-            parsed.searchParams.get("workspaceId") ?? undefined
-          css = await readCssFile(await resolveWorkspaceThemePath(workspaceId))
-        } else {
-          return next()
-        }
+        if (parsed.pathname !== `${THEME_PREFIX}global.css`) return next()
 
+        const css = await readCssFile(GLOBAL_THEME_PATH)
         res.statusCode = 200
         res.setHeader("Content-Type", "text/css; charset=utf-8")
         res.setHeader("Cache-Control", "no-cache")
@@ -218,38 +172,24 @@ export function themeStylesheetPlugin(): Plugin {
       })
     },
 
-    transformIndexHtml(_html, ctx) {
-      const tags = [
+    transformIndexHtml() {
+      return [
         {
           tag: "link",
           attrs: { rel: "stylesheet", href: `${THEME_PREFIX}global.css` },
           injectTo: "body" as const,
         },
       ]
-
-      const workspaceId = extractWorkspaceIdFromUrl(ctx.originalUrl)
-      if (workspaceId) {
-        tags.push({
-          tag: "link",
-          attrs: {
-            rel: "stylesheet",
-            href: `${THEME_PREFIX}workspace.css?workspaceId=${encodeURIComponent(workspaceId)}`,
-          },
-          injectTo: "body" as const,
-        })
-      }
-
-      return tags
     },
   }
 }
 
 /**
  * Generates the per-iframe advice prelude module
- * (`/@advice-prelude/<scope>?workspaceId=<id>`) that registers all
- * advice + content scripts for a (scope, workspace) pair, and injects a
- * `<script>` tag into the iframe's HTML to load it. Also handles HMR
- * full-reload when an advice module's source file changes.
+ * (`/@advice-prelude/<scope>`) that registers all advice + content
+ * scripts for a scope, and injects a `<script>` tag into the iframe's
+ * HTML to load it. Also handles HMR full-reload when an advice module's
+ * source file changes.
  */
 export function advicePreludePlugin(): Plugin {
   return {
@@ -264,10 +204,10 @@ export function advicePreludePlugin(): Plugin {
 
     load(id) {
       if (!id.startsWith(RESOLVED_PREFIX)) return null
-      const { scope, workspaceId } = parsePreludeId(id)
+      const { scope } = parsePreludeId(id)
 
-      let code = generatePreludeCode(getAdvice(scope, workspaceId))
-      for (const scriptPath of getContentScripts(scope, workspaceId)) {
+      let code = generatePreludeCode(getAdvice(scope))
+      for (const scriptPath of getContentScripts(scope)) {
         code += `import ${JSON.stringify(scriptPath)}\n`
       }
 
@@ -317,18 +257,14 @@ export function advicePreludePlugin(): Plugin {
     transformIndexHtml(html, ctx) {
       const scope = resolveScope(ctx.path ?? "", ctx.originalUrl)
       if (!scope) return html
-      const workspaceId = extractWorkspaceIdFromUrl(ctx.originalUrl)
-      const hasAdvice = getAdvice(scope, workspaceId).length > 0
-      const hasScripts = getContentScripts(scope, workspaceId).length > 0
+      const hasAdvice = getAdvice(scope).length > 0
+      const hasScripts = getContentScripts(scope).length > 0
       if (!hasAdvice && !hasScripts) return html
 
-      const src = workspaceId
-        ? `${PRELUDE_PREFIX}${scope}?workspaceId=${encodeURIComponent(workspaceId)}`
-        : `${PRELUDE_PREFIX}${scope}`
       return [
         {
           tag: "script",
-          attrs: { type: "module", src },
+          attrs: { type: "module", src: `${PRELUDE_PREFIX}${scope}` },
           injectTo: "head" as const,
         },
       ]

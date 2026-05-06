@@ -11,7 +11,6 @@ interface ViewEntry {
   url: string;
   port: number;
   ownsServer: boolean;
-  workspaceId?: string;
   meta?: {
     kind?: string;
     sidebar?: boolean;
@@ -46,7 +45,6 @@ export class ViewRegistryService extends Service {
       return existing;
     }
 
-    const ws = runtime.getActiveScope() ?? undefined;
     console.log(`[view-registry] creating reloader for "${scope}"...`);
     const reloaderEntry = await this.ctx.reloader.create(
       scope,
@@ -59,7 +57,6 @@ export class ViewRegistryService extends Service {
       url: reloaderEntry.url,
       port: reloaderEntry.port,
       ownsServer: true,
-      workspaceId: ws,
       meta,
     };
     this.views.set(scope, entry);
@@ -88,13 +85,11 @@ export class ViewRegistryService extends Service {
         `Reloader "${reloaderId}" not found for alias "${scope}"`,
       );
 
-    const ws = runtime.getActiveScope() ?? undefined;
     const entry: ViewEntry = {
       scope,
       url: `${reloaderEntry.url}${pathPrefix}`,
       port: reloaderEntry.port,
       ownsServer: false,
-      workspaceId: ws,
       meta,
     };
     this.views.set(scope, entry);
@@ -168,7 +163,6 @@ export class ViewRegistryService extends Service {
       url: e.url,
       port: e.port,
       icon: this.manifestIcons.get(e.scope),
-      workspaceId: e.workspaceId,
       meta: e.meta,
     }));
     await Effect.runPromise(

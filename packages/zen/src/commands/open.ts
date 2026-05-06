@@ -74,7 +74,7 @@ export async function runOpen(argv: string[]) {
     ? (...args: unknown[]) => console.error("[zen]", ...args)
     : () => {}
 
-  log("opening workspace at:", cwd, "mode:", mode)
+  log("opening at:", cwd, "mode:", mode)
 
   // Resolve the requested DB path: explicit flag → registry default → null
   // (let the main process fall back to cwd/.zenbu/db).
@@ -104,13 +104,13 @@ export async function runOpen(argv: string[]) {
         )
         process.exit(1)
       }
-      await conn.rpc.cli.openWorkspace({ cwd, mode })
+      await conn.rpc.cli.openWindow({ mode })
       if (resolvedDbPath) {
         addDb(resolvedDbPath).catch(() => {})
       }
       return
     } catch (err) {
-      log("rpc openWorkspace failed, falling through to spawn:", err)
+      log("rpc openWindow failed, falling through to spawn:", err)
     } finally {
       conn.close()
     }

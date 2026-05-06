@@ -18,10 +18,9 @@ export function ActiveView({
   activeViewId: string | null;
 }) {
   const knownViewIds = useRef<Set<string>>(new Set());
-  // ActiveView is mounted in both the orchestrator iframe (provider
-  // present) and the workspace iframe (separate React tree, no provider).
-  // The optional hook returns null in the second case; iframes mounted
-  // there just don't get registered with the orchestrator's chord matcher.
+  // ActiveView is mounted in the orchestrator iframe (provider present).
+  // The optional hook returns null when no provider exists; iframes
+  // mounted there just don't get registered with the chord matcher.
   const shortcutIframes = useShortcutIframeRegistryOptional();
 
   useEffect(() => {

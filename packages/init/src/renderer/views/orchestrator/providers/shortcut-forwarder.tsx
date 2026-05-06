@@ -52,8 +52,8 @@ export function useShortcutIframeRegistry(): IframeRegistry {
  * No-throw variant for components that may be rendered outside a
  * `ShortcutForwarderProvider`. Currently used by `ActiveView`, which is
  * rendered both inside the orchestrator iframe (provider present) and
- * inside the workspace iframe (separate React tree, no provider). Iframe
- * shortcut forwarding is per-tree; the workspace iframe's children just
+ * inside the app shell iframe (separate React tree, no provider). Iframe
+ * shortcut forwarding is per-tree; the shell iframe's children just
  * don't get registered with the orchestrator's matcher.
  */
 export function useShortcutIframeRegistryOptional(): IframeRegistry | null {

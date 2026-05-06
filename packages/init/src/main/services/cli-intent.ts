@@ -1,39 +1,17 @@
 import * as Effect from "effect/Effect";
 import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
-import { WorkspaceService } from "./workspace";
 import { MAIN_WINDOW_ID } from "../../../shared/schema";
 import { makeWindowAppState } from "../../../shared/agent-ops";
-
-type WindowMode = "default" | "reuse" | "new";
-
-function parseZenArgs(argv: string[]): {
-  cwd?: string;
-  mode?: WindowMode;
-} {
-  const result: { cwd?: string; mode?: WindowMode } = {};
-  for (const arg of argv) {
-    if (arg.startsWith("--zen-cwd=")) {
-      result.cwd = arg.slice("--zen-cwd=".length);
-    } else if (arg.startsWith("--zen-window-mode=")) {
-      const m = arg.slice("--zen-window-mode=".length);
-      if (m === "default" || m === "reuse" || m === "new") result.mode = m;
-    }
-  }
-  return result;
-}
 
 export class CliIntentService extends Service {
   static key = "cli-intent";
   static deps = {
     db: DbService,
-    workspace: WorkspaceService,
     baseWindow: "base-window",
   };
   declare ctx: {
     db: DbService;
-    workspace: WorkspaceService;
-    // todo: why is this an any and not an import ref
     baseWindow: any;
   };
 
@@ -42,8 +20,6 @@ export class CliIntentService extends Service {
   evaluate() {
     if (this._processed) return;
     this._processed = true;
-
-    const { cwd } = parseZenArgs(process.argv);
 
     const client = this.ctx.db.effectClient;
 
@@ -129,26 +105,11 @@ export class CliIntentService extends Service {
           kernel.viewState = nextViewState;
         }
       }),
-    )
-      .then(async () => {
-        // Cold-boot only ever has one live window (the main one). `mode`
-        // doesn't matter here - there's nothing to reuse vs. new against.
-        // If the CLI passed a cwd, find/create its workspace and activate
-        // it on main. Otherwise leave whatever was last active in place.
-        if (cwd) {
-          const { id: workspaceId } =
-            await this.ctx.workspace.findOrCreateWorkspaceForCwd(cwd);
-          await this.ctx.workspace.activateWorkspace(
-            MAIN_WINDOW_ID,
-            workspaceId,
-          );
-        }
-      })
-      .catch((err) => {
-        console.error("[cli-intent] Failed to apply CLI intent:", err);
-      });
+    ).catch((err) => {
+      console.error("[cli-intent] Failed to apply CLI intent:", err);
+    });
 
-    console.log(`[cli-intent] applied${cwd ? ` cwd=${cwd}` : ""}`);
+    console.log("[cli-intent] applied");
   }
 }
 

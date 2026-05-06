@@ -56,9 +56,7 @@ export function useWsConnection(): WsConnectionState {
       return;
     }
 
-    const workspaceId = params.get("workspaceId");
-    let wsUrl = `ws://127.0.0.1:${wsPort}?token=${encodeURIComponent(wsToken)}`;
-    if (workspaceId) wsUrl += `&workspaceId=${encodeURIComponent(workspaceId)}`;
+    const wsUrl = `ws://127.0.0.1:${wsPort}?token=${encodeURIComponent(wsToken)}`;
 
     function connect() {
       if (cancelled) return;

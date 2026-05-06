@@ -71,7 +71,7 @@ if (!IS_TOP_FRAME) {
   // Cache the last bindings + armed messages so we can replay them to
   // iframes that mount after the orchestrator's initial broadcast (e.g.
   // a bottom-panel iframe opened on Cmd+J — created long after the
-  // workspace itself received its bindings).
+  // app shell received its bindings).
   let lastBindingsMsg: BindingsMessage | null = null;
   let lastArmedMsg: { type: "zenbu-shortcut:armed"; armed: boolean } | null =
     null;
@@ -109,9 +109,9 @@ if (!IS_TOP_FRAME) {
       prefixBindings = new Set(b.prefixes);
       lastBindingsMsg = b;
       // Relay to child iframes: the orchestrator only knows about
-      // iframes registered through its ActiveView (chat/workspace/etc).
+      // iframes registered through its ActiveView (chat/etc).
       // Iframes nested deeper (utility-sidebar plugins, bottom-panel
-      // plugins) are mounted inside the workspace's React tree and
+      // plugins) are mounted inside the app shell's React tree and
       // never get the orchestrator's direct push, so their local
       // bindings cache stays empty and `shouldSwallow` mis-fires.
       // Forwarding here closes the gap.

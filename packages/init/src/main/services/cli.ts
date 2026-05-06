@@ -6,17 +6,11 @@ import { Service, runtime } from "../runtime";
 import { DbService } from "./db";
 import { HttpService } from "./http";
 import { RpcService } from "./rpc";
-import { WorkspaceService } from "./workspace";
 import { INTERNAL_DIR, RUNTIME_JSON } from "../../../shared/paths";
 import { MAIN_WINDOW_ID } from "../../../shared/schema";
 import { makeWindowAppState } from "../../../shared/agent-ops";
 
 export type WindowMode = "default" | "reuse" | "new";
-
-export type CliOpenWorkspaceArgs = {
-  cwd: string;
-  mode?: WindowMode;
-};
 
 export type RelaunchDecision = "accept" | "reject";
 
@@ -26,7 +20,6 @@ export class CliService extends Service {
     db: DbService,
     http: HttpService,
     rpc: RpcService,
-    workspace: WorkspaceService,
     baseWindow: "base-window",
     window: "window",
   };
@@ -34,7 +27,6 @@ export class CliService extends Service {
     db: DbService;
     http: HttpService;
     rpc: RpcService;
-    workspace: WorkspaceService;
     baseWindow: any;
     window: any;
   };
@@ -65,39 +57,23 @@ export class CliService extends Service {
   }
 
   /**
-   * `zen [path]` entrypoint. Resolves `cwd` to a workspace (creating one if
-   * needed) and applies VS Code-style window semantics:
-   *   - default: focus an existing window already showing this workspace,
-   *     otherwise open a new window.
-   *   - reuse:   swap the active workspace on the last focused window.
-   *   - new:     always open a new window.
+   * `zen [path]` entrypoint. Focuses an existing window or opens a new one
+   * using VS Code-style window semantics:
+   *   - default / reuse: focus an existing window if one is open.
+   *   - new:             always open a new window.
    */
-  async openWorkspace(args: CliOpenWorkspaceArgs): Promise<{
+  async openWindow(args: { mode?: WindowMode } = {}): Promise<{
     windowId: string;
-    workspaceId: string;
-    created: boolean;
   }> {
     const mode: WindowMode = args.mode ?? "default";
-    const { id: workspaceId, created } =
-      await this.ctx.workspace.findOrCreateWorkspaceForCwd(args.cwd);
 
     const client = this.ctx.db.effectClient;
-    const root = client.readRoot();
-    const kernel = root.plugin.kernel;
 
     let targetWindowId: string | null = null;
 
-    if (mode === "default") {
-      for (const [wid, ws] of Object.entries(kernel.windowState)) {
-        if (
-          ws.activeWorkspaceId === workspaceId &&
-          this.ctx.baseWindow.windows.has(wid)
-        ) {
-          targetWindowId = wid;
-          break;
-        }
-      }
-    } else if (mode === "reuse") {
+    if (mode === "default" || mode === "reuse") {
+      const root = client.readRoot();
+      const kernel = root.plugin.kernel;
       const focused = kernel.focusedWindowId ?? null;
       if (focused && this.ctx.baseWindow.windows.has(focused)) {
         targetWindowId = focused;
@@ -130,12 +106,10 @@ export class CliService extends Service {
       }, 50);
     }
 
-    await this.ctx.workspace.activateWorkspace(targetWindowId, workspaceId);
-
     const win = this.ctx.baseWindow.windows.get(targetWindowId);
     if (win && !win.isDestroyed()) win.focus();
 
-    return { windowId: targetWindowId, workspaceId, created };
+    return { windowId: targetWindowId };
   }
 
   /**

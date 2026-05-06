@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks"
 import { bootBus } from "../../shared/boot-bus"
 import { trace as traceSpan, traceSync as traceSpanSync, type SpanOptions } from "../../shared/tracer"
 
@@ -18,7 +17,6 @@ interface ServiceSlot {
   instance: Service | null
   ServiceClass: typeof Service
   status: "blocked" | "evaluating" | "ready" | "failed"
-  workspaceId?: string
 }
 
 console.log("[kernel] runtime edit check")
@@ -31,7 +29,7 @@ type DepEntry = DepRef | OptionalDep
 // this.track(SomeService, { onAvailable(instance) {}, onUnavailable() {} })
 // This gives both optional declaration and reactive listening in one primitive:
 // the dep may not exist at evaluate-time, but when it appears (plugin loaded,
-// workspace activated) you get a callback — and a teardown when it disappears.
+// plugin loaded) you get a callback — and a teardown when it disappears.
 // Eliminates the need for manual null-checks in evaluate() and global
 // onReconciled polling for a specific service key.
 export function optional(ref: DepRef): OptionalDep {
@@ -127,35 +125,13 @@ export class ServiceRuntime {
   private registrationTokens = new Map<string, symbol>()
   private slots = new Map<string, ServiceSlot>()
   private onReconciledCallbacks: Array<(changedKeys: string[]) => void> = []
-  private _scopeStorage = new AsyncLocalStorage<string>()
 
   register(ServiceClass: typeof Service, importMeta?: ImportMeta | null): void {
     const hot: HotContext | null = (importMeta as any)?.hot ?? null
     const baseKey = ServiceClass.key
     if (!baseKey) throw new Error("Service must have a static key property")
 
-    // Workspace-scoped registrations are namespaced internally so two
-    // workspaces can both load a plugin with the same `static key` without
-    // colliding in the global slot map. Kernel services (no active scope)
-    // continue to use their bare key.
-    //
-    // Resolution order for `ws`:
-    //   1. wsId carried over via `hot.data` from the previous instance's
-    //      dispose hook. Plugin-file HMR (file change → dynohot dispatch)
-    //      re-runs the module body OUTSIDE our `runtime.scopedImport`
-    //      AsyncLocalStorage scope, so without this handoff a re-evaluated
-    //      workspace plugin would lose its workspace assignment and
-    //      re-register as a global service.
-    //   2. AsyncLocalStorage scope (set by `runtime.scopedImport`). This
-    //      is the source of truth on the first-ever import of a workspace
-    //      plugin.
-    //   3. undefined (kernel/global service).
-    const carriedWsId =
-      hot?.data && typeof hot.data === "object"
-        ? ((hot.data as any).__zenbu_workspaceId__ as string | undefined)
-        : undefined
-    const ws = carriedWsId ?? this._scopeStorage.getStore() ?? undefined
-    const slotKey = ws ? `${baseKey}@@${ws}` : baseKey
+    const slotKey = baseKey
 
     this.definitions.set(slotKey, ServiceClass)
     const slot = this.slots.get(slotKey)
@@ -167,81 +143,18 @@ export class ServiceRuntime {
         instance: null,
         ServiceClass,
         status: "blocked",
-        workspaceId: ws,
       })
     }
     this.rebuildDependentsIndex()
 
     hot?.accept()
-    hot?.dispose?.((data: any) => {
-      if (ws !== undefined) data.__zenbu_workspaceId__ = ws
-    })
     const token = Symbol(slotKey)
     this.registrationTokens.set(slotKey, token)
     hot?.prune?.(() => {
-      // Workspace-scoped slots have their lifecycle managed explicitly by
-      // WorkspaceService (load on activation, unregister on deletion).
-      // Honoring dynohot's prune here would let the runtime evict a slot
-      // any time an upstream module reload (e.g. workspace.ts itself)
-      // temporarily breaks dynamic-import tracking and dynohot decides the
-      // workspace plugin is unreachable. The plugin file isn't gone — we
-      // just lost a dynamic edge mid-dispatch — so the slot must stay.
-      // Real eviction happens through `unregisterByWorkspace`
-      // (`deleteWorkspace`) and full process shutdown.
-      const slot = this.slots.get(slotKey)
-      if (slot?.workspaceId) return
       this.unregister(slotKey, token)
     })
 
     void this.scheduleReconcile([slotKey])
-  }
-
-  async scopedImport<T>(workspaceId: string, importFn: () => Promise<T>): Promise<T> {
-    return this._scopeStorage.run(workspaceId, importFn)
-  }
-
-  async unregisterByWorkspace(workspaceId: string): Promise<void> {
-    const keys: string[] = []
-    for (const [key, slot] of this.slots) {
-      if (slot.workspaceId === workspaceId) keys.push(key)
-    }
-    for (const key of keys.reverse()) {
-      this.registrationTokens.delete(key)
-      this.definitions.delete(key)
-      await this.teardownService(key, { removeSlot: true })
-    }
-    if (keys.length > 0) {
-      this.rebuildDependentsIndex()
-      await this.scheduleReconcile(keys)
-    }
-  }
-
-  /**
-   * Bounce every workspace-scoped service belonging to `workspaceId` through
-   * the normal reconcile cycle. The slots, definitions, and instances stay
-   * put — we just ask the drain loop to run Phase 1 cleanup (each service's
-   * `__cleanupAllSetups("reload")`) and Phase 2 evaluate (re-injects ctx,
-   * re-runs `evaluate()`) on every match. The plugin's code is unchanged —
-   * we're just bouncing setups, the same way a normal HMR reload would.
-   *
-   * Use this when something upstream wants to bounce a workspace's plugins
-   * (e.g. `WorkspaceService` itself was hot-reloaded). For permanent
-   * eviction (`deleteWorkspace`) use `unregisterByWorkspace` instead.
-   */
-  async reloadByWorkspace(workspaceId: string): Promise<void> {
-    const keys: string[] = []
-    for (const [key, slot] of this.slots) {
-      if (slot.workspaceId === workspaceId) keys.push(key)
-    }
-    if (keys.length === 0) return
-    console.log(
-      `[hot] reloading ${keys.length} service(s) for workspace ${workspaceId}: ${keys.join(", ")}`,
-    )
-    await this.scheduleReconcile(keys)
-  }
-
-  getWorkspaceId(key: string): string | undefined {
-    return this.slots.get(key)?.workspaceId
   }
 
   getAllKeys(): string[] {
@@ -250,10 +163,6 @@ export class ServiceRuntime {
 
   getSlot(key: string): ServiceSlot | undefined {
     return this.slots.get(key)
-  }
-
-  getActiveScope(): string | null {
-    return this._scopeStorage.getStore() ?? null
   }
 
   async whenIdle(): Promise<void> {
@@ -292,10 +201,6 @@ export class ServiceRuntime {
   }
 
   get<T extends Service>(ref: { key: string }): T {
-    // Prefer the global slot for `runtime.get(...)` calls — those are
-    // typically made from kernel services that depend on other kernel
-    // services. Workspace-scoped slots are accessed through `ctx` after
-    // resolveDepSlot, which already handles namespacing correctly.
     const slot = this.slots.get(ref.key)
     if (!slot || slot.status !== "ready" || !slot.instance) {
       throw new Error(`Service "${ref.key}" not ready. Is it registered and evaluated?`)
@@ -333,20 +238,16 @@ export class ServiceRuntime {
     }
   }
 
-  private resolveDepSlot(depKey: string, workspaceId: string | undefined): ServiceSlot | undefined {
-    if (workspaceId) {
-      const scoped = this.slots.get(`${depKey}@@${workspaceId}`)
-      if (scoped) return scoped
-    }
+  private resolveDepSlot(depKey: string): ServiceSlot | undefined {
     return this.slots.get(depKey)
   }
 
-  private injectCtx(instance: Service, ServiceClass: typeof Service, workspaceId: string | undefined): void {
+  private injectCtx(instance: Service, ServiceClass: typeof Service): void {
     const deps = (ServiceClass as any).deps as Record<string, DepEntry> | undefined ?? {}
     const ctx: Record<string, Service | undefined> = {}
     for (const [name, entry] of Object.entries(deps)) {
       const { key, optional: isOptional } = resolveDep(entry)
-      const slot = this.resolveDepSlot(key, workspaceId)
+      const slot = this.resolveDepSlot(key)
       if (!slot || slot.status !== "ready" || !slot.instance) {
         if (isOptional) {
           ctx[name] = undefined
@@ -362,18 +263,12 @@ export class ServiceRuntime {
   private rebuildDependentsIndex(): void {
     const next = new Map<string, Set<string>>()
     for (const [slotKey, ServiceClass] of this.definitions) {
-      const slot = this.slots.get(slotKey)
-      const ws = slot?.workspaceId
       const deps = (ServiceClass as any).deps as Record<string, DepEntry> | undefined ?? {}
       for (const entry of Object.values(deps)) {
         const { key: depKey } = resolveDep(entry)
-        const resolvedSlotKey =
-          (ws && this.definitions.has(`${depKey}@@${ws}`))
-            ? `${depKey}@@${ws}`
-            : depKey
-        const dependents = next.get(resolvedSlotKey) ?? new Set<string>()
+        const dependents = next.get(depKey) ?? new Set<string>()
         dependents.add(slotKey)
-        next.set(resolvedSlotKey, dependents)
+        next.set(depKey, dependents)
       }
     }
     this.dependentsIndex = next
@@ -394,13 +289,13 @@ export class ServiceRuntime {
     return [...affected].filter(key => this.definitions.has(key))
   }
 
-  private listMissingDeps(ServiceClass: typeof Service, workspaceId: string | undefined): string[] {
+  private listMissingDeps(ServiceClass: typeof Service): string[] {
     const deps = (ServiceClass as any).deps as Record<string, DepEntry> | undefined ?? {}
     const missing: string[] = []
     for (const entry of Object.values(deps)) {
       const { key, optional: isOptional } = resolveDep(entry)
       if (isOptional) continue
-      const slot = this.resolveDepSlot(key, workspaceId)
+      const slot = this.resolveDepSlot(key)
       if (!slot || slot.status !== "ready" || !slot.instance) {
         missing.push(key)
       }
@@ -522,7 +417,7 @@ export class ServiceRuntime {
     const slot = this.ensureSlot(key, ServiceClass)
     slot.ServiceClass = ServiceClass
 
-    const missingDeps = this.listMissingDeps(ServiceClass, slot.workspaceId)
+    const missingDeps = this.listMissingDeps(ServiceClass)
     if (missingDeps.length > 0) {
       const shouldLog = slot.instance !== null || slot.status !== "blocked"
       await this.teardownService(key, { reason: "reload" })
@@ -545,44 +440,36 @@ export class ServiceRuntime {
     slot.error = null
 
     const startedAt = Date.now()
-    const doEvaluate = async () => {
-      try {
-        await instance!.__cleanupAllSetups("reload")
-        this.injectCtx(instance!, ServiceClass, slot.workspaceId)
-        if (!wasReady) {
-          bootBus.emit("status", { message: "Starting services…", detail: key })
-          bootBus.emit("service:start", { key, at: startedAt })
-        }
-        await instance!.evaluate()
-        slot.status = "ready"
-        if (!wasReady) {
-          const endedAt = Date.now()
-          bootBus.emit("service:end", {
-            key,
-            at: endedAt,
-            durationMs: endedAt - startedAt,
-          })
-        }
-      } catch (e) {
-        slot.status = "failed"
-        slot.error = e
-        if (!wasReady) {
-          const endedAt = Date.now()
-          bootBus.emit("service:end", {
-            key,
-            at: endedAt,
-            durationMs: endedAt - startedAt,
-            error: e instanceof Error ? e.message : String(e),
-          })
-        }
-        console.error(`[hot] ${key} failed to evaluate:`, e)
+    try {
+      await instance!.__cleanupAllSetups("reload")
+      this.injectCtx(instance!, ServiceClass)
+      if (!wasReady) {
+        bootBus.emit("status", { message: "Starting services…", detail: key })
+        bootBus.emit("service:start", { key, at: startedAt })
       }
-    }
-
-    if (slot.workspaceId) {
-      await this._scopeStorage.run(slot.workspaceId, doEvaluate)
-    } else {
-      await doEvaluate()
+      await instance!.evaluate()
+      slot.status = "ready"
+      if (!wasReady) {
+        const endedAt = Date.now()
+        bootBus.emit("service:end", {
+          key,
+          at: endedAt,
+          durationMs: endedAt - startedAt,
+        })
+      }
+    } catch (e) {
+      slot.status = "failed"
+      slot.error = e
+      if (!wasReady) {
+        const endedAt = Date.now()
+        bootBus.emit("service:end", {
+          key,
+          at: endedAt,
+          durationMs: endedAt - startedAt,
+          error: e instanceof Error ? e.message : String(e),
+        })
+      }
+      console.error(`[hot] ${key} failed to evaluate:`, e)
     }
   }
 
@@ -597,18 +484,13 @@ export class ServiceRuntime {
     }
 
     for (const [slotKey, ServiceClass] of services) {
-      const ws = this.slots.get(slotKey)?.workspaceId
       const deps = (ServiceClass as any).deps as Record<string, DepEntry> | undefined ?? {}
       let degree = 0
       for (const entry of Object.values(deps)) {
         const { key: depKey, optional: isOptional } = resolveDep(entry)
-        const resolvedKey =
-          (ws && keys.has(`${depKey}@@${ws}`))
-            ? `${depKey}@@${ws}`
-            : depKey
-        if (keys.has(resolvedKey)) {
+        if (keys.has(depKey)) {
           degree++
-          dependents.get(resolvedKey)!.push(slotKey)
+          dependents.get(depKey)!.push(slotKey)
         } else if (isOptional) {
           continue
         }

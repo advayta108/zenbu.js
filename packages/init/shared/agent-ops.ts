@@ -12,9 +12,8 @@ export type ArchivedAgent = HotAgent & { archivedAt: number };
 // ---------------------------------------------------------------------------
 // State-record factory helpers (kernel-only).
 //
-// `makeAgentAppState`, `makeWorkspaceAppState`, `makeWorkspaceShellState`,
-// and `activateView` moved to `@zenbu/agent-manager/shared/schema` along
-// with their owning fields.
+// `makeAgentAppState` and `activateView` moved to
+// `@zenbu/agent-manager/shared/schema` along with their owning fields.
 // ---------------------------------------------------------------------------
 
 export function makeWindowAppState(
@@ -24,7 +23,6 @@ export function makeWindowAppState(
   return {
     windowId,
     activeViewId: null,
-    activeWorkspaceId: null,
     ...overrides,
   };
 }

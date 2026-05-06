@@ -33,13 +33,8 @@ const viewSchema = zod.object({
 const windowAppStateSchema = zod.object({
   windowId: zod.string(),
   activeViewId: zod.string().nullable().default(null),
-  activeWorkspaceId: zod.string().nullable().default(null),
 });
 
-// Slimmed: workspace-shell-only sub-fields (sidebarOpen, tabSidebarOpen,
-// sidebarPanel, utilitySidebarSelected) moved to
-// `plugin["agent-manager"].workspaceShellState`. Generic per-view fields
-// (cache/load metadata, draft, order) stay in kernel.
 const viewAppStateSchema = zod.object({
   viewId: zod.string(),
   draft: zod
@@ -57,38 +52,6 @@ const viewAppStateSchema = zod.object({
   loadedAt: zod.number().nullable().default(null),
   loadCount: zod.number().default(0),
   loadError: zod.string().nullable().default(null),
-});
-
-const workspaceIconSchema = zod.object({
-  blobId: zod.string(),
-  origin: zod.enum(["override", "scanned"]),
-  sourcePath: zod.string().nullable().default(null),
-});
-
-const workspaceSchema = zod.object({
-  id: zod.string(),
-  name: zod.string(),
-  cwds: zod.array(zod.string()).default([]),
-  createdAt: zod.number(),
-  icon: workspaceIconSchema.nullable().default(null),
-  // Which registered ViewRegistry scope provides this workspace's shell.
-  // Defaults to "agent-manager"; future plugins can register alternative
-  // workspace shells with `meta.kind === "workspace-shell"` and a user can
-  // set this field to point at one.
-  viewScope: zod.string().default("agent-manager"),
-  // Hidden workspaces don't appear in the workspace sidebar rail and skip
-  // their plugin barrel during `loadWorkspacePlugins`. Today this is used
-  // exclusively for "agent windows" — mirrors of a source workspace that
-  // render the default agent-manager shell so the user can edit/admin a
-  // workspace whose plugins overrode `viewScope`. This is the simplest
-  // representation that lets us run the same cwds without the source's
-  // plugins; a richer per-workspace "plugin allowlist" model is the
-  // long-term direction.
-  hidden: zod.boolean().default(false),
-  // If non-null, this workspace mirrors another workspace's cwds + chrome.
-  // Used to dedupe agent-windows (one mirror per source) and cascade-
-  // delete the mirror when the source is deleted.
-  mirrorOfWorkspaceId: zod.string().nullable().default(null),
 });
 
 export const MAIN_WINDOW_ID = "main";
@@ -155,7 +118,6 @@ export const appSchema = createSchema({
         url: zod.string(),
         port: zod.number(),
         icon: zod.string().optional(),
-        workspaceId: zod.string().optional(),
         meta: zod
           .object({
             kind: zod.string().optional(),
@@ -233,7 +195,6 @@ export const appSchema = createSchema({
       lastCheckedAt: null,
       dismissedVersion: null,
     }),
-  workspaces: f.array(workspaceSchema).default([]),
 });
 
 export const schema = appSchema;

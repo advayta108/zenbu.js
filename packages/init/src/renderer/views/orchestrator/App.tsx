@@ -2,12 +2,9 @@ import {
   Component,
   type ErrorInfo,
   type ReactNode,
-  useMemo,
-  useCallback,
   useState,
   useEffect,
   useRef,
-  useSyncExternalStore,
   lazy,
   Suspense,
 } from "react";
@@ -17,7 +14,6 @@ import {
   GitMergeIcon,
   RefreshCwIcon,
 } from "lucide-react";
-import { useDb } from "../../lib/kyju-react";
 import { ViewProvider } from "../../lib/View";
 import { useKyjuClient, useRpc } from "../../lib/providers";
 import { DragRegionOverlay } from "../../lib/drag-region";
@@ -35,62 +31,18 @@ import { CliRelaunchModal } from "./components/CliRelaunchModal";
 import { KernelBinaryUpdateBanner } from "./components/KernelBinaryUpdateBanner";
 import { ShortcutForwarderProvider } from "./providers/shortcut-forwarder";
 import { useFocusOnRequest } from "../../lib/focus-request";
-import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { View } from "../../lib/View";
 
 const params = new URLSearchParams(window.location.search);
-const wsPort = Number(params.get("wsPort"));
 const wsToken = params.get("wsToken") ?? "";
 const windowId = params.get("windowId");
-const defaultCwd = params.get("defaultCwd") ?? "";
 if (!windowId) throw new Error("Missing ?windowId= in orchestrator URL");
 if (!wsToken) throw new Error("Missing ?wsToken= in orchestrator URL");
-
-import type { SchemaRoot } from "../../../../shared/schema";
-
-type RegistryEntry = { scope: string; url: string; port: number };
-
-// The workspace shell view's id is fully derived from (windowId,
-// workspaceId), so the orchestrator title bar and the workspace iframe
-// can both point at the same `viewState` row without coordination.
-function workspaceShellViewId(windowId: string, workspaceId: string): string {
-  return `workspace:${windowId}:${workspaceId}`;
-}
 
 type ErrorFallbackRender = (args: {
   error: Error;
   reset: () => void;
 }) => ReactNode;
-
-const ORCHESTRATOR_WORKSPACE_THEME_LINK_ID =
-  "zenbu-orchestrator-workspace-theme";
-
-function useWorkspaceThemeLink(workspaceId: string | null | undefined) {
-  useEffect(() => {
-    const existing = document.getElementById(
-      ORCHESTRATOR_WORKSPACE_THEME_LINK_ID,
-    );
-
-    if (!workspaceId) {
-      existing?.remove();
-      return;
-    }
-
-    const link =
-      existing instanceof HTMLLinkElement
-        ? existing
-        : document.createElement("link");
-    link.id = ORCHESTRATOR_WORKSPACE_THEME_LINK_ID;
-    link.rel = "stylesheet";
-    link.href = `/@zenbu-theme/workspace.css?workspaceId=${encodeURIComponent(
-      workspaceId,
-    )}`;
-
-    if (!link.isConnected) {
-      document.body.appendChild(link);
-    }
-  }, [workspaceId]);
-}
 
 class ErrorBoundary extends Component<
   { children: ReactNode; scope: string; fallback: ErrorFallbackRender },
@@ -223,9 +175,6 @@ function ReloadMenu() {
   const [transient, setTransient] = useState<"updated" | "up-to-date" | null>(
     null,
   );
-  // When set, the shared `PluginUpdateModal` opens with this update — same
-  // dialog the Settings → Updates / Plugins tabs use, so kernel and
-  // per-plugin pulls share the install/cancel/progress UX exactly.
   const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | null>(
     null,
   );
@@ -359,13 +308,6 @@ function ReloadMenu() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {/*
-      The update modal is rendered as a SIBLING of `<DropdownMenu>`, not a
-      child. Radix's `DropdownMenu` manages its own portal + focus trap;
-      nesting a `Dialog` (which has its own portal + focus trap) inside
-      causes z-index stacking and focus-management fights when the menu
-      tries to close while the dialog is open.
-    */}
       <PluginUpdateModal
         pending={pendingUpdate}
         onResolved={() => setPendingUpdate(null)}
@@ -382,15 +324,7 @@ const SettingsDialog = lazy(() =>
   })),
 );
 
-function TitleBar({
-  workspaceLabel,
-  onToggleChatPanel,
-  chatPanelVisible,
-}: {
-  workspaceLabel: string;
-  onToggleChatPanel: (() => void) | null;
-  chatPanelVisible?: boolean;
-}) {
+function TitleBar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   return (
     <>
@@ -422,61 +356,8 @@ function TitleBar({
           <SettingsButton onClick={() => setSettingsOpen(true)} />
           <ReloadMenu />
         </div>
-        <div
-          className="absolute inset-0 flex items-center justify-center pointer-events-none"
-          title={workspaceLabel}
-        >
-          <span className="truncate max-w-[60%] text-[12px] text-neutral-600 font-medium px-2">
-            {workspaceLabel}
-          </span>
-        </div>
-        {onToggleChatPanel && (
-          <div
-            className="ml-auto flex items-center relative"
-            style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          >
-            <ChatPanelToggle
-              onClick={onToggleChatPanel}
-              active={chatPanelVisible}
-            />
-          </div>
-        )}
       </div>
     </>
-  );
-}
-
-function ChatPanelToggle({
-  onClick,
-  active,
-}: {
-  onClick: () => void;
-  active: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={active ? "Close chat" : "Open chat"}
-      className={`inline-flex items-center justify-center rounded text-neutral-500 cursor-pointer hover:bg-black/10 hover:text-neutral-700 transition-colors ${
-        active ? "bg-black/10 text-neutral-700" : ""
-      }`}
-      style={{ width: 22, height: 22 }}
-    >
-      <svg
-        width="13"
-        height="13"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    </button>
   );
 }
 
@@ -514,31 +395,10 @@ function SettingsGearIcon() {
 }
 
 function OrchestratorContent() {
-  const registry = useDb((root) => root.plugin.kernel.viewRegistry);
   const client = useKyjuClient();
-  const rpc = useRpc();
 
   const ensuredRef = useRef(false);
 
-  const activeWorkspaceId = useDb(
-    (root) => root.plugin.kernel.windowState[windowId!]?.activeWorkspaceId ?? null,
-  );
-  useWorkspaceThemeLink(activeWorkspaceId);
-
-  const workspaces = useDb((root) => root.plugin.kernel.workspaces);
-  const activeWorkspace = useMemo(
-    () => (workspaces ?? []).find((w) => w.id === activeWorkspaceId),
-    [workspaces, activeWorkspaceId],
-  );
-  const workspaceCwds = activeWorkspace?.cwds ?? [];
-
-  const activeViewId = useDb(
-    (root) => root.plugin.kernel.windowState[windowId!]?.activeViewId ?? null,
-  );
-
-  // Ensure the windows + windowState entries exist for our windowId. Most
-  // windows are created by the main process; this is a defensive fill-in
-  // for cold-start edge cases.
   useEffect(() => {
     if (ensuredRef.current || !windowId) return;
     const k = client.readRoot().plugin.kernel;
@@ -552,89 +412,16 @@ function OrchestratorContent() {
         [windowId]: kk.windowState[windowId] ?? {
           windowId,
           activeViewId: null,
-          activeWorkspaceId: null,
         },
       };
     });
   }, [client]);
-
-  const registryMap = useMemo(() => {
-    const map = new Map<string, RegistryEntry>();
-    for (const entry of registry) map.set(entry.scope, entry);
-    return map;
-  }, [registry]);
-
-  const handleSelectWorkspace = useCallback(
-    async (workspaceId: string) => {
-      try {
-        await rpc.workspace.activateWorkspace(windowId!, workspaceId);
-      } catch (e) {
-        console.error("[orchestrator] activateWorkspace failed:", e);
-      }
-    },
-    [rpc],
-  );
-
-  // ---- inline chat panel state ----
-
-  // The chat panel toggles when `activeWorkspace.viewScope !== "agent-manager"`.
-  // null means "no chat toggle available" (workspace already shows agent-manager).
-  const showChatToggle = !!activeWorkspace;
-
-  const [chatPanelOpen, setChatPanelOpen] = useState(false);
-  const chatPanelWidth = chatPanelWidthStore.useWidth();
-  const [chatPanelResizing, setChatPanelResizing] = useState(false);
-
-  // Optimistic mirror: read from kyju state if one already exists for
-  // this workspace. If not, we create it on first toggle-open.
-  const existingMirrorId = useDb((root) => {
-    if (!activeWorkspaceId) return null;
-    const ws = (root.plugin.kernel.workspaces ?? []).find(
-      (w) =>
-        w.mirrorOfWorkspaceId === activeWorkspaceId && w.hidden,
-    );
-    return ws?.id ?? null;
-  });
-  const [createdMirrorId, setCreatedMirrorId] = useState<string | null>(null);
-  const mirrorWorkspaceId = existingMirrorId ?? createdMirrorId;
-
-  // Reset chat panel when workspace changes.
-  const prevWorkspaceRef = useRef(activeWorkspaceId);
-  useEffect(() => {
-    if (activeWorkspaceId !== prevWorkspaceRef.current) {
-      prevWorkspaceRef.current = activeWorkspaceId;
-      setChatPanelOpen(false);
-      setCreatedMirrorId(null);
-    }
-  }, [activeWorkspaceId]);
-
-  const handleToggleChatPanel = useCallback(() => {
-    setChatPanelOpen((prev) => {
-      const next = !prev;
-      if (next && !mirrorWorkspaceId && activeWorkspaceId) {
-        void rpc.workspace
-          .ensureMirrorWorkspace(activeWorkspaceId)
-          .then(({ mirrorWorkspaceId: id }) => setCreatedMirrorId(id))
-          .catch((err: unknown) => {
-            console.error("[orchestrator] ensureMirrorWorkspace failed:", err);
-          });
-      }
-      return next;
-    });
-  }, [rpc, activeWorkspaceId, mirrorWorkspaceId]);
-
-  const onToggleChatPanel = showChatToggle ? handleToggleChatPanel : null;
 
   const rootFocusRef = useRef<HTMLDivElement>(null);
   useFocusOnRequest("orchestrator", () => {
     (document.activeElement as HTMLElement | null)?.blur?.();
     rootFocusRef.current?.focus();
   });
-
-  void workspaceCwds;
-  void defaultCwd;
-
-  const chatPanelVisible = chatPanelOpen && showChatToggle && !!mirrorWorkspaceId;
 
   return (
     <div
@@ -648,274 +435,29 @@ function OrchestratorContent() {
           <TitleBarErrorFallback error={error} onReset={reset} />
         )}
       >
-        <TitleBar
-          workspaceLabel={activeWorkspace?.name ?? ""}
-          onToggleChatPanel={onToggleChatPanel}
-          chatPanelVisible={chatPanelVisible}
-        />
+        <TitleBar />
       </ErrorBoundary>
       <KernelBinaryUpdateBanner />
-      <div className="flex flex-row flex-1 min-h-0">
-        {!activeWorkspace?.hidden && (
-          <WorkspaceSidebar
-            windowId={windowId!}
-            activeWorkspaceId={activeWorkspaceId ?? null}
-            onSelectWorkspace={handleSelectWorkspace}
-          />
-        )}
+      <div className="flex-1 min-h-0 relative">
         <ErrorBoundary
-          scope="workspace-view"
+          scope="app-shell-view"
           fallback={({ error, reset }) => (
             <FullErrorFallback error={error} onReset={reset} />
           )}
         >
-          <WorkspaceFrame
-            workspaceId={activeWorkspaceId ?? null}
-            windowId={windowId!}
+          <View
+            id="app-shell"
+            scope="agent-manager"
+            persisted
+            pinned
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+            iframeStyle={{
+              borderTop: "1px solid var(--zenbu-panel-border)",
+              boxSizing: "border-box",
+            }}
           />
         </ErrorBoundary>
-        {chatPanelVisible && (
-          <>
-            <ChatPanelResizeHandle
-              onResizeChange={setChatPanelResizing}
-              store={chatPanelWidthStore}
-            />
-            {chatPanelResizing && <ChatPanelResizeOverlay />}
-            <ChatPanel
-              mirrorWorkspaceId={mirrorWorkspaceId}
-              windowId={windowId!}
-              width={chatPanelWidth}
-            />
-          </>
-        )}
       </div>
-    </div>
-  );
-}
-
-// ---- chat panel width store (localStorage-backed) ----
-
-const CHAT_PANEL_STORAGE_KEY = "chat-panel:width";
-const CHAT_PANEL_DEFAULT = 440;
-
-function makeChatPanelWidthStore() {
-  const listeners = new Set<() => void>();
-  let memo: number | null = null;
-  function read(): number {
-    if (memo !== null) return memo;
-    try {
-      const raw = localStorage.getItem(CHAT_PANEL_STORAGE_KEY);
-      if (raw != null) {
-        const n = parseInt(raw, 10);
-        if (Number.isFinite(n)) {
-          memo = n;
-          return memo;
-        }
-      }
-    } catch {}
-    memo = CHAT_PANEL_DEFAULT;
-    return memo;
-  }
-  function get(): number {
-    return read();
-  }
-  function set(next: number) {
-    const clamped = Math.max(280, Math.round(next));
-    if (clamped === memo) return;
-    memo = clamped;
-    try {
-      localStorage.setItem(CHAT_PANEL_STORAGE_KEY, String(clamped));
-    } catch {}
-    for (const l of listeners) l();
-  }
-  function useWidth(): number {
-    return useSyncExternalStore(
-      (cb) => {
-        listeners.add(cb);
-        return () => listeners.delete(cb);
-      },
-      read,
-      read,
-    );
-  }
-  return { get, set, useWidth };
-}
-
-const chatPanelWidthStore = makeChatPanelWidthStore();
-
-// ---- chat panel components ----
-
-function ChatPanel({
-  mirrorWorkspaceId,
-  windowId,
-  width,
-}: {
-  mirrorWorkspaceId: string;
-  windowId: string;
-  width: number;
-}) {
-  const shellViewId = `chat-panel:${windowId}:${mirrorWorkspaceId}`;
-  return (
-    <div
-      className="shrink-0 flex flex-col overflow-hidden relative"
-      style={{
-        width,
-        borderTop: "1px solid var(--zenbu-panel-border)",
-      }}
-    >
-      <View
-        id={shellViewId}
-        scope="agent-manager"
-        props={{ workspaceId: mirrorWorkspaceId }}
-        persisted
-        pinned
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-        }}
-      />
-    </div>
-  );
-}
-
-function ChatPanelResizeHandle({
-  onResizeChange,
-  store,
-}: {
-  onResizeChange: (resizing: boolean) => void;
-  store: { get: () => number; set: (v: number) => void };
-}) {
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = store.get();
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-      onResizeChange(true);
-      const onMove = (ev: MouseEvent) => {
-        const delta = ev.clientX - startX;
-        store.set(startWidth - delta);
-      };
-      const onUp = () => {
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        onResizeChange(false);
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-      };
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
-    },
-    [onResizeChange, store],
-  );
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      style={{
-        width: 4,
-        cursor: "col-resize",
-        flexShrink: 0,
-        background: "transparent",
-        marginLeft: -2,
-        marginRight: -2,
-        zIndex: 1,
-      }}
-    />
-  );
-}
-
-function ChatPanelResizeOverlay() {
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 9999,
-        cursor: "col-resize",
-        background: "transparent",
-      }}
-    />
-  );
-}
-
-function WorkspaceFrame({
-  workspaceId,
-  windowId,
-}: {
-  workspaceId: string | null;
-  windowId: string;
-}) {
-  // Each workspace declares which registered view scope provides its shell.
-  // Defaults to "agent-manager"; if a future plugin registers an alternative
-  // workspace shell with `meta.kind === "workspace-shell"`, a workspace can
-  // point at it by setting `viewScope` on its row.
-  // Two separate `useDb` calls so each returns a primitive (otherwise
-  // returning a fresh object every snapshot would loop useSyncExternalStore).
-  const viewScope = useDb((root) => {
-    if (!workspaceId) return "agent-manager";
-    const ws = (root.plugin.kernel.workspaces ?? []).find(
-      (w) => w.id === workspaceId,
-    );
-    return ws?.viewScope ?? "agent-manager";
-  });
-  const isHidden = useDb((root) => {
-    if (!workspaceId) return false;
-    const ws = (root.plugin.kernel.workspaces ?? []).find(
-      (w) => w.id === workspaceId,
-    );
-    return ws?.hidden ?? false;
-  });
-
-  if (!workspaceId) {
-    return (
-      <div className="flex-1 min-w-0 min-h-0 flex items-center justify-center text-neutral-400 text-xs">
-        {/* Pick or create a workspace */}
-      </div>
-    );
-  }
-  // Hidden workspaces (agent-window mirrors) render without the workspace
-  // sidebar, so the iframe occupies the full window width. Drop the
-  // top-left rounding + the left border so the iframe is flush with the
-  // window chrome — same flat treatment as the top-right edge.
-  const iframeStyle: React.CSSProperties = isHidden
-    ? {
-        borderTop: "1px solid var(--zenbu-panel-border)",
-        borderRight: "1px solid var(--zenbu-panel-border)",
-        boxSizing: "border-box",
-      }
-    : {
-        borderTopLeftRadius: "8px",
-        borderTop: "1px solid var(--zenbu-panel-border)",
-        borderLeft: "1px solid var(--zenbu-panel-border)",
-        borderRight: "1px solid var(--zenbu-panel-border)",
-        boxSizing: "border-box",
-      };
-  return (
-    <div
-      className="flex-1 min-w-0 min-h-0 relative"
-      // Match the title bar / workspace sidebar so when the iframe's
-      // top-left corner is rounded, the pixel revealed behind it
-      // continues the L-shape chrome (title bar + sidebar) rather
-      // than showing the lighter panel background.
-      style={{ background: "var(--zenbu-chrome)" }}
-    >
-      <View
-        id={workspaceShellViewId(windowId, workspaceId)}
-        scope={viewScope}
-        props={{ workspaceId }}
-        persisted
-        pinned
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-        }}
-        iframeStyle={iframeStyle}
-      />
     </div>
   );
 }

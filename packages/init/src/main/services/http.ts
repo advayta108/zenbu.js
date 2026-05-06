@@ -6,7 +6,7 @@ import { ServerService } from "./server"
 import { ReloaderService } from "./reloader"
 import type { Duplex } from "stream"
 
-type ConnectedCallback = (id: string, ws: WebSocket, meta: { workspaceId?: string }) => void
+type ConnectedCallback = (id: string, ws: WebSocket) => void
 type DisconnectedCallback = (id: string) => void
 
 type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => void
@@ -129,11 +129,9 @@ export class HttpService extends Service {
     this.setup("ws-dispatch", () => {
       const onConnection = (ws: WebSocket, req: http.IncomingMessage) => {
         const id = nanoid()
-        const url = new URL(req.url ?? "/", "http://127.0.0.1")
-        const workspaceId = url.searchParams.get("workspaceId") ?? undefined
 
         this.activeConnections.set(id, ws)
-        for (const cb of this.connectedCallbacks) cb(id, ws, { workspaceId })
+        for (const cb of this.connectedCallbacks) cb(id, ws)
 
         ws.on("close", () => {
           this.activeConnections.delete(id)

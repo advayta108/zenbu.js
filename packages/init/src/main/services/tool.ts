@@ -5,11 +5,9 @@ import { getMcpSocketPath } from "@zenbu/agent/src/mcp/socket-path";
 import { defineTools, type ToolDef } from "@zenbu/agent/src/mcp/tools";
 import { Service, runtime } from "../runtime";
 import { AgentService } from "./agent";
-import { DbService } from "./db";
 
 interface ExternalToolEntry {
   def: ToolDef<any>;
-  workspaceId?: string;
 }
 
 const builtinTools: Record<string, ToolDef<any>> = {
@@ -44,52 +42,41 @@ const builtinTools: Record<string, ToolDef<any>> = {
 
 export class ToolService extends Service {
   static key = "tool";
-  static deps = { agent: AgentService, db: DbService };
-  declare ctx: { agent: AgentService; db: DbService };
+  static deps = { agent: AgentService };
+  declare ctx: { agent: AgentService };
 
   private servers = new Map<string, McpSocketServer>();
   private externalTools = new Map<string, ExternalToolEntry>();
 
   addTool(name: string, def: ToolDef<any>): () => void {
-    const wsId = runtime.getActiveScope() ?? undefined;
-    const key = wsId ? `${name}@@${wsId}` : name;
-    this.externalTools.set(key, { def, workspaceId: wsId });
+    this.externalTools.set(name, { def });
     this.refreshImplementation();
 
     return () => {
-      this.externalTools.delete(key);
+      this.externalTools.delete(name);
       this.refreshImplementation();
     };
   }
 
-  private buildImplementation(agentWorkspaceId?: string) {
+  private buildImplementation() {
     const tools: Record<string, ToolDef<any>> = { ...builtinTools };
 
-    for (const [key, { def, workspaceId }] of this.externalTools) {
-      if (!workspaceId || workspaceId === agentWorkspaceId) {
-        const name = key.includes("@@") ? key.split("@@")[0] : key;
-        tools[name] = def;
-      }
+    for (const [name, { def }] of this.externalTools) {
+      tools[name] = def;
     }
 
     return defineTools(tools);
   }
 
-  private getAgentWorkspaceId(agentId: string): string | undefined {
-    const am = this.ctx.db.client.readRoot().plugin["agent-manager"];
-    return am.agentState[agentId]?.workspaceId ?? undefined;
-  }
-
   private refreshImplementation() {
-    for (const [agentId, server] of this.servers) {
-      const wsId = this.getAgentWorkspaceId(agentId);
-      server.setImplementation(this.buildImplementation(wsId));
+    const impl = this.buildImplementation();
+    for (const [, server] of this.servers) {
+      server.setImplementation(impl);
     }
   }
 
   private async bindServer(agentId: string, socketPath: string) {
-    const wsId = this.getAgentWorkspaceId(agentId);
-    const impl = this.buildImplementation(wsId);
+    const impl = this.buildImplementation();
     const server = new McpSocketServer();
     server.setImplementation(impl, () => ({
       agentId,
