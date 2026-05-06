@@ -727,6 +727,7 @@ export class WindowService extends Service {
             *{margin:0;padding:0}html,body{height:100%;background:transparent;cursor:col-resize}
           </style><script>
             document.addEventListener('mouseup',()=>console.log('__split_drag_end__'));
+            document.addEventListener('mousemove',e=>{if(e.buttons===0)console.log('__split_drag_end__')},{once:true});
           </script></head><body></body></html>`;
           const { width: cw, height: ch } = win.getContentBounds();
           overlay.setBounds({ x: 0, y: 0, width: cw, height: ch });
@@ -734,17 +735,10 @@ export class WindowService extends Service {
           overlay.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml)}`);
           state.overlay = overlay;
 
-          const poll = setInterval(() => {
-            if (win.isDestroyed()) { clearInterval(poll); return; }
-            const cur = screen.getCursorScreenPoint();
-            const dx = cur.x - startPoint.x;
-            const contentWidth = win.getContentBounds().width;
-            const newRatio = Math.min(MAX_RATIO, Math.max(MIN_RATIO, startRatio + dx / contentWidth));
-            state.ratio = newRatio;
-            doLayout();
-          }, 16);
-
+          let cleaned = false;
           const cleanup = () => {
+            if (cleaned) return;
+            cleaned = true;
             clearInterval(poll);
             if (!win.isDestroyed() && state.overlay) {
               win.contentView.removeChildView(state.overlay);
@@ -752,6 +746,16 @@ export class WindowService extends Service {
               state.overlay = null;
             }
           };
+
+          const poll = setInterval(() => {
+            if (win.isDestroyed()) { cleanup(); return; }
+            const cur = screen.getCursorScreenPoint();
+            const dx = cur.x - startPoint.x;
+            const contentWidth = win.getContentBounds().width;
+            const newRatio = Math.min(MAX_RATIO, Math.max(MIN_RATIO, startRatio + dx / contentWidth));
+            state.ratio = newRatio;
+            doLayout();
+          }, 16);
 
           overlay.webContents.on("console-message", (e2) => {
             if (e2.message === "__split_drag_end__") cleanup();
