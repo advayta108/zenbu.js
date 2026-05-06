@@ -473,4 +473,4 @@ export class RegistryService extends Service {
   }
 }
 
-runtime.register(RegistryService, (import.meta as any).hot)
+runtime.register(RegistryService, import.meta)

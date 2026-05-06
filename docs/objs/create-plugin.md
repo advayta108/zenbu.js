@@ -129,7 +129,7 @@ export class MyPluginService extends Service {
   }
 }
 
-runtime.register(MyPluginService, (import.meta as any).hot)
+runtime.register(MyPluginService, import.meta)
 ```
 
 You can also depend on kernel services by string key to avoid import path issues:

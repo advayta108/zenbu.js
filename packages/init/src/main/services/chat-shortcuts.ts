@@ -27,4 +27,4 @@ export class ChatShortcutsService extends Service {
   }
 }
 
-runtime.register(ChatShortcutsService, (import.meta as any).hot);
+runtime.register(ChatShortcutsService, import.meta);

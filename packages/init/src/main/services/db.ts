@@ -7,6 +7,7 @@ import { createDb, type Db, type SectionConfig } from "@zenbu/kyju";
 import type { KyjuError, EffectFieldNode, FieldNode } from "@zenbu/kyju";
 import type * as Effect from "effect/Effect";
 import { createRouter, dbStringify, dbParse } from "@zenbu/kyju/transport";
+import { loadMigrationsFromDir } from "@zenbu/kyju/loader";
 import type { DbRoot } from "#registry/db-sections";
 import { Service, runtime } from "../runtime";
 import { trace as traceSpan } from "../../../shared/tracer";
@@ -63,7 +64,7 @@ export async function resolveManifestModulePath(
   for (const candidate of candidates) {
     try {
       const stat = await fs.stat(candidate);
-      if (stat.isFile()) return candidate;
+      if (stat.isFile() || stat.isDirectory()) return candidate;
     } catch {
       // keep trying candidates
     }
@@ -78,7 +79,7 @@ async function importFreshModule(modulePath: string): Promise<any> {
   // Plain `import()` so dynohot wraps the schema/migrations as live deps of
   // DbService. When these files change, dynohot's file watcher invalidates
   // them and propagates upward via `iterateWithDynamics`; DbService's
-  // `runtime.register(..., import.meta.hot)` accept handler re-runs
+  // `runtime.register(..., import.meta)` accept handler re-runs
   // evaluate(), which re-discovers sections and calls createDb with the new
   // migrations array. Kyju's migration plugin then applies only the delta
   // against the existing on-disk DB.
@@ -227,25 +228,37 @@ export async function discoverSections(
                 resolveMigrationsMs = Date.now() - m0;
 
                 const m1 = Date.now();
-                const migModule = await traceSpan(
-                  "discover:import-migrations",
-                  () => importFreshModule(migrationsPath),
-                  { parentKey: "db", meta: { plugin: pluginName } },
-                );
+                const stat = await fs.stat(migrationsPath);
+                let migrations: any[];
+                if (stat.isDirectory()) {
+                  migrations = await traceSpan(
+                    "discover:load-migrations-dir",
+                    () => loadMigrationsFromDir(migrationsPath),
+                    { parentKey: "db", meta: { plugin: pluginName } },
+                  );
+                } else {
+                  const migModule = await traceSpan(
+                    "discover:import-migrations",
+                    () => importFreshModule(migrationsPath),
+                    { parentKey: "db", meta: { plugin: pluginName } },
+                  );
+                  migrations =
+                    migModule.migrations ?? migModule.default ?? [];
+                }
                 importMigrationsMs = Date.now() - m1;
 
-                return { migModule, failed: false as const };
+                return { migrations, failed: false as const };
               } catch (error) {
                 console.error(
                   `[db] failed to load migrations from ${manifestPath}: ${
                     error instanceof Error ? error.message : String(error)
                   }`,
                 );
-                return { migModule: null, failed: true as const };
+                return { migrations: [] as any[], failed: true as const };
               }
             })()
           : Promise.resolve({
-              migModule: null,
+              migrations: [] as any[],
               failed: false as const,
             });
 
@@ -265,13 +278,7 @@ export async function discoverSections(
           return null;
         }
 
-        const migrations = migrationsResult.migModule
-          ? (migrationsResult.migModule.migrations ??
-            migrationsResult.migModule.default ??
-            [])
-          : [];
-
-        return { name: manifest.name, schema, migrations };
+        return { name: manifest.name, schema, migrations: migrationsResult.migrations };
       } catch (error) {
         console.error(
           `[db] failed to load section from ${manifestPath}: ${
@@ -535,4 +542,4 @@ export class DbService extends Service {
   }
 }
 
-runtime.register(DbService, (import.meta as any).hot);
+runtime.register(DbService, import.meta);

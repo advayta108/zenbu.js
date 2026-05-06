@@ -193,7 +193,7 @@ function buildManifest(name: string, recipes: Recipe[]): Manifest {
   }
   if (recipes.includes("db")) {
     m.schema = "./src/schema.ts"
-    m.migrations = "./kyju/index.ts"
+    m.migrations = "./kyju"
   }
   return m
 }

@@ -1053,4 +1053,4 @@ export class WindowService extends Service {
   }
 }
 
-runtime.register(WindowService, (import.meta as any).hot);
+runtime.register(WindowService, import.meta);

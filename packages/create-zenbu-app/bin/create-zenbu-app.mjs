@@ -75,7 +75,6 @@ async function main() {
       [setupTs],
       path.join(projectDir, "zenbu"),
       {
-        ZENBU_STANDALONE: "1",
         ZENBU_CONFIG_PATH: path.join(projectDir, "config.json"),
       },
     );

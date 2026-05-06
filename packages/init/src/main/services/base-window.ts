@@ -98,4 +98,4 @@ export class BaseWindowService extends Service {
   }
 }
 
-runtime.register(BaseWindowService, (import.meta as any).hot)
+runtime.register(BaseWindowService, import.meta)

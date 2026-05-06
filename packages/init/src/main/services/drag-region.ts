@@ -34,4 +34,4 @@ export class DragRegionService extends Service {
   }
 }
 
-runtime.register(DragRegionService, (import.meta as any).hot)
+runtime.register(DragRegionService, import.meta)

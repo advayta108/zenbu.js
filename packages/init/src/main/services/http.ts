@@ -151,4 +151,4 @@ export class HttpService extends Service {
   }
 }
 
-runtime.register(HttpService, (import.meta as any).hot)
+runtime.register(HttpService, import.meta)

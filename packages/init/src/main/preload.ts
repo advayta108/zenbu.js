@@ -26,6 +26,9 @@ const execFileAsync = promisify(execFile)
 export default async function kernelPreload(): Promise<{
   pathExtras: string[]
 }> {
+  /**
+   * this preload is majorly brain damaged i don't think we need this to find the bin of agents but skill issue for now
+   */
   const shell = process.env.SHELL ?? "/bin/zsh"
   try {
     const { stdout } = await execFileAsync(

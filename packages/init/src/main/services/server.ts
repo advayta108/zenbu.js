@@ -68,4 +68,4 @@ export class ServerService extends Service {
   }
 }
 
-runtime.register(ServerService, (import.meta as any).hot)
+runtime.register(ServerService, import.meta)

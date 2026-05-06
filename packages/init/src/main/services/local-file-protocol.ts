@@ -69,4 +69,4 @@ export class LocalFileProtocolService extends Service {
   }
 }
 
-runtime.register(LocalFileProtocolService, (import.meta as any).hot)
+runtime.register(LocalFileProtocolService, import.meta)

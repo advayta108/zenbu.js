@@ -806,4 +806,4 @@ async function scanIcon(cwd: string): Promise<{ path: string } | null> {
   return null
 }
 
-runtime.register(WorkspaceService, (import.meta as any).hot)
+runtime.register(WorkspaceService, import.meta)

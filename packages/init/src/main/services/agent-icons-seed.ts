@@ -73,4 +73,4 @@ export class AgentIconsSeedService extends Service {
   }
 }
 
-runtime.register(AgentIconsSeedService, (import.meta as any).hot);
+runtime.register(AgentIconsSeedService, import.meta);

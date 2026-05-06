@@ -192,4 +192,4 @@ export class PooledAgentService extends Service {
   }
 }
 
-runtime.register(PooledAgentService, (import.meta as any).hot);
+runtime.register(PooledAgentService, import.meta);

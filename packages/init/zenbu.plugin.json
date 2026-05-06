@@ -5,7 +5,7 @@
     "src/main/services/*.ts"
   ],
   "schema": "./shared/schema/index.ts",
-  "migrations": "./kyju/index.ts",
+  "migrations": "./kyju",
   "events": "./shared/events.ts",
   "preload": "./src/main/preload.ts",
   "setup": {

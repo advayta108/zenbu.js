@@ -58,4 +58,4 @@ export class FocusShortcutsService extends Service {
   }
 }
 
-runtime.register(FocusShortcutsService, (import.meta as any).hot);
+runtime.register(FocusShortcutsService, import.meta);

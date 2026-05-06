@@ -98,4 +98,4 @@ export class RpcService extends Service {
   }
 }
 
-runtime.register(RpcService, (import.meta as any).hot);
+runtime.register(RpcService, import.meta);

@@ -225,4 +225,4 @@ function parseJsonc(str: string): unknown {
   return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"));
 }
 
-runtime.register(ViewRegistryService, (import.meta as any).hot);
+runtime.register(ViewRegistryService, import.meta);

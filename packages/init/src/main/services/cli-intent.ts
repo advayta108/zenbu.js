@@ -152,4 +152,4 @@ export class CliIntentService extends Service {
   }
 }
 
-runtime.register(CliIntentService, (import.meta as any).hot);
+runtime.register(CliIntentService, import.meta);

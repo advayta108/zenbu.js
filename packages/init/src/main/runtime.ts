@@ -27,6 +27,13 @@ type DepRef = typeof Service | string
 type OptionalDep = { __optional: true; ref: DepRef }
 type DepEntry = DepRef | OptionalDep
 
+// TODO: Replace optional() with a reactive service tracker API, e.g.
+// this.track(SomeService, { onAvailable(instance) {}, onUnavailable() {} })
+// This gives both optional declaration and reactive listening in one primitive:
+// the dep may not exist at evaluate-time, but when it appears (plugin loaded,
+// workspace activated) you get a callback — and a teardown when it disappears.
+// Eliminates the need for manual null-checks in evaluate() and global
+// onReconciled polling for a specific service key.
 export function optional(ref: DepRef): OptionalDep {
   return { __optional: true, ref }
 }
@@ -122,7 +129,8 @@ export class ServiceRuntime {
   private onReconciledCallbacks: Array<(changedKeys: string[]) => void> = []
   private _scopeStorage = new AsyncLocalStorage<string>()
 
-  register(ServiceClass: typeof Service, hot?: HotContext | null): void {
+  register(ServiceClass: typeof Service, importMeta?: ImportMeta | null): void {
+    const hot: HotContext | null = (importMeta as any)?.hot ?? null
     const baseKey = ServiceClass.key
     if (!baseKey) throw new Error("Service must have a static key property")
 

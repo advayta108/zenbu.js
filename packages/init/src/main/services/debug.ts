@@ -70,4 +70,4 @@ export class DebugService extends Service {
   evaluate() {}
 }
 
-runtime.register(DebugService, (import.meta as any).hot)
+runtime.register(DebugService, import.meta)

@@ -99,4 +99,4 @@ export class AgentManagerService extends Service {
   evaluate() {}
 }
 
-runtime.register(AgentManagerService, (import.meta as any).hot)
+runtime.register(AgentManagerService, import.meta)

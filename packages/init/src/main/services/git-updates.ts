@@ -985,4 +985,4 @@ function looksBinary(text: string): boolean {
   return probe.includes("\u0000")
 }
 
-runtime.register(GitUpdatesService, (import.meta as any).hot)
+runtime.register(GitUpdatesService, import.meta)

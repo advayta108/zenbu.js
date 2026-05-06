@@ -189,7 +189,6 @@ async function run() {
     if (fs.existsSync(setupTs)) {
       quietLabelEl.textContent = "Completing setup…"
       await runCommand(BUN_BIN, [setupTs], path.join(PROJECT_DIR, "zenbu"), {
-        ZENBU_STANDALONE: "1",
         ZENBU_CONFIG_PATH: path.join(PROJECT_DIR, "config.json"),
       })
     }

@@ -194,4 +194,4 @@ export class KernelUpdaterService extends Service {
   }
 }
 
-runtime.register(KernelUpdaterService, (import.meta as any).hot);
+runtime.register(KernelUpdaterService, import.meta);

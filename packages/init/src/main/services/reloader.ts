@@ -221,4 +221,4 @@ export class ReloaderService extends Service {
   }
 }
 
-runtime.register(ReloaderService, (import.meta as any).hot)
+runtime.register(ReloaderService, import.meta)

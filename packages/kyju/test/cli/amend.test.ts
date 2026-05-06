@@ -82,11 +82,6 @@ describe("generate --amend", () => {
     expect(migContent).toContain("version: 2");
 
     expect(fs.existsSync(path.join(out, "0002_add_mode.ts"))).toBe(false);
-
-    const barrel = fs.readFileSync(path.join(out, "index.ts"), "utf-8");
-    expect(barrel).toContain("import m0");
-    expect(barrel).toContain("import m1");
-    expect(barrel).not.toContain("import m2");
   });
 
   it("amend with only one migration replaces it", () => {

@@ -64,10 +64,10 @@ export class MyService extends Service {
   }
 }
 
-runtime.register(MyService, (import.meta as any).hot)
+runtime.register(MyService, import.meta)
 ```
 
-The `runtime.register()` call at the bottom is required. Passing `import.meta.hot` enables HMR—the service will accept hot updates and unregister when the module is pruned.
+The `runtime.register()` call at the bottom is required. Passing `import.meta` enables HMR—the service will accept hot updates and unregister when the module is pruned.
 
 ### 3. Add Dependencies (If Needed)
 
@@ -89,7 +89,7 @@ export class MyService extends Service {
   }
 }
 
-runtime.register(MyService, (import.meta as any).hot)
+runtime.register(MyService, import.meta)
 ```
 
 Dependencies can be:
@@ -207,7 +207,7 @@ export class ServerService extends Service {
   }
 }
 
-runtime.register(ServerService, (import.meta as any).hot)
+runtime.register(ServerService, import.meta)
 ```
 
 Key patterns:
@@ -224,5 +224,5 @@ Key patterns:
 - [ ] `declare ctx` matches the deps for type safety
 - [ ] `evaluate()` is implemented
 - [ ] Non-deterministic resources use `this.effect(key, setup)` with cleanup
-- [ ] `runtime.register(MyService, (import.meta as any).hot)` is called at the bottom
+- [ ] `runtime.register(MyService, import.meta)` is called at the bottom
 - [ ] No circular dependencies in `static deps`

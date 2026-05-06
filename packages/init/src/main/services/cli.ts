@@ -211,4 +211,4 @@ export class CliService extends Service {
   }
 }
 
-runtime.register(CliService, (import.meta as any).hot);
+runtime.register(CliService, import.meta);

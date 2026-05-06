@@ -444,4 +444,4 @@ export class InstallerService extends Service {
   }
 }
 
-runtime.register(InstallerService, (import.meta as any).hot)
+runtime.register(InstallerService, import.meta)

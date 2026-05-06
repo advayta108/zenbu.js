@@ -82,4 +82,4 @@ export class CoreRendererService extends Service {
   }
 }
 
-runtime.register(CoreRendererService, (import.meta as any).hot)
+runtime.register(CoreRendererService, import.meta)

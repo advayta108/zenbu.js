@@ -7,4 +7,4 @@ export class AppService extends Service {
   evaluate() {}
 }
 
-runtime.register(AppService, (import.meta as unknown as { hot?: unknown }).hot)
+runtime.register(AppService, import.meta)

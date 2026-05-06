@@ -42,20 +42,12 @@ describe("section discovery", () => {
         "",
       ].join("\n"),
     );
-    fs.writeFileSync(
-      path.join(dir, "kyju", "index.js"),
-      [
-        "const migrations = [];",
-        "export { migrations };",
-        "",
-      ].join("\n"),
-    );
 
     await expect(resolveManifestModulePath(dir, "./schema")).resolves.toBe(
       path.join(dir, "schema.js"),
     );
     await expect(resolveManifestModulePath(dir, "./kyju")).resolves.toBe(
-      path.join(dir, "kyju", "index.js"),
+      path.join(dir, "kyju"),
     );
   });
 
@@ -64,7 +56,7 @@ describe("section discovery", () => {
     cleanups.push(dir);
 
     fs.writeFileSync(path.join(dir, "package.json"), '{"name":"tmp-plugin"}\n');
-    fs.mkdirSync(path.join(dir, "kyju"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "kyju", "meta"), { recursive: true });
     fs.writeFileSync(
       path.join(dir, "schema.js"),
       [
@@ -74,12 +66,15 @@ describe("section discovery", () => {
       ].join("\n"),
     );
     fs.writeFileSync(
-      path.join(dir, "kyju", "index.js"),
-      [
-        "const migrations = [{ version: 1, operations: [] }];",
-        "export { migrations };",
-        "",
-      ].join("\n"),
+      path.join(dir, "kyju", "0000_initial.js"),
+      "export default { version: 1, operations: [] };\n",
+    );
+    fs.writeFileSync(
+      path.join(dir, "kyju", "meta", "_journal.json"),
+      JSON.stringify({
+        version: "1",
+        entries: [{ idx: 0, tag: "initial", when: Date.now() }],
+      }) + "\n",
     );
     fs.writeFileSync(
       path.join(dir, "zenbu.plugin.json"),

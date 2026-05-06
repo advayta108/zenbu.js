@@ -25,4 +25,4 @@ export class BrowserViewService extends Service {
   }
 }
 
-runtime.register(BrowserViewService, (import.meta as any).hot)
+runtime.register(BrowserViewService, import.meta)

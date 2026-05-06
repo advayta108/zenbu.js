@@ -109,12 +109,12 @@ function runGenerate(opts: { config?: string; name?: string; custom: boolean; am
       name: opts.name,
       custom: opts.custom,
       amend: opts.amend,
+      alias: resolved.alias,
     });
 
     console.log(`\n${opts.amend ? "Amended" : "Generated"}:`);
     console.log(`  Migration: ${result.migrationPath}`);
     console.log(`  Snapshot:  ${result.snapshotPath}`);
-    console.log(`  Barrel:    ${result.barrelPath}`);
   }
 }
 

@@ -342,4 +342,4 @@ export class ShortcutService extends Service {
   }
 }
 
-runtime.register(ShortcutService, (import.meta as any).hot);
+runtime.register(ShortcutService, import.meta);

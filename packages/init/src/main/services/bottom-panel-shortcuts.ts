@@ -27,4 +27,4 @@ export class BottomPanelShortcutsService extends Service {
   }
 }
 
-runtime.register(BottomPanelShortcutsService, (import.meta as any).hot);
+runtime.register(BottomPanelShortcutsService, import.meta);

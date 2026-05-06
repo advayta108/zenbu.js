@@ -172,7 +172,7 @@ export class MyViewService extends Service {
   }
 }
 
-runtime.register(MyViewService, (import.meta as any).hot)
+runtime.register(MyViewService, import.meta)
 ```
 
 `register(scope, viewRoot, configFile, meta?)` boots a Vite dev server rooted at `viewRoot` using the plugin's `vite.config.ts`, then writes a row into `kernel.viewRegistry` so other views can mount this scope via `<View scope="my-view" />`.

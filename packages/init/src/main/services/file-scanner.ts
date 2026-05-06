@@ -129,4 +129,4 @@ export class FileScannerService extends Service {
   }
 }
 
-runtime.register(FileScannerService, (import.meta as any).hot)
+runtime.register(FileScannerService, import.meta)

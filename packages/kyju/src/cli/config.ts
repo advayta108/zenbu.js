@@ -7,6 +7,10 @@ import type { Schema } from "../v2/db/schema";
 export type KyjuConfig = {
   schema: string;
   out?: string;
+  /** Import alias for the kyju package (e.g. "#zenbu/kyju"). When set, generated
+   *  migrations use `import type { KyjuMigration } from "<alias>"` instead of
+   *  inlining the type definitions. */
+  alias?: string;
 };
 
 export function defineConfig(config: KyjuConfig): KyjuConfig {
@@ -16,6 +20,7 @@ export function defineConfig(config: KyjuConfig): KyjuConfig {
 export type ResolvedConfig = {
   schemaPath: string;
   outPath: string;
+  alias?: string;
 };
 
 const moduleFile =
@@ -55,6 +60,7 @@ export function loadConfig(configPath: string): ResolvedConfig {
   return {
     schemaPath: path.resolve(dir, config.schema),
     outPath: path.resolve(dir, config.out ?? "./kyju"),
+    alias: config.alias,
   };
 }
 

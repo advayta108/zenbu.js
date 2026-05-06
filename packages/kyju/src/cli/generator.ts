@@ -62,13 +62,20 @@ export function getSnapshotAtIndex(outPath: string, journal: Journal, index: num
   return JSON.parse(fs.readFileSync(snapshotPath, "utf-8"));
 }
 
-function generateDeclarativeMigration(idx: number, ops: MigrationOp[]): string {
+function typesPreamble(alias?: string): string {
+  if (alias) {
+    return `import type { KyjuMigration } from "${alias}"`;
+  }
+  return INLINE_MIGRATION_TYPES;
+}
+
+function generateDeclarativeMigration(idx: number, ops: MigrationOp[], alias?: string): string {
   const opsJson = JSON.stringify(ops, null, 2)
     .split("\n")
     .map((line, i) => (i === 0 ? line : "  " + line))
     .join("\n");
 
-  return `${INLINE_MIGRATION_TYPES}
+  return `${typesPreamble(alias)}
 
 const migration: KyjuMigration = {
   version: ${idx + 1},
@@ -79,13 +86,13 @@ export default migration
 `;
 }
 
-function generateCustomMigration(idx: number, ops: MigrationOp[]): string {
+function generateCustomMigration(idx: number, ops: MigrationOp[], alias?: string): string {
   const opsJson = JSON.stringify(ops, null, 2)
     .split("\n")
     .map((line, i) => (i === 0 ? line : "  " + line))
     .join("\n");
 
-  return `${INLINE_MIGRATION_TYPES}
+  return `${typesPreamble(alias)}
 
 const migration: KyjuMigration = {
   version: ${idx + 1},
@@ -101,14 +108,6 @@ export default migration
 `;
 }
 
-function generateBarrel(entries: JournalEntry[]): string {
-  const imports = entries.map(
-    (e) => `import m${e.idx} from "./${pad(e.idx)}_${e.tag}"`,
-  );
-  const names = entries.map((e) => `m${e.idx}`);
-  return `${imports.join("\n")}\n\nexport const migrations = [${names.join(", ")}]\n`;
-}
-
 export type GenerateOptions = {
   outPath: string;
   snapshot: SchemaSnapshot;
@@ -116,14 +115,14 @@ export type GenerateOptions = {
   name?: string;
   custom?: boolean;
   amend?: boolean;
+  alias?: string;
 };
 
 export function generate(opts: GenerateOptions): {
   migrationPath: string;
   snapshotPath: string;
-  barrelPath: string;
 } {
-  const { outPath, snapshot, ops, name, custom, amend } = opts;
+  const { outPath, snapshot, ops, name, custom, amend, alias } = opts;
 
   fs.mkdirSync(path.join(outPath, "meta"), { recursive: true });
 
@@ -161,8 +160,8 @@ export function generate(opts: GenerateOptions): {
   const useCustom = custom || hasAlterOps;
 
   const migrationCode = useCustom
-    ? generateCustomMigration(idx, ops)
-    : generateDeclarativeMigration(idx, ops);
+    ? generateCustomMigration(idx, ops, alias)
+    : generateDeclarativeMigration(idx, ops, alias);
 
   const migrationPath = path.join(outPath, `${prefix}_${tag}.ts`);
   fs.writeFileSync(migrationPath, migrationCode);
@@ -170,8 +169,5 @@ export function generate(opts: GenerateOptions): {
   const journalPath = path.join(outPath, "meta", "_journal.json");
   fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2) + "\n");
 
-  const barrelPath = path.join(outPath, "index.ts");
-  fs.writeFileSync(barrelPath, generateBarrel(journal.entries));
-
-  return { migrationPath, snapshotPath, barrelPath };
+  return { migrationPath, snapshotPath };
 }

@@ -176,4 +176,4 @@ export class InsertService extends Service {
   }
 }
 
-runtime.register(InsertService, (import.meta as any).hot);
+runtime.register(InsertService, import.meta);

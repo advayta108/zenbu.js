@@ -36,7 +36,7 @@ The runtime architecture, top-down:
    service files.
 2. **Service runtime** (`packages/init/src/main/runtime.ts`) —
    a `ServiceRuntime` singleton on `globalThis`. Each plugin file does
-   `runtime.register(MyService, import.meta.hot)` at module bottom.
+   `runtime.register(MyService, import.meta)` at module bottom.
    Dependencies form a DAG; effects run on first evaluate and re-run on
    hot reload.
 3. **Kyju DB** (`packages/kyju`) — reactive SQLite-backed database
@@ -216,7 +216,7 @@ export class MyService extends Service {
   async hello(name: string) { return `hi ${name}` }
 }
 
-runtime.register(MyService, (import.meta as any).hot)
+runtime.register(MyService, import.meta)
 ```
 
 Rules:

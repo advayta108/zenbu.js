@@ -71,4 +71,4 @@ export class AgentManagerViewService extends Service {
   }
 }
 
-runtime.register(AgentManagerViewService, (import.meta as any).hot)
+runtime.register(AgentManagerViewService, import.meta)

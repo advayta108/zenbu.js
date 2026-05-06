@@ -47,7 +47,6 @@ describe("generator", () => {
 
     expect(fs.existsSync(result.migrationPath)).toBe(true);
     expect(fs.existsSync(result.snapshotPath)).toBe(true);
-    expect(fs.existsSync(result.barrelPath)).toBe(true);
 
     const migContent = fs.readFileSync(result.migrationPath, "utf-8");
     expect(migContent).toContain("KyjuMigration");
@@ -60,18 +59,6 @@ describe("generator", () => {
     expect(journal.entries).toHaveLength(1);
     expect(journal.entries[0]!.idx).toBe(0);
     expect(journal.entries[0]!.tag).toBe("initial");
-  });
-
-  it("generates barrel with correct imports", () => {
-    const out = tmpDir();
-    cleanups.push(out);
-
-    const snapshot = makeSnapshot({}, "id-1", "");
-    generate({ outPath: out, snapshot, ops: [], name: "first" });
-
-    const barrel = fs.readFileSync(path.join(out, "index.ts"), "utf-8");
-    expect(barrel).toContain('import m0 from "./0000_first"');
-    expect(barrel).toContain("export const migrations = [m0]");
   });
 
   it("consecutive generates produce incrementing prefixes", () => {
@@ -95,11 +82,6 @@ describe("generator", () => {
 
     expect(fs.existsSync(path.join(out, "0000_first.ts"))).toBe(true);
     expect(fs.existsSync(path.join(out, "0001_second.ts"))).toBe(true);
-
-    const barrel = fs.readFileSync(path.join(out, "index.ts"), "utf-8");
-    expect(barrel).toContain("import m0");
-    expect(barrel).toContain("import m1");
-    expect(barrel).toContain("export const migrations = [m0, m1]");
   });
 
   it("snapshot written with correct id/prevId", () => {
@@ -185,6 +167,46 @@ describe("generator", () => {
     expect(last).not.toBeNull();
     expect(last!.id).toBe("id-2");
     expect(last!.fields.y).toEqual({ kind: "collection" });
+  });
+
+  it("alias option uses import instead of inline types", () => {
+    const out = tmpDir();
+    cleanups.push(out);
+
+    const snapshot = makeSnapshot(
+      { x: { kind: "data", hasDefault: true, default: 0, typeHash: "abc" } },
+      "id-1",
+      "",
+    );
+    const ops: MigrationOp[] = [
+      { op: "add", key: "x", kind: "data", hasDefault: true, default: 0 },
+    ];
+
+    const result = generate({
+      outPath: out,
+      snapshot,
+      ops,
+      name: "aliased",
+      alias: "#zenbu/kyju",
+    });
+
+    const content = fs.readFileSync(result.migrationPath, "utf-8");
+    expect(content).toContain('import type { KyjuMigration } from "#zenbu/kyju"');
+    expect(content).not.toContain("type MigrationOp =");
+    expect(content).toContain("version: 1");
+  });
+
+  it("no alias inlines type definitions", () => {
+    const out = tmpDir();
+    cleanups.push(out);
+
+    const snapshot = makeSnapshot({}, "id-1", "");
+    const result = generate({ outPath: out, snapshot, ops: [], name: "inline" });
+
+    const content = fs.readFileSync(result.migrationPath, "utf-8");
+    expect(content).toContain("type MigrationOp =");
+    expect(content).toContain("type KyjuMigration =");
+    expect(content).not.toContain("import type");
   });
 
   it("journal tracks entries correctly", () => {

@@ -12,4 +12,4 @@ export class ChatViewService extends Service {
   }
 }
 
-runtime.register(ChatViewService, (import.meta as any).hot)
+runtime.register(ChatViewService, import.meta)

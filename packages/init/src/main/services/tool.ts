@@ -138,4 +138,4 @@ export class ToolService extends Service {
   }
 }
 
-runtime.register(ToolService, (import.meta as any).hot);
+runtime.register(ToolService, import.meta);

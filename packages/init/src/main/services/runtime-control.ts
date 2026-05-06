@@ -41,4 +41,4 @@ export class RuntimeControlService extends Service {
   }
 }
 
-runtime.register(RuntimeControlService, (import.meta as any).hot)
+runtime.register(RuntimeControlService, import.meta)

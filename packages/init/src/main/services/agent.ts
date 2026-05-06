@@ -813,4 +813,4 @@ export class AgentService extends Service {
   }
 }
 
-runtime.register(AgentService, (import.meta as any).hot);
+runtime.register(AgentService, import.meta);

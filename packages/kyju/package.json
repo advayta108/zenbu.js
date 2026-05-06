@@ -17,6 +17,7 @@
     "./migrations": "./src/v2/migrations.ts",
     "./config": "./src/cli/config.ts",
     "./cli": "./src/cli/index.ts",
+    "./loader": "./src/cli/loader.ts",
     "./transport": "./src/v2/transport.ts"
   },
   "dependencies": {

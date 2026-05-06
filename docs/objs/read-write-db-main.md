@@ -43,7 +43,7 @@ export class MyService extends Service {
   }
 }
 
-runtime.register(MyService, (import.meta as any).hot)
+runtime.register(MyService, import.meta)
 ```
 
 ### 2. Read Data
