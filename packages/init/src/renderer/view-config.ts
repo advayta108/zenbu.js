@@ -112,8 +112,8 @@ export function defineZenbuViewConfig(
   // The kernel package may be loaded via a different path on disk inside
   // pnpm/dynohot, but for plugins the homedir layout is canonical.
   const baseAliases = [
-    { find: "@", replacement: HOMEDIR_RENDERER_DIR },
-    { find: "#zenbu", replacement: HOMEDIR_PACKAGES_DIR },
+    { find: "@", replacement: RENDERER_DIR },
+    { find: "#zenbu", replacement: PACKAGES_DIR },
     ...(opts.aliases ?? []),
   ]
 
