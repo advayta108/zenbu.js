@@ -674,7 +674,7 @@ export class WindowService extends Service {
         }
       >();
 
-      const SEPARATOR_WIDTH = 4;
+      const SEPARATOR_WIDTH = 1;
       const MIN_RATIO = 0.2;
       const MAX_RATIO = 0.8;
 
