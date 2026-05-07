@@ -1,0 +1,7 @@
+{
+  "name": "core",
+  "services": [
+    "src/services/*.ts"
+  ],
+  "events": "./src/registry.ts"
+}

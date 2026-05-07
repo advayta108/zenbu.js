@@ -1,0 +1,12 @@
+import path from "node:path";
+import os from "node:os";
+
+const ZENBU_HOME = path.join(os.homedir(), ".zenbu");
+
+export const INTERNAL_DIR = path.join(ZENBU_HOME, ".internal");
+export const RUNTIME_JSON = path.join(INTERNAL_DIR, "runtime.json");
+export const DB_CONFIG_JSON = path.join(INTERNAL_DIR, "db.json");
+export const PLUGIN_SETUP_STATE_JSON = path.join(
+  INTERNAL_DIR,
+  "plugin-setup-state.json",
+);

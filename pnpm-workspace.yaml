@@ -5,5 +5,8 @@ packages:
   - 'docs/*'
   - 'explorations/*'
 
+settings:
+  autoInstallPeers: false
+
 catalog:
   effect: "3.21.1"

@@ -3,11 +3,12 @@ import { createClient } from "./client/client";
 import { createSchema, f, type InferSchema } from "./db/schema";
 import { createDb } from "./db/db";
 import type { KyjuMigration } from "./migrations";
+import zod from "zod";
 
 const appSchema = createSchema({
   title: f.string().default(""),
   description: f.string().default("default description"),
-  messages: f.collection<{ text: string; author: string }>(),
+  messages: f.collection(zod.object({ text: zod.string(), author: zod.string() })),
 });
 
 const migrations: KyjuMigration[] = [

@@ -119,7 +119,8 @@ export function materializeToBlocks(events: AgentEvent[]): EventBlock[] {
 
     const update = event.data.update;
     if (!update) continue;
-    const contentBlobIds = update.content ? extractBlobIds(update.content) : [];
+    const contentBlobIds =
+      "content" in update && update.content ? extractBlobIds(update.content) : [];
 
     switch (update.sessionUpdate) {
       case "user_message_chunk":

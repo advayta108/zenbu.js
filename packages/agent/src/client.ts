@@ -90,7 +90,9 @@ export class AcpClient {
     await once(proc as any, "spawn");
 
     const input = Writable.toWeb(proc.stdin!) as WritableStream<Uint8Array>;
-    const output = Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>;
+    const output = Readable.toWeb(
+      proc.stdout!,
+    ) as unknown as ReadableStream<Uint8Array>;
     const stream = acp.ndJsonStream(input, output);
 
     const connection = new acp.ClientSideConnection(

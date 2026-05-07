@@ -11,7 +11,7 @@ export const migrationPlugin = (migrations: KyjuMigration[]): DbPlugin => ({
     const pluginState = root?._plugins?.kyjuMigrator ?? {};
     const currentVersion: number =
       typeof pluginState === "object" && pluginState !== null
-        ? ((pluginState as Record<string, any>).version ?? 0)
+        ? (pluginState as Record<string, any>).version ?? 0
         : 0;
 
     if (currentVersion >= targetVersion) return;
@@ -22,8 +22,7 @@ export const migrationPlugin = (migrations: KyjuMigration[]): DbPlugin => ({
 
       const removeOps = ops.filter(
         (o) =>
-          o.op === "remove" &&
-          (o.kind === "collection" || o.kind === "blob"),
+          o.op === "remove" && (o.kind === "collection" || o.kind === "blob"),
       );
       for (const op of removeOps) {
         await (client as any)[op.key]?.delete?.();
@@ -31,8 +30,7 @@ export const migrationPlugin = (migrations: KyjuMigration[]): DbPlugin => ({
 
       const currentRoot = client.readRoot() as Record<string, any>;
 
-      const apply = (data: Record<string, any>) =>
-        applyOperations(data, ops);
+      const apply = (data: Record<string, any>) => applyOperations(data, ops);
 
       let newRoot: Record<string, any>;
       if (migration.migrate) {
@@ -41,7 +39,7 @@ export const migrationPlugin = (migrations: KyjuMigration[]): DbPlugin => ({
         newRoot = apply(currentRoot);
       }
 
-      await client.update(() => newRoot);
+      await client.update(() => newRoot as any);
 
       const addCollectionOps = ops.filter(
         (o): o is Extract<MigrationOp, { op: "add"; kind: "collection" }> =>
@@ -75,7 +73,9 @@ export const migrationPlugin = (migrations: KyjuMigration[]): DbPlugin => ({
   },
 });
 
-export const sectionMigrationPlugin = (sections: SectionConfig[]): DbPlugin => ({
+export const sectionMigrationPlugin = (
+  sections: SectionConfig[],
+): DbPlugin => ({
   name: "sectionMigrator",
   onBeforeStart: async ({ client, pluginPath }) => {
     for (const section of sections) {
@@ -86,7 +86,7 @@ export const sectionMigrationPlugin = (sections: SectionConfig[]): DbPlugin => (
       const pluginState = root?._plugins?.sectionMigrator?.[name] ?? {};
       const currentVersion: number =
         typeof pluginState === "object" && pluginState !== null
-          ? ((pluginState as Record<string, any>).version ?? 0)
+          ? (pluginState as Record<string, any>).version ?? 0
           : 0;
 
       if (currentVersion >= targetVersion) continue;
@@ -97,8 +97,7 @@ export const sectionMigrationPlugin = (sections: SectionConfig[]): DbPlugin => (
 
         const removeOps = ops.filter(
           (o) =>
-            o.op === "remove" &&
-            (o.kind === "collection" || o.kind === "blob"),
+            o.op === "remove" && (o.kind === "collection" || o.kind === "blob"),
         );
         for (const op of removeOps) {
           await (client as any).plugin?.[name]?.[op.key]?.delete?.();
@@ -107,8 +106,7 @@ export const sectionMigrationPlugin = (sections: SectionConfig[]): DbPlugin => (
         const currentRoot = client.readRoot() as Record<string, any>;
         const sectionData = currentRoot?.plugin?.[name] ?? {};
 
-        const apply = (data: Record<string, any>) =>
-          applyOperations(data, ops);
+        const apply = (data: Record<string, any>) => applyOperations(data, ops);
 
         let newSectionData: Record<string, any>;
         if (migration.migrate) {

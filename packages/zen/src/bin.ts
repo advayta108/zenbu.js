@@ -1,24 +1,6 @@
-#!/usr/bin/env bun
-// zen CLI — hot-editable TypeScript source, interpreted by the bundled bun.
-// Subcommand dispatcher. No positional subcommand = fall through to `open`
-// (current behavior, backwards compatible).
-
-import { runOpen } from "./commands/open"
-import { runKyju } from "./commands/kyju"
-import { runLink } from "./commands/link"
-import { runDoctor } from "./commands/doctor"
-import { runConfig } from "./commands/config"
-import { runSetup } from "./commands/setup"
-import { runInit } from "./commands/init"
-import { runExec } from "./commands/exec"
-import { runProfile } from "./commands/profile"
-import { runDb } from "./commands/db"
-import { runRuntime } from "./commands/runtime"
-import { runSetupApp } from "./commands/setup-app"
-import { runOpenStandalone } from "./commands/open-standalone"
-import { runDev } from "./commands/dev"
-import { runBuild } from "./commands/build"
-import { runPublish } from "./commands/publish"
+#!/usr/bin/env node
+// zen CLI — bundled by tsdown. Subcommands are imported lazily so one command
+// does not pull the full legacy command surface into process startup.
 
 const SUBCOMMANDS = new Set([
   "kyju",
@@ -75,55 +57,101 @@ async function main() {
   // accepts a `[path]` positional (`zen .`, `zen /some/dir`) plus its own
   // flags. `open` validates the path and rejects unknown flags itself.
   if (!first || !SUBCOMMANDS.has(first)) {
+    const { runOpen } = await import("./commands/open")
     await runOpen(argv)
     return
   }
   const rest = argv.slice(1)
   switch (first) {
     case "kyju":
+      {
+        const { runKyju } = await import("./commands/kyju")
       await runKyju(rest)
+      }
       return
     case "link":
+      {
+        const { runLink } = await import("./commands/link")
       await runLink(rest)
+      }
       return
     case "doctor":
+      {
+        const { runDoctor } = await import("./commands/doctor")
       await runDoctor(rest)
+      }
       return
     case "config":
+      {
+        const { runConfig } = await import("./commands/config")
       await runConfig(rest)
+      }
       return
     case "setup":
+      {
+        const { runSetup } = await import("./commands/setup")
       await runSetup(rest)
+      }
       return
     case "init":
+      {
+        const { runInit } = await import("./commands/init")
       await runInit(rest)
+      }
       return
     case "exec":
+      {
+        const { runExec } = await import("./commands/exec")
       await runExec(rest)
+      }
       return
     case "profile":
+      {
+        const { runProfile } = await import("./commands/profile")
       await runProfile(rest)
+      }
       return
     case "db":
+      {
+        const { runDb } = await import("./commands/db")
       await runDb(rest)
+      }
       return
     case "runtime":
+      {
+        const { runRuntime } = await import("./commands/runtime")
       await runRuntime(rest)
+      }
       return
     case "setup-app":
+      {
+        const { runSetupApp } = await import("./commands/setup-app")
       await runSetupApp(rest)
+      }
       return
     case "launch":
+      {
+        const { runOpenStandalone } = await import("./commands/open-standalone")
       await runOpenStandalone(rest)
+      }
       return
     case "dev":
+      {
+        const { runDev } = await import("./commands/dev")
       await runDev(rest)
+      }
       return
     case "build":
+      {
+        const { runBuild } = await import("./commands/build")
       await runBuild(rest)
+      }
       return
     case "publish":
+      {
+        const { runPublish } = await import("./commands/publish")
       await runPublish(rest)
+      }
       return
     case "help":
     case "--help":

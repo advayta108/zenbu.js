@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@zenbujs/core": [
+        "./src/index.ts"
+      ],
+      "@zenbujs/core/registry": [
+        "./src/registry.ts"
+      ],
+      "#registry/*": [
+        "./types/*"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "types",
+    "tsdown.config.ts"
+  ]
+}

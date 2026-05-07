@@ -1,13 +1,35 @@
 import { spawn } from "node:child_process"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { GitCommandError, GitMissingError } from "./types"
 
 export type GitResult = { code: number; stdout: string; stderr: string }
+
+function zenbuCacheRoot(): string {
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Caches", "Zenbu")
+  }
+  if (process.platform === "win32") {
+    return path.join(
+      process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
+      "Zenbu",
+    )
+  }
+  return path.join(process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"), "Zenbu")
+}
+
+function managedGitPath(): string {
+  const gitPath = path.join(zenbuCacheRoot(), "bin", "git")
+  if (!fs.existsSync(gitPath)) throw new GitMissingError()
+  return gitPath
+}
 
 export function runGit(cwd: string, args: string[]): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     let proc
     try {
-      proc = spawn("git", args, {
+      proc = spawn(managedGitPath(), args, {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, FORCE_COLOR: "0", GIT_TERMINAL_PROMPT: "0" },

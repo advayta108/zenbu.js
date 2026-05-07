@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.ci.json",
     "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
@@ -14,14 +13,11 @@
     "@parcel/watcher": "^2.5.0",
     "@tailwindcss/vite": "^4",
     "@vitejs/plugin-react": "^5.0.0",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
     "@zenbu/advice": "workspace:*",
     "@zenbu/git": "workspace:*",
     "effect": "catalog:",
     "electron-context-menu": "^4.1.2",
     "nanoid": "^5.1.6",
-    "node-pty": "^1.1.0",
     "react-grab": "^0.1.31",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
