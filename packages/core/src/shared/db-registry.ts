@@ -121,21 +121,30 @@ export async function setDefault(absPath: string): Promise<DbRegistry> {
 
 export type ResolvedDb = {
   path: string
-  source: "flag" | "default" | "fallback"
+  source: "flag" | "config"
 }
 
 const FLAG_PREFIX = "--zen-db-path="
 
 /**
- * Resolution order for the active DB path:
- *   1. `--zen-db-path=<x>` arg (cold-boot from `zen --db <path>`)
- *   2. `defaultDbPath` from the registry
- *   3. `<cwd>/.zenbu/db` fallback (preserves pre-feature behavior)
+ * Resolve the active DB path. The app's `config.json` is the single source of
+ * truth: every project that uses Zenbu must declare `"db": "<path>"` (relative
+ * to `config.json` or absolute). The only override is `--zen-db-path=<x>` for
+ * one-off dev runs (e.g. `zen --db /tmp/scratch .`). There is no global
+ * fallback by design — we don't want a project's data location to depend on
+ * the developer's machine state.
  *
- * Always mkdir -p before returning so DbService can hand the path straight
- * to kyju without an extra existence check.
+ * The recently-used registry at `~/.zenbu/.internal/db.json` is *only* a
+ * convenience index for `zen db list / pick` navigation; it does not drive
+ * resolution.
+ *
+ * Always mkdir -p before returning so DbService can hand the path straight to
+ * kyju without an extra existence check.
  */
-export async function resolveDbPath(argv: string[]): Promise<ResolvedDb> {
+export async function resolveDbPath(
+  argv: string[],
+  app: { configDb: string; configDir: string; configPath: string },
+): Promise<ResolvedDb> {
   for (const arg of argv) {
     if (arg.startsWith(FLAG_PREFIX)) {
       const p = normalize(arg.slice(FLAG_PREFIX.length))
@@ -143,12 +152,17 @@ export async function resolveDbPath(argv: string[]): Promise<ResolvedDb> {
       return { path: p, source: "flag" }
     }
   }
-  const reg = await loadRegistry()
-  if (reg.defaultDbPath) {
-    await fsp.mkdir(reg.defaultDbPath, { recursive: true })
-    return { path: reg.defaultDbPath, source: "default" }
+  if (!app.configDb || typeof app.configDb !== "string") {
+    throw new Error(
+      `Zenbu config is missing the required "db" field at ${app.configPath}.\n` +
+        `Add a relative or absolute path, e.g. \`{ "db": "./.zenbu/db", "plugins": [...] }\`.`,
+    )
   }
-  const fallback = normalize(path.join(process.cwd(), ".zenbu", "db"))
-  await fsp.mkdir(fallback, { recursive: true })
-  return { path: fallback, source: "fallback" }
+  const resolved = normalize(
+    path.isAbsolute(app.configDb)
+      ? app.configDb
+      : path.resolve(app.configDir, app.configDb),
+  )
+  await fsp.mkdir(resolved, { recursive: true })
+  return { path: resolved, source: "config" }
 }

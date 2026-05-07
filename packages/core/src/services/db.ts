@@ -114,6 +114,40 @@ async function resolveConfigPath(): Promise<string> {
   }
 }
 
+/**
+ * Parse the app's `config.json` (jsonc tolerated) and return the fields
+ * `setupGate`/`DbService` care about. `db` is required — `resolveDbPath`
+ * later asserts on it; we do the read here so both `discoverSections` and
+ * `resolveDbPath` see one parse.
+ */
+type AppConfig = {
+  db: string;
+  plugins: string[];
+};
+
+async function loadAppConfig(configPath: string): Promise<AppConfig> {
+  let raw: unknown;
+  try {
+    const text = await fs.readFile(configPath, "utf8");
+    raw = parseJsonc(text);
+  } catch (err) {
+    throw new Error(
+      `Failed to read Zenbu config at ${configPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  if (!raw || typeof raw !== "object") {
+    throw new Error(`Zenbu config at ${configPath} is not a JSON object`);
+  }
+  const obj = raw as Record<string, unknown>;
+  const plugins = Array.isArray(obj.plugins)
+    ? (obj.plugins.filter((p): p is string => typeof p === "string"))
+    : [];
+  const db = typeof obj.db === "string" ? obj.db : "";
+  return { db, plugins };
+}
+
 function parseJsonc(str: string): unknown {
   let result = "";
   let i = 0;
@@ -407,9 +441,16 @@ export class DbService extends Service {
   }
 
   async evaluate() {
+    const configPath = await resolveConfigPath();
+    const configDir = path.dirname(configPath);
+    const appConfig = await loadAppConfig(configPath);
     const [pluginSections, resolved] = await Promise.all([
-      this.trace("discover-sections", () => discoverSections()),
-      resolveDbPath(process.argv),
+      this.trace("discover-sections", () => discoverSections(configPath)),
+      resolveDbPath(process.argv, {
+        configDb: appConfig.db,
+        configDir,
+        configPath,
+      }),
     ]);
     const sections = [coreSection, ...pluginSections];
     const sectionsHash = JSON.stringify(
