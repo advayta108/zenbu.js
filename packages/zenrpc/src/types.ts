@@ -37,15 +37,26 @@ export type EffectResult<A, E> = [E] extends [never]
 
 /**
  * Recursively converts a router's methods into Promise-returning versions.
+ *
+ * The first branch is intentional and load-bearing: when a method is
+ * **already async** (`(...args) => Promise<X>`), we hand back `T[K]`
+ * unchanged — an indexed access type — so editors can resolve cmd+click /
+ * go-to-definition through the proxy back to the original service method.
+ * The non-async and Effect branches still `infer` and rebuild the signature
+ * (the call really does need to be wrapped on the wire), at the cost of
+ * breaking go-to-def on those — services that want navigability should make
+ * their RPC methods `async`.
  */
 export type RouterProxy<T> = {
-  [K in keyof T]: T[K] extends (...args: infer A) => infer R
-    ? [R] extends [Effect.Effect<infer S, infer E, any>]
-      ? (...args: A) => Promise<EffectResult<S, E>>
-      : (...args: A) => Promise<Awaited<R>>
-    : T[K] extends Record<string, any>
-      ? RouterProxy<T[K]>
-      : never;
+  [K in keyof T]: T[K] extends (...args: any[]) => Promise<any>
+    ? T[K]
+    : T[K] extends (...args: infer A) => infer R
+      ? [R] extends [Effect.Effect<infer S, infer E, any>]
+        ? (...args: A) => Promise<EffectResult<S, E>>
+        : (...args: A) => Promise<Awaited<R>>
+      : T[K] extends Record<string, any>
+        ? RouterProxy<T[K]>
+        : never;
 };
 
 /**

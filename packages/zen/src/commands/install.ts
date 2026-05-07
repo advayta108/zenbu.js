@@ -78,8 +78,15 @@ function electronTargetVersion(projectDir: string): string {
 async function runPnpmInstall(projectDir: string): Promise<void> {
   const pnpm = managedTool(projectDir, "pnpm");
   const target = electronTargetVersion(projectDir);
+  // We pass `CI=true` to stop pnpm from prompting (approve-builds, modules-purge,
+  // etc.) so that `zen install` can be driven from non-TTY callers without
+  // hanging. `CI=true` also implicitly turns on `--frozen-lockfile`, which is
+  // wrong for an editable-source dev tool: when the user legitimately edits a
+  // dep in `package.json`, frozen mode rejects the install. So we explicitly
+  // override that one knob with `--no-frozen-lockfile`. (For strict CI installs,
+  // expose a separate `--frozen` flag; not needed for the dev path.)
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(pnpm, ["install"], {
+    const child = spawn(pnpm, ["install", "--no-frozen-lockfile"], {
       cwd: projectDir,
       stdio: "inherit",
       env: {

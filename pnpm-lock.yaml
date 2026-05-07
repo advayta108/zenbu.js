@@ -330,6 +330,9 @@ importers:
       nanoid:
         specifier: ^5.1.6
         version: 5.1.6
+      react:
+        specifier: '>=18'
+        version: 19.2.4
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -785,6 +788,9 @@ importers:
 
   packages/zen:
     dependencies:
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6

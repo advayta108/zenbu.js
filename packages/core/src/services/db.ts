@@ -9,7 +9,7 @@ import type * as Effect from "effect/Effect";
 import { createRouter, dbStringify, dbParse } from "@zenbu/kyju/transport";
 import { loadMigrationsFromDir } from "@zenbu/kyju/loader";
 import { Service, runtime } from "../runtime";
-import type { DbRoot } from "#registry/db-sections";
+import type { ResolvedDbRoot } from "../registry";
 import { schema as coreSchema } from "../schema";
 import { trace as traceSpan } from "../shared/tracer";
 import { addDb, resolveDbPath } from "../shared/db-registry";
@@ -32,25 +32,32 @@ type SectionProxy<S> = {
   [K in keyof S]: FieldNode<S[K]>;
 };
 
+// `Root` is the resolved DB root: `ZenbuRegister["db"]` from the user's
+// generated `zenbu-register.ts`, falling back to `{ plugin: CoreDbSections }`
+// when no plugin has augmented the registry. Lets the same baked dts ship
+// with core while consumer types flow in via module augmentation.
+type Root = ResolvedDbRoot;
+type Plugin = Root extends { plugin: infer P } ? P : never;
+
 export type SectionedEffectClient = {
-  readRoot(): DbRoot;
-  update(fn: (root: DbRoot) => void | DbRoot): Effect.Effect<void, KyjuError>;
+  readRoot(): Root;
+  update(fn: (root: Root) => void | Root): Effect.Effect<void, KyjuError>;
   createBlob(data: Uint8Array, hot?: boolean): Effect.Effect<string, KyjuError>;
   deleteBlob(blobId: string): Effect.Effect<void, KyjuError>;
   getBlobData(blobId: string): Effect.Effect<Uint8Array | null, KyjuError>;
   plugin: {
-    [K in keyof DbRoot["plugin"]]: EffectSectionProxy<DbRoot["plugin"][K]>;
+    [K in keyof Plugin]: EffectSectionProxy<Plugin[K]>;
   };
 };
 
 export type SectionedClient = {
-  readRoot(): DbRoot;
-  update(fn: (root: DbRoot) => void | DbRoot): Promise<void>;
+  readRoot(): Root;
+  update(fn: (root: Root) => void | Root): Promise<void>;
   createBlob(data: Uint8Array, hot?: boolean): Promise<string>;
   deleteBlob(blobId: string): Promise<void>;
   getBlobData(blobId: string): Promise<Uint8Array | null>;
   plugin: {
-    [K in keyof DbRoot["plugin"]]: SectionProxy<DbRoot["plugin"][K]>;
+    [K in keyof Plugin]: SectionProxy<Plugin[K]>;
   };
 };
 

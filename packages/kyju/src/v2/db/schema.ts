@@ -31,24 +31,31 @@ export type InferFieldType<T> =
 
 export type FieldSchema = BlobRef | { _zod: { output: any } };
 
-export type SchemaShape = Record<string, Field<FieldSchema, boolean> | zod.ZodType>;
+export type SchemaShape = Record<
+  string,
+  Field<FieldSchema, boolean> | zod.ZodType | BlobRef
+>;
 
 export type InferRoot<T extends SchemaShape> = {
-  [K in keyof T]: T[K] extends Field<infer S, infer D>
-    ? S extends BlobRef
-      ? InferFieldType<S>
-      : [D] extends [true]
+  [K in keyof T]: T[K] extends BlobRef
+    ? { blobId: string; debugName: string }
+    : T[K] extends Field<infer S, infer D>
+      ? S extends BlobRef
         ? InferFieldType<S>
-        : InferFieldType<S> | undefined
-    : T[K] extends zod.ZodType<infer O>
-      ? O
-      : never;
+        : [D] extends [true]
+          ? InferFieldType<S>
+          : InferFieldType<S> | undefined
+      : T[K] extends zod.ZodType<infer O>
+        ? O
+        : never;
 };
 
 export type InferBlobs<T extends SchemaShape> = {
   [K in keyof T as T[K] extends Field<BlobRef, boolean>
     ? K
-    : never]: Uint8Array;
+    : T[K] extends BlobRef
+      ? K
+      : never]: Uint8Array;
 };
 
 export type InferSchema<S extends Schema> =
@@ -139,6 +146,65 @@ export function makeCollection<T = unknown>(debugName?: string): CollectionRefVa
 export function makeCollection<T = unknown>(arg?: string | { debugName?: string; collectionId?: string }): CollectionRefValue<T> {
   const opts = typeof arg === "string" ? { debugName: arg } : arg;
   return { collectionId: opts?.collectionId ?? "", debugName: opts?.debugName ?? "" } as CollectionRefValue<T>;
+}
+
+/**
+ * Standalone collection field — drop into a `createSchema({...})` shape next
+ * to raw zod schemas:
+ *
+ *   createSchema({
+ *     logs: collection(z.object({ id: z.string(), text: z.string() })),
+ *   })
+ *
+ * The returned value is a marked zod schema; the runtime + serializer detect
+ * the marker (`__kyjuCollectionRef`) and treat the field as a paginated kyju
+ * collection rather than plain JSON data.
+ */
+export function collection<T extends zod.ZodType>(
+  itemSchema: T,
+  opts?: { debugName?: string },
+): zod.ZodType<CollectionRefValue<zod.infer<T>>> {
+  const schema = zod.custom<CollectionRefValue<zod.infer<T>>>(
+    (val) =>
+      val != null &&
+      typeof val === "object" &&
+      "collectionId" in val &&
+      "debugName" in val,
+  );
+  (schema as any)[COLLECTION_REF_MARKER] = true;
+  (schema as any)._debugName = opts?.debugName;
+  (schema as any)._itemSchema = itemSchema;
+  return schema;
+}
+
+/**
+ * Standalone blob field. The returned value is a `BlobRef` marker; the
+ * runtime detects `type: "blob"` and stores the field as a binary blob.
+ */
+export function blob(opts?: { debugName?: string }): BlobRef {
+  return { type: "blob", debugName: opts?.debugName };
+}
+
+/**
+ * Detect a default-value wrapper on a zod schema (`z.string().default("x")`).
+ * Returns `{ hasDefault: true, value }` when the schema is a `ZodDefault` (or
+ * legacy zod 3 `_def.typeName === "ZodDefault"`), `{ hasDefault: false }`
+ * otherwise. Used by the runtime + migration generator to read defaults from
+ * raw zod schemas without going through the `Field` wrapper.
+ */
+export function getZodDefault(
+  schema: unknown,
+): { hasDefault: boolean; value: unknown } {
+  if (!schema || typeof schema !== "object") {
+    return { hasDefault: false, value: undefined };
+  }
+  const def = (schema as any).def ?? (schema as any)._def;
+  if (def?.type === "default" || def?.typeName === "ZodDefault") {
+    const dv = def.defaultValue;
+    const value = typeof dv === "function" ? dv() : dv;
+    return { hasDefault: true, value };
+  }
+  return { hasDefault: false, value: undefined };
 }
 
 export { COLLECTION_REF_MARKER };

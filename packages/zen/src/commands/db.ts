@@ -20,6 +20,13 @@ Usage:
   zen db add <path>           Register a path (mkdir -p) without launching
   zen db default [<path>]     Set the default DB (interactive when omitted)
   zen db remove [<path>]      Drop a path from the registry (interactive when omitted)
+  zen db generate [...]       Diff your schema against the last snapshot and
+                              write a new migration (delegates to the embedded
+                              migration generator). Common flags:
+                                --config <path>   db.config.ts (auto-detected)
+                                --name <tag>      custom migration name
+                                --custom          generate editable migrate()
+                                --amend           replace the last migration
 `)
   process.exit(exitCode)
 }
@@ -221,8 +228,37 @@ export async function runDb(argv: string[]): Promise<void> {
     case "rm":
       await runRemove(rest)
       return
+    case "generate":
+    case "gen":
+      await runGenerate(rest)
+      return
     default:
       console.error(`zen db: unknown subcommand "${sub}"`)
       printUsage(1)
   }
+}
+
+/**
+ * Delegate to the embedded migration generator. Translates `db.config.ts`
+ * into the underlying engine's expected default name (`kyju.config.ts`)
+ * when no `--config` is passed and only the user-facing name exists.
+ */
+async function runGenerate(argv: string[]): Promise<void> {
+  const { run: runEmbedded } = await import("@zenbu/kyju/cli")
+  const hasConfigFlag = argv.some((a) => a === "--config" || a.startsWith("--config="))
+  const finalArgs = ["generate", ...argv]
+  if (!hasConfigFlag) {
+    const candidates = ["db.config.ts", "db.config.js", "db.config.mjs"]
+    for (const name of candidates) {
+      const candidate = resolvePath(process.cwd(), name)
+      try {
+        const fs = await import("node:fs")
+        if (fs.existsSync(candidate)) {
+          finalArgs.push("--config", candidate)
+          break
+        }
+      } catch {}
+    }
+  }
+  await runEmbedded(finalArgs)
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { NO_DEFAULT } from "../v2/db/schema";
+import { NO_DEFAULT, getZodDefault } from "../v2/db/schema";
 import type { Schema, SchemaShape } from "../v2/db/schema";
 
 export type FieldSnapshot =
@@ -80,15 +80,16 @@ export function serializeSchema(schema: Schema, id: string, prevId: string): Sch
   for (const [key, entry] of Object.entries(schema.shape as SchemaShape)) {
     const raw = entry as any;
 
+    // Collection: the marker may be on the raw entry (`collection(...)` —
+    // direct zod schema) or on `entry.schema` (legacy `f.collection(...)`
+    // Field wrapper).
     if (raw[COLLECTION_REF_MARKER]) {
       const snap: FieldSnapshot = { kind: "collection" };
       if (raw._debugName) (snap as any).debugName = raw._debugName;
       fields[key] = snap;
       continue;
     }
-
     const inner = raw.schema;
-
     if (inner?.[COLLECTION_REF_MARKER]) {
       const snap: FieldSnapshot = { kind: "collection" };
       if (inner._debugName) (snap as any).debugName = inner._debugName;
@@ -96,19 +97,36 @@ export function serializeSchema(schema: Schema, id: string, prevId: string): Sch
       continue;
     }
 
+    // Blob: same — marker may be on raw entry (`blob()`) or wrapped.
+    if (raw && typeof raw === "object" && raw.type === "blob") {
+      fields[key] = { kind: "blob", debugName: raw.debugName };
+      continue;
+    }
     if (inner && typeof inner === "object" && "type" in inner && inner.type === "blob") {
       fields[key] = { kind: "blob", debugName: inner.debugName };
       continue;
     }
 
-    const hasDefault = raw._hasDefault as boolean;
+    // Default-bearing data field. Two paths: the legacy `f.x().default(v)`
+    // wrapper exposes `_hasDefault`/`_defaultValue`; raw zod uses `ZodDefault`.
+    let hasDefault: boolean;
+    let defaultValue: unknown;
+    if ("_hasDefault" in raw) {
+      hasDefault = raw._hasDefault as boolean;
+      defaultValue = raw._defaultValue !== NO_DEFAULT ? raw._defaultValue : undefined;
+    } else {
+      const d = getZodDefault(raw);
+      hasDefault = d.hasDefault;
+      defaultValue = d.value;
+    }
+
     const snapshot: FieldSnapshot = {
       kind: "data",
       hasDefault,
       typeHash: hashZodSchema(inner ?? raw),
     };
-    if (hasDefault && raw._defaultValue !== NO_DEFAULT) {
-      (snapshot as any).default = raw._defaultValue;
+    if (hasDefault && defaultValue !== undefined) {
+      (snapshot as any).default = defaultValue;
     }
     fields[key] = snapshot;
   }

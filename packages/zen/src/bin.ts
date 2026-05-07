@@ -33,12 +33,11 @@ Usage:
   zen launch [--blocking] [--runtime <ver>]      Legacy standalone launch
   zen runtime [install|list|remove] [version]    Legacy Electron runtime cache
   zen setup-app [--name "App"] [--runtime <ver>] Legacy native .app bundle
-  zen kyju <generate|db> [...]                   Run the kyju CLI
   zen link                                       Regenerate registry types
   zen doctor                                     Re-run kernel setup.ts
   zen setup [--dir <path>]                       Run a plugin's setup.ts
   zen config <get|set> <key> [value]             Read/write CLI config
-  zen db [list|add|default|remove] [...]         Manage DB paths (no args = interactive picker)
+  zen db [list|add|default|remove|generate] [...] Manage DB paths or generate migrations
   zen init <plugin-name> [--dir <path>]          Scaffold a new plugin
   zen install [path] [--force]                   Install app deps with managed pnpm
   zen exec -e '<ts>' | zen exec <file.ts>        Run TS with rpc/events pre-opened

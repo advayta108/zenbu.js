@@ -4,12 +4,9 @@ import type { AnyRouter } from "@zenbu/zenrpc";
 import { Service, runtime } from "../runtime";
 import { HttpService } from "./http";
 import { createLogger } from "../shared/log";
-import type { CoreEvents } from "../registry";
+import type { CoreEvents, ResolvedEvents } from "../registry";
 
 const log = createLogger("rpc");
-/**
- * not great come back to this
- */
 
 type EmitProxy<T> = {
   [K in keyof T]: T[K] extends Record<string, any>
@@ -22,9 +19,13 @@ export class RpcService extends Service {
   static deps = { http: HttpService };
   declare ctx: { http: HttpService };
 
-  private _emit: EmitProxy<CoreEvents> | null = null;
+  // `ResolvedEvents` reads `ZenbuRegister["events"]` (populated by
+  // `zen link`-generated `zenbu-register.ts`), falling back to `CoreEvents`.
+  // This is what makes `service.ctx.rpc.emit.<plugin-namespace>.<event>(data)`
+  // resolve in user-authored services without baking plugin types into core.
+  private _emit: EmitProxy<ResolvedEvents> | null = null;
 
-  get emit(): EmitProxy<CoreEvents> {
+  get emit(): EmitProxy<ResolvedEvents> {
     if (!this._emit) throw new Error("RpcService not yet evaluated");
     return this._emit;
   }
@@ -41,7 +42,7 @@ export class RpcService extends Service {
         send: rpcRouter.send,
       });
 
-      this._emit = rpcServer.emit;
+      this._emit = rpcServer.emit as EmitProxy<ResolvedEvents>;
 
       const wsRpcConnections = new Map<
         string,

@@ -18,6 +18,7 @@ import {
 import { makeRootCache } from "./root-cache";
 import { traceKyju } from "../trace";
 import type { Schema, SchemaShape } from "./schema";
+import { getZodDefault } from "./schema";
 import type { KyjuMigration, SectionConfig } from "../migrations";
 import type { DbHandlerContext } from "./helpers";
 import { handleConnect } from "./handlers/connect";
@@ -92,20 +93,40 @@ const buildSchemaRoot = function* (
   const root: Record<string, KyjuJSON> = {};
 
   for (const [key, entry] of Object.entries(schema.shape)) {
-    const fieldSchema = "schema" in entry ? entry.schema : entry;
+    // Field<T> wraps the actual schema in `.schema`; raw zod / BlobRef are the
+    // entry itself. Either way `fieldSchema` is the thing we test markers on.
+    const fieldSchema =
+      entry && typeof entry === "object" && "schema" in entry
+        ? (entry as { schema: unknown }).schema
+        : entry;
+    const fs_obj = fieldSchema as Record<string, unknown>;
 
-    if ((fieldSchema as Record<string, unknown>).__kyjuCollectionRef) {
-      const dn = (fieldSchema as Record<string, unknown>)._debugName;
+    if (fs_obj.__kyjuCollectionRef) {
+      const dn = fs_obj._debugName;
       root[key] = {
         collectionId: "",
         debugName: typeof dn === "string" ? dn : key,
       };
-    } else if ("type" in fieldSchema && fieldSchema.type === "blob") {
+    } else if (
+      fs_obj.type === "blob" ||
+      (entry as Record<string, unknown>)?.type === "blob"
+    ) {
       const blobId = nanoid();
-      root[key] = { blobId, debugName: fieldSchema.debugName ?? key };
+      const debugName =
+        (fs_obj.debugName as string | undefined) ??
+        ((entry as Record<string, unknown>)?.debugName as
+          | string
+          | undefined) ??
+        key;
+      root[key] = { blobId, debugName };
       yield* createBlob({ fs, config, blobId, data: new Uint8Array(0) });
     } else if ((entry as any)._hasDefault) {
+      // Legacy `f.string().default(...)` Field wrapper.
       root[key] = (entry as any)._defaultValue as KyjuJSON;
+    } else {
+      // Raw zod schema — read default from `ZodDefault` if present.
+      const def = getZodDefault(entry);
+      if (def.hasDefault) root[key] = def.value as KyjuJSON;
     }
   }
 

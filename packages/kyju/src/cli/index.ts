@@ -54,14 +54,14 @@ function parseArgs(argv: string[]): {
   return result;
 }
 
-function runGenerate(opts: { config?: string; name?: string; custom: boolean; amend: boolean }) {
+async function runGenerate(opts: { config?: string; name?: string; custom: boolean; amend: boolean }) {
   const configPath = opts.config ?? findConfigFile(process.cwd());
-  const resolved = loadConfig(configPath);
+  const resolved = await loadConfig(configPath);
 
   console.log(`Schema: ${resolved.schemaPath}`);
   console.log(`Output: ${resolved.outPath}`);
 
-  const schema = loadSchema(resolved.schemaPath);
+  const schema = await loadSchema(resolved.schemaPath);
   const journal = readJournal(resolved.outPath);
 
   let prevSnapshot;
@@ -118,7 +118,7 @@ function runGenerate(opts: { config?: string; name?: string; custom: boolean; am
   }
 }
 
-export function run(argv: string[]) {
+export async function run(argv: string[]): Promise<void> {
   if (argv[0] === "db") {
     runDb(argv.slice(1));
     return;
@@ -132,7 +132,7 @@ export function run(argv: string[]) {
   }
 
   if (args.command === "generate") {
-    runGenerate({ config: args.config, name: args.name, custom: args.custom, amend: args.amend });
+    await runGenerate({ config: args.config, name: args.name, custom: args.custom, amend: args.amend });
   } else {
     console.error(`Unknown command: ${args.command}`);
     printUsage();
@@ -144,5 +144,8 @@ export function run(argv: string[]) {
 // Safe to import; nothing runs on import.
 // Bun populates import.meta.main; Node 22+ supports it too.
 if ((import.meta as any).main) {
-  run(process.argv.slice(2));
+  run(process.argv.slice(2)).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }
