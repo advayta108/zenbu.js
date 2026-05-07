@@ -9,6 +9,7 @@ const SUBCOMMANDS = new Set([
   "config",
   "setup",
   "init",
+  "install",
   "exec",
   "profile",
   "db",
@@ -28,10 +29,10 @@ function printUsage() {
 zen — Zenbu CLI
 
 Usage:
-  zen [path] [-r|-n] [-d <path>] [--blocking]    Open app at path (default: cwd)
-  zen launch [--blocking] [--runtime <ver>]      Launch standalone app via Electron + boot.mjs
-  zen runtime [install|list|remove] [version]    Manage Electron runtime versions
-  zen setup-app [--name "App"] [--runtime <ver>] Create a native .app bundle
+  zen [path] [--blocking] [--verbose]            Run app at path with local Electron
+  zen launch [--blocking] [--runtime <ver>]      Legacy standalone launch
+  zen runtime [install|list|remove] [version]    Legacy Electron runtime cache
+  zen setup-app [--name "App"] [--runtime <ver>] Legacy native .app bundle
   zen kyju <generate|db> [...]                   Run the kyju CLI
   zen link                                       Regenerate registry types
   zen doctor                                     Re-run kernel setup.ts
@@ -39,14 +40,14 @@ Usage:
   zen config <get|set> <key> [value]             Read/write CLI config
   zen db [list|add|default|remove] [...]         Manage DB paths (no args = interactive picker)
   zen init <plugin-name> [--dir <path>]          Scaffold a new plugin
+  zen install [path] [--force]                   Install app deps with managed pnpm
   zen exec -e '<ts>' | zen exec <file.ts>        Run TS with rpc/events pre-opened
   zen profile [--duration <ms>] [--out <path>]   CPU profile the kernel main process
   zen profile heap [--out <path>]                Heap snapshot of the kernel main process
 
 Open flags:
-  -r, --reuse-window   Reuse the last focused window
-  -n, --new-window     Always open a new window
-  -d, --db <path>      Use the DB at <path> for this launch (creates if missing)
+  --blocking           Keep zen attached to the Electron process
+  --verbose            Print launch details
 `)
 }
 
@@ -97,6 +98,12 @@ async function main() {
       {
         const { runInit } = await import("./commands/init")
       await runInit(rest)
+      }
+      return
+    case "install":
+      {
+        const { runInstall } = await import("./commands/install")
+      await runInstall(rest)
       }
       return
     case "exec":

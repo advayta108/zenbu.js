@@ -1,0 +1,5 @@
+{
+  "plugins": [
+    "zenbu.plugin.json"
+  ]
+}

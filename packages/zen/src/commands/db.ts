@@ -5,7 +5,7 @@ import {
   removeDb,
   setDefault,
   type DbEntry,
-} from "../../../init/shared/db-registry"
+} from "../lib/db-registry"
 import { readRuntimeConfig } from "../lib/runtime"
 import { c, pickOne, readLine, relTime, tildify } from "../lib/picker"
 

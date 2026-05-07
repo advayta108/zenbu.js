@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises"
 import path from "node:path"
-import { loadRegistry } from "../../../init/shared/db-registry"
+import { loadRegistry } from "../lib/db-registry"
 import { readRuntimeConfig } from "../lib/runtime"
 
 /**

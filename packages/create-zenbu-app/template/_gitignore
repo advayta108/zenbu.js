@@ -1,5 +1,0 @@
-node_modules/
-dist/
-.zenbu/
-types/
-tsconfig.local.json

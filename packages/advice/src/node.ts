@@ -1,3 +1,3 @@
-import { register } from "node:module"
+import { register } from "node:module";
 
-register("./node-loader.mjs", import.meta.url)
+register("./node-loader.mjs", import.meta.url);

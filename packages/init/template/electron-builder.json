@@ -1,0 +1,26 @@
+{
+  "appId": "dev.zenbu.{{projectName}}",
+  "productName": "{{projectName}}",
+  "asar": false,
+  "files": [
+    "package.json",
+    "config.json",
+    "zenbu.plugin.json",
+    "src/**",
+    "types/**",
+    "node_modules/@zenbujs/core/**",
+    "node_modules/electron/**"
+  ],
+  "extraResources": [
+    {
+      "from": ".zenbu/toolchain",
+      "to": "toolchain"
+    }
+  ],
+  "publish": {
+    "provider": "github"
+  },
+  "mac": {
+    "category": "public.app-category.developer-tools"
+  }
+}

@@ -14,7 +14,7 @@ tracked:
   - packages/claude-acp/
   - packages/codex-acp/
   - packages/lint/
-  - packages/create-zenbu-app/
+  - packages/init/
   - packages/runtime/
   - packages/init/
   - plugins/
