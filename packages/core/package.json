@@ -8,36 +8,40 @@
   "main": "./dist/setup-gate.mjs",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
     },
     "./setup-gate": {
-      "types": "./src/setup-gate.ts",
+      "types": "./dist/setup-gate.d.mts",
       "import": "./dist/setup-gate.mjs"
     },
     "./loaders/zenbu": {
-      "types": "./src/loaders/zenbu.ts",
+      "types": "./dist/loaders/zenbu.d.mts",
       "import": "./dist/loaders/zenbu.mjs"
     },
     "./env-bootstrap": {
-      "types": "./src/env-bootstrap.ts",
+      "types": "./dist/env-bootstrap.d.mts",
       "import": "./dist/env-bootstrap.mjs"
     },
     "./runtime": {
-      "types": "./src/runtime.ts",
+      "types": "./dist/runtime.d.mts",
       "import": "./dist/runtime.mjs"
     },
     "./registry": {
-      "types": "./src/registry.ts",
+      "types": "./dist/registry.d.mts",
       "import": "./dist/registry.mjs"
     },
     "./schema": {
-      "types": "./src/schema.ts",
+      "types": "./dist/schema.d.mts",
       "import": "./dist/schema.mjs"
     },
     "./services": {
-      "types": "./src/services/index.ts",
+      "types": "./dist/services/index.d.mts",
       "import": "./dist/services/index.mjs"
+    },
+    "./services/default": {
+      "types": "./dist/services/default.d.mts",
+      "import": "./dist/services/default.mjs"
     },
     "./package.json": "./package.json"
   },
@@ -48,7 +52,7 @@
     "package.json"
   ],
   "scripts": {
-    "build": "tsdown",
+    "build": "node --max-old-space-size=8192 ./node_modules/tsdown/dist/run.mjs",
     "dev": "tsdown --watch",
     "link:types": "node ../zen/dist/bin.mjs link --types-config ./zenbu-types.config.json --registry ./types",
     "typecheck": "tsc --noEmit -p tsconfig.json",
