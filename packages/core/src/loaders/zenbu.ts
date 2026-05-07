@@ -308,6 +308,12 @@ export function resolve(
 ): unknown {
   const start = Date.now();
   try {
+    if (specifier === "@zenbu/advice/runtime") {
+      return {
+        url: new URL("../advice-runtime.mjs", import.meta.url).href,
+        shortCircuit: true,
+      };
+    }
     if (specifier.startsWith("zenbu:")) {
       return { url: specifier, shortCircuit: true };
     }

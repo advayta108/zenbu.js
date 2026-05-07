@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { Service, runtime } from "../runtime";
 import { ReloaderService } from "./reloader";
+import { ViewRegistryService } from "./view-registry";
 import { mark } from "../shared/tracer";
 import { createLogger } from "../shared/log";
 
@@ -98,8 +99,8 @@ async function resolveRendererRoot(): Promise<{
 
 export class RendererHostService extends Service {
   static key = "renderer-host";
-  static deps = { reloader: ReloaderService };
-  declare ctx: { reloader: ReloaderService };
+  static deps = { reloader: ReloaderService, viewRegistry: ViewRegistryService };
+  declare ctx: { reloader: ReloaderService; viewRegistry: ViewRegistryService };
 
   url = "";
   port = 0;
@@ -111,6 +112,10 @@ export class RendererHostService extends Service {
     );
     this.url = entry.url;
     this.port = entry.port;
+    this.ctx.viewRegistry.registerAlias("app", APP_RENDERER_RELOADER_ID, "", {
+      kind: "app",
+      label: "App",
+    });
 
     mark("renderer-ready", { url: this.url });
     log.verbose(`ready at ${this.url}`);

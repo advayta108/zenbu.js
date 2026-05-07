@@ -5,7 +5,6 @@ import { register as registerLoader, createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { register as registerTsx } from "tsx/esm/api";
 import { bootstrapEnv } from "./env-bootstrap";
-import { defaultServices } from "./services";
 
 type PackageJson = {
   name?: string;
@@ -43,25 +42,15 @@ function repositoryUrl(pkg: PackageJson): string | null {
   return pkg.repository?.url ?? null;
 }
 
-function zenbuCacheRoot(): string {
-  if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Caches", "Zenbu");
-  }
-  if (process.platform === "win32") {
-    return path.join(
-      process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
-      "Zenbu",
-    );
-  }
-  return path.join(process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"), "Zenbu");
-}
-
-function requiredManagedTool(name: string): string {
-  const toolPath = path.join(zenbuCacheRoot(), "bin", name);
+function requiredManagedTool(projectDir: string, name: string): string {
+  const root = process.env.ZENBU_TOOLCHAIN_ROOT
+    ? path.resolve(process.env.ZENBU_TOOLCHAIN_ROOT)
+    : path.join(projectDir, ".zenbu", "toolchain");
+  const toolPath = path.join(root, "bin", name);
   if (!fs.existsSync(toolPath)) {
     throw new Error(
       `Zenbu managed tool is missing: ${toolPath}. ` +
-        "Run `zen doctor` or reinstall @zenbujs/core to provision the bundled toolchain.",
+        "Run `npx @zenbujs/init --yes` in this project to provision the local runtime.",
     );
   }
   return toolPath;
@@ -89,14 +78,17 @@ function findTsconfig(projectRoot: string): string | false {
   return fs.existsSync(candidate) ? candidate : false;
 }
 
-async function cloneIfMissing(projectDir: string, repoUrl: string | null): Promise<void> {
+async function cloneIfMissing(
+  projectDir: string,
+  repoUrl: string | null,
+): Promise<void> {
   if (fs.existsSync(projectDir)) return;
   if (!repoUrl) {
     throw new Error(
       `Project directory ${projectDir} does not exist and package.json#repository.url is missing`,
     );
   }
-  const git = requiredManagedTool("git");
+  const git = requiredManagedTool(projectDir, "git");
   const { spawn } = await import("node:child_process");
   await fs.promises.mkdir(path.dirname(projectDir), { recursive: true });
   await new Promise<void>((resolve, reject) => {
@@ -113,7 +105,10 @@ async function cloneIfMissing(projectDir: string, repoUrl: string | null): Promi
 }
 
 async function runZenInstall(projectDir: string): Promise<void> {
-  const pnpm = process.env.ZENBU_SKIP_INSTALL === "1" ? null : "pnpm";
+  const pnpm =
+    process.env.ZENBU_SKIP_INSTALL === "1"
+      ? null
+      : requiredManagedTool(projectDir, "pnpm");
   if (!pnpm) return;
   const { spawn } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {
@@ -134,23 +129,34 @@ function loadElectronApp(): ElectronApp {
   const requireFromCore = createRequire(import.meta.url);
   const electron = requireFromCore("electron") as { app?: ElectronApp };
   if (!electron.app) {
-    throw new Error("Electron app API is unavailable; setup-gate must run inside Electron");
+    throw new Error(
+      "Electron app API is unavailable; setup-gate must run inside Electron",
+    );
   }
   return electron.app;
 }
 
-async function registerLoaders(tsconfig: string | false): Promise<void> {
+async function registerLoaders(tsconfig: string | false, projectRoot: string): Promise<void> {
   registerLoader(import.meta.resolve("@zenbujs/core/loaders/zenbu"));
+
+  registerTsx({ tsconfig });
+
+  process.env.ZENBU_ADVICE_ROOT = projectRoot;
+  await import("@zenbu/advice/node");
 
   const requireFromCore = createRequire(import.meta.url);
   const dynohotRegisterPath = requireFromCore.resolve("dynohot/register");
   const dynohot = await import(pathToFileURL(dynohotRegisterPath).href);
   if (typeof dynohot.register === "function") {
-    dynohot.register({ ignore: /[/\\]node_modules[/\\]/ });
+    // Ignore both `node_modules/` and any `dist/` directory. The latter
+    // covers `@zenbujs/core` when it's `link:`'d for development — its
+    // built `dist/*.mjs` chunks are framework code that the app shouldn't
+    // be hot-reloading. Without this, an entry can be loaded twice (once
+    // hot-wrapped via the user's plugin barrel, once non-hot via setup-gate's
+    // own dynamic imports), producing two distinct hot module URLs and
+    // double-evaluating services like `ServerService`.
+    dynohot.register({ ignore: /[/\\](?:node_modules|dist)[/\\]/ });
   }
-
-  await import("@zenbu/advice/node");
-  registerTsx({ tsconfig });
 }
 
 export async function setupGate(): Promise<void> {
@@ -187,17 +193,26 @@ export async function setupGate(): Promise<void> {
     console.log("[setup-gate] config:", configPath);
   }
 
-  await registerLoaders(tsconfig);
+  await registerLoaders(tsconfig, projectRoot);
+  const { defaultServices } = await import("./services/default");
   await defaultServices();
 
   const url = `zenbu:plugins?config=${encodeURIComponent(configPath)}`;
-  await import(url, { with: { hot: "import" } });
+  const mod = await import(url, { with: { hot: "import" } });
+  if (typeof mod.default === "function") {
+    const controller = mod.default();
+    if (controller && typeof controller.main === "function") {
+      await controller.main();
+    }
+  }
 
-  const runtime = (globalThis as { __zenbu_service_runtime__?: { whenIdle(): Promise<void> } })
-    .__zenbu_service_runtime__;
+  const runtime = (
+    globalThis as { __zenbu_service_runtime__?: { whenIdle(): Promise<void> } }
+  ).__zenbu_service_runtime__;
   await runtime?.whenIdle();
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await setupGate();
-}
+void setupGate().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

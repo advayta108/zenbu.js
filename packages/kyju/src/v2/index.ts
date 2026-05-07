@@ -1,33 +1,55 @@
-export { createDb } from "./db/db";
-export type { Db, CreateDbConfig, SectionConfig } from "./db/db";
+export {
+  createDb,
+  type Db,
+  type CreateDbConfig,
+  type SectionConfig,
+} from "./db/db";
 
-export { createClient } from "./client/client";
-export type { ClientProxy, CollectionNode, BlobNode, FieldNode, ArrayFieldNode, EffectFieldNode, EffectCollectionNode, EffectClientProxy, EffectArrayFieldNode } from "./client/client";
+export {
+  createClient,
+  type ClientProxy,
+  type CollectionNode,
+  type BlobNode,
+  type FieldNode,
+  type ArrayFieldNode,
+  type EffectFieldNode,
+  type EffectCollectionNode,
+  type EffectClientProxy,
+  type EffectArrayFieldNode,
+} from "./client/client";
 
-export { createReplica } from "./replica/replica";
-export type { CreateReplicaArgs } from "./replica/replica";
+export { createReplica, type CreateReplicaArgs } from "./replica/replica";
 
-export { createSchema, f } from "./db/schema";
-export type { Schema, SchemaShape, InferSchema, InferRoot } from "./db/schema";
+export {
+  createSchema,
+  f,
+  type Schema,
+  type SchemaShape,
+  type InferSchema,
+  type InferRoot,
+} from "./db/schema";
 
-export { applyOperations } from "./migrations";
-export type { KyjuMigration, MigrationOp } from "./migrations";
+export {
+  applyOperations,
+  type KyjuMigration,
+  type MigrationOp,
+} from "./migrations";
 
 export { sectionMigrationPlugin } from "./core-plugins/migration";
 
 export { createRouter, connectReplica } from "./transport";
 
-export type {
-  KyjuJSON,
-  KyjuError,
-  ErrorTag,
-  InvalidSessionError,
-  VersionMismatchError,
-  NotFoundError,
-  ReferenceExistsError,
-  ClientState,
-  ClientEvent,
-  DbSendEvent,
-  ServerEvent,
+export {
+  VERSION,
+  type KyjuJSON,
+  type KyjuError,
+  type ErrorTag,
+  type InvalidSessionError,
+  type VersionMismatchError,
+  type NotFoundError,
+  type ReferenceExistsError,
+  type ClientState,
+  type ClientEvent,
+  type DbSendEvent,
+  type ServerEvent,
 } from "./shared";
-export { VERSION } from "./shared";

@@ -6,10 +6,11 @@ import {
   type OpenDialogOptions,
 } from "electron";
 import { URLSearchParams } from "node:url";
-import { Service, runtime } from "../runtime";
+import { runtime, serviceWithDeps } from "../runtime";
 import { BaseWindowService, MAIN_WINDOW_ID } from "./base-window";
 import { ViewRegistryService } from "./view-registry";
 import { HttpService } from "./http";
+import { RendererHostService } from "./renderer-host";
 import { createLogger } from "../shared/log";
 
 const log = createLogger("window");
@@ -31,18 +32,13 @@ function queryString(query?: Record<string, string | number | boolean | null | u
   return encoded ? `?${encoded}` : "";
 }
 
-export class WindowService extends Service {
+export class WindowService extends serviceWithDeps({
+  baseWindow: BaseWindowService,
+  viewRegistry: ViewRegistryService,
+  http: HttpService,
+  rendererHost: RendererHostService,
+}) {
   static key = "window";
-  static deps = {
-    baseWindow: BaseWindowService,
-    viewRegistry: ViewRegistryService,
-    http: HttpService,
-  };
-  declare ctx: {
-    baseWindow: BaseWindowService;
-    viewRegistry: ViewRegistryService;
-    http: HttpService;
-  };
 
   private mounted = new Map<string, MountedView>();
 

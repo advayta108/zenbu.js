@@ -1,10 +1,5 @@
 import zod from "zod";
-import {
-  createSchema,
-  f,
-  type InferRoot,
-  type InferSchema,
-} from "@zenbu/kyju/schema";
+import { createSchema, f } from "@zenbu/kyju/schema";
 
 const viewRegistryEntrySchema = zod.object({
   scope: zod.string(),
@@ -37,8 +32,11 @@ export const schema = createSchema({
   windowPrefs: f.record(zod.string(), windowPrefsSchema).default({}),
 });
 
-export type CoreSchema = InferSchema<typeof schema>;
-export type SchemaRoot = InferRoot<CoreSchema>;
 export type ViewRegistryEntry = zod.infer<typeof viewRegistryEntrySchema>;
 export type WindowBounds = zod.infer<typeof windowBoundsSchema>;
 export type WindowPrefs = zod.infer<typeof windowPrefsSchema>;
+export type SchemaRoot = {
+  lastKnownViewRegistry: ViewRegistryEntry[];
+  windowPrefs: Record<string, WindowPrefs>;
+};
+export type CoreSchema = typeof schema.shape;

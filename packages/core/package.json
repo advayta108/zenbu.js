@@ -8,35 +8,35 @@
   "main": "./dist/setup-gate.mjs",
   "exports": {
     ".": {
-      "types": "./dist/index.d.mts",
+      "types": "./src/index.ts",
       "import": "./dist/index.mjs"
     },
     "./setup-gate": {
-      "types": "./dist/setup-gate.d.mts",
+      "types": "./src/setup-gate.ts",
       "import": "./dist/setup-gate.mjs"
     },
     "./loaders/zenbu": {
-      "types": "./dist/loaders/zenbu.d.mts",
+      "types": "./src/loaders/zenbu.ts",
       "import": "./dist/loaders/zenbu.mjs"
     },
     "./env-bootstrap": {
-      "types": "./dist/env-bootstrap.d.mts",
+      "types": "./src/env-bootstrap.ts",
       "import": "./dist/env-bootstrap.mjs"
     },
     "./runtime": {
-      "types": "./dist/runtime.d.mts",
+      "types": "./src/runtime.ts",
       "import": "./dist/runtime.mjs"
     },
     "./registry": {
-      "types": "./dist/registry.d.mts",
+      "types": "./src/registry.ts",
       "import": "./dist/registry.mjs"
     },
     "./schema": {
-      "types": "./dist/schema.d.mts",
+      "types": "./src/schema.ts",
       "import": "./dist/schema.mjs"
     },
     "./services": {
-      "types": "./dist/services/index.d.mts",
+      "types": "./src/services/index.ts",
       "import": "./dist/services/index.mjs"
     },
     "./package.json": "./package.json"
@@ -49,8 +49,8 @@
   ],
   "scripts": {
     "build": "tsdown",
+    "dev": "tsdown --watch",
     "link:types": "node ../zen/dist/bin.mjs link --types-config ./zenbu-types.config.json --registry ./types",
-    "postinstall": "node ./scripts/postinstall.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . --max-warnings=0"
   },
@@ -60,13 +60,9 @@
   "dependencies": {
     "@parcel/watcher": "^2.5.0",
     "@vitejs/plugin-react": "^5.0.0",
-    "@zenbu/advice": "workspace:*",
-    "@zenbu/git": "workspace:*",
-    "@zenbu/kyju": "workspace:*",
-    "@zenbu/zenrpc": "workspace:*",
     "dugite": "^3.2.1",
+    "effect": "^3.21.1",
     "dynohot": "workspace:*",
-    "effect": "catalog:",
     "nanoid": "^5.1.6",
     "tsx": "^4.21.0",
     "vite": "^6.0.0",
@@ -76,6 +72,10 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.0",
+    "@zenbu/advice": "workspace:*",
+    "@zenbu/git": "workspace:*",
+    "@zenbu/kyju": "workspace:*",
+    "@zenbu/zenrpc": "workspace:*",
     "@zenbu/lint": "workspace:*",
     "electron": "^42.0.0",
     "eslint": "^9.0.0",

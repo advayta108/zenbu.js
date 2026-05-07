@@ -20,9 +20,19 @@ interface ServiceSlot {
 }
 
 
-type DepRef = typeof Service | string
-type OptionalDep = { __optional: true; ref: DepRef }
+type AnyServiceClass = abstract new (...args: any[]) => Service
+type DepRef = AnyServiceClass | string
+type OptionalDep<R extends DepRef = DepRef> = { __optional: true; ref: R }
 type DepEntry = DepRef | OptionalDep
+
+type DepInstance<D> =
+  D extends OptionalDep<infer R>
+    ? (R extends AnyServiceClass ? InstanceType<R> | undefined : unknown)
+    : D extends AnyServiceClass
+      ? InstanceType<D>
+      : unknown
+
+type ResolveCtx<TDeps> = { [K in keyof TDeps]: DepInstance<TDeps[K]> }
 
 // TODO: Replace optional() with a reactive service tracker API, e.g.
 // this.track(SomeService, { onAvailable(instance) {}, onUnavailable() {} })
@@ -31,7 +41,7 @@ type DepEntry = DepRef | OptionalDep
 // plugin loaded) you get a callback — and a teardown when it disappears.
 // Eliminates the need for manual null-checks in evaluate() and global
 // onReconciled polling for a specific service key.
-export function optional(ref: DepRef): OptionalDep {
+export function optional<R extends DepRef>(ref: R): OptionalDep<R> {
   return { __optional: true, ref }
 }
 
@@ -39,7 +49,10 @@ function resolveDep(entry: DepEntry): { key: string; optional: boolean } {
   if (typeof entry === "string") return { key: entry, optional: false }
   if (typeof entry === "object" && entry !== null && "__optional" in entry) {
     const ref = entry.ref
-    return { key: typeof ref === "string" ? ref : ref.key, optional: true }
+    return {
+      key: typeof ref === "string" ? ref : (ref as typeof Service).key,
+      optional: true,
+    }
   }
   return { key: (entry as typeof Service).key, optional: false }
 }
@@ -51,11 +64,12 @@ export abstract class Service {
 
   ctx: any
 
-  private __setupCleanups: Map<string, (reason: CleanupReason) => void | Promise<void>> = new Map()
+  /** @internal */
+  __setupCleanups: Map<string, (reason: CleanupReason) => void | Promise<void>> = new Map()
 
-  abstract evaluate(): void | Promise<void>
+  evaluate(): void | Promise<void> {}
 
-  protected setup(key: string, fn: SetupFn): void {
+  setup(key: string, fn: SetupFn): void {
     const existing = this.__setupCleanups.get(key)
     if (existing) {
       try { existing("reload") } catch (e) { console.error(`[hot] setup cleanup "${key}" failed:`, e) }
@@ -78,7 +92,7 @@ export abstract class Service {
    *
    *     await this.trace("migrations", () => runMigrations())
    */
-  protected trace<T>(
+  trace<T>(
     name: string,
     fn: () => T | Promise<T>,
     meta?: Record<string, unknown>,
@@ -89,7 +103,7 @@ export abstract class Service {
     return traceSpan(name, fn, opts)
   }
 
-  protected traceSync<T>(
+  traceSync<T>(
     name: string,
     fn: () => T,
     meta?: Record<string, unknown>,
@@ -111,6 +125,32 @@ export abstract class Service {
     }
     this.__setupCleanups.clear()
   }
+}
+
+/**
+ * Declare a Service base class with typed deps. The returned class has
+ * `static deps = <your map>` already set, and `this.ctx` is auto-typed
+ * from the dep classes — no `declare ctx` needed in the subclass.
+ *
+ *     export class WindowService extends serviceWithDeps({
+ *       baseWindow: BaseWindowService,
+ *       http: HttpService,
+ *     }) {
+ *       static key = "window"
+ *       evaluate() {
+ *         this.ctx.baseWindow  // BaseWindowService
+ *         this.ctx.http        // HttpService
+ *       }
+ *     }
+ *
+ * `optional(SomeService)` is supported and produces `Instance | undefined`.
+ */
+export function serviceWithDeps<TDeps extends Record<string, DepEntry>>(deps: TDeps) {
+  abstract class ServiceWithDeps extends Service {
+    static deps = deps as unknown as Record<string, DepEntry>
+    declare ctx: ResolveCtx<TDeps>
+  }
+  return ServiceWithDeps
 }
 
 const SERVICE_BASE_METHODS = new Set(Object.getOwnPropertyNames(Service.prototype))
