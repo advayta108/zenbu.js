@@ -1,0 +1,18 @@
+{
+  "id": "96242ba8-b98f-4856-8c2f-ac755aae4805",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "fields": {
+    "lastKnownViewRegistry": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "ff5d4435bff79bd5",
+      "default": []
+    },
+    "windowPrefs": {
+      "kind": "data",
+      "hasDefault": true,
+      "typeHash": "d15bbfd72cb9fe18",
+      "default": {}
+    }
+  }
+}

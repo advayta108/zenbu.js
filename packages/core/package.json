@@ -67,6 +67,7 @@
   },
   "files": [
     "dist",
+    "migrations",
     "scripts",
     "setup",
     "package.json"
@@ -75,6 +76,7 @@
     "build": "node --max-old-space-size=8192 ./node_modules/tsdown/dist/run.mjs",
     "dev": "tsdown --watch",
     "link:types": "node ../zen/dist/bin.mjs link --types-config ./zenbu-types.config.json --registry ./types",
+    "db:generate": "node ../zen/dist/bin.mjs db generate --schema src/schema.ts --migrations ./migrations",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint . --max-warnings=0"
   },

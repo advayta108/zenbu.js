@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { WebSocket } from "ws";
 import { createDb, type Db, type SectionConfig } from "@zenbu/kyju";
-import type { KyjuError, EffectFieldNode, FieldNode } from "@zenbu/kyju";
+import type {
+  KyjuError,
+  KyjuMigration,
+  EffectFieldNode,
+  FieldNode,
+} from "@zenbu/kyju";
 import type * as Effect from "effect/Effect";
 import { createRouter, dbStringify, dbParse } from "@zenbu/kyju/transport";
 import { loadMigrationsFromDir } from "@zenbu/kyju/loader";
@@ -18,11 +23,50 @@ import { createLogger } from "../shared/log";
 
 const log = createLogger("db");
 
-const coreSection: SectionConfig = {
-  name: "core",
-  schema: coreSchema,
-  migrations: [],
-};
+/**
+ * Walk up from this file's location until we hit the @zenbujs/core
+ * package.json. Same trick as `loaders/zenbu.ts` and `vite-plugins.ts`;
+ * worth deduping into a shared helper once we have a fourth caller.
+ */
+async function findCorePackageRoot(): Promise<string> {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  let dir = path.resolve(here, "..", "..");
+  while (dir !== path.dirname(dir)) {
+    const pkg = path.join(dir, "package.json");
+    try {
+      const parsed = JSON.parse(await fs.readFile(pkg, "utf8"));
+      if (parsed.name === "@zenbujs/core") return dir;
+    } catch {
+      // missing/unparseable package.json on this level — keep climbing
+    }
+    dir = path.dirname(dir);
+  }
+  return path.resolve(here, "..", "..");
+}
+
+/**
+ * Build the core's DB section from the schema in this package + any
+ * migrations shipped in `<core>/migrations/`. Loaded via tsx (registered
+ * by setup-gate before the runtime services boot), so the source `.ts`
+ * files in the published package are imported directly with no extra
+ * compile step.
+ *
+ * If the migrations directory is missing (e.g. before the first
+ * `npm run db:generate` runs in the core package), the section degrades
+ * to `migrations: []` — same behavior as before this builder existed.
+ */
+async function buildCoreSection(): Promise<SectionConfig> {
+  const corePackageRoot = await findCorePackageRoot();
+  const migrationsDir = path.join(corePackageRoot, "migrations");
+  let migrations: KyjuMigration[] = [];
+  try {
+    await fs.access(migrationsDir);
+    migrations = await loadMigrationsFromDir(migrationsDir);
+  } catch {
+    // missing dir is allowed — emits an empty section, same as today
+  }
+  return { name: "core", schema: coreSchema, migrations };
+}
 
 type EffectSectionProxy<S> = {
   [K in keyof S]: EffectFieldNode<S[K]>;
@@ -444,7 +488,8 @@ export class DbService extends Service {
     const configPath = await resolveConfigPath();
     const configDir = path.dirname(configPath);
     const appConfig = await loadAppConfig(configPath);
-    const [pluginSections, resolved] = await Promise.all([
+    const [coreSec, pluginSections, resolved] = await Promise.all([
+      this.trace("build-core-section", () => buildCoreSection()),
       this.trace("discover-sections", () => discoverSections(configPath)),
       resolveDbPath(process.argv, {
         configDb: appConfig.db,
@@ -452,7 +497,7 @@ export class DbService extends Service {
         configPath,
       }),
     ]);
-    const sections = [coreSection, ...pluginSections];
+    const sections = [coreSec, ...pluginSections];
     const sectionsHash = JSON.stringify(
       sections.map((s) => ({ name: s.name, v: s.migrations.length })),
     );

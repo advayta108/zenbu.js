@@ -22,15 +22,19 @@ Usage:
   zen db add <path>           Register a path (mkdir -p) without launching
   zen db default [<path>]     Set the default DB (interactive when omitted)
   zen db remove [<path>]      Drop a path from the registry (interactive when omitted)
-  zen db generate [...]       Diff your plugin's schema against the last
-                              snapshot and write a new migration. Run from
-                              inside any plugin (or the app) — the command
-                              walks up to the nearest zenbu.plugin.json and
-                              reads "schema" + "migrations" from it. Flags:
-                                --manifest <path> override manifest path
-                                --name <tag>      custom migration name
-                                --custom          generate editable migrate()
-                                --amend           replace the last migration
+  zen db generate [...]       Diff a schema against the last snapshot and
+                              write a new migration. Default: walks up from
+                              cwd to the nearest zenbu.plugin.json and reads
+                              "schema" + "migrations" from it. Flags:
+                                --manifest <path>     override manifest path
+                                --schema <path>       schema file (bypasses
+                                                      manifest discovery; must
+                                                      be paired with --migrations)
+                                --migrations <path>   migrations output dir
+                                                      (paired with --schema)
+                                --name <tag>          custom migration name
+                                --custom              generate editable migrate()
+                                --amend               replace the last migration
 `)
   process.exit(exitCode)
 }
@@ -243,16 +247,23 @@ export async function runDb(argv: string[]): Promise<void> {
 }
 
 /**
- * Drive the embedded migration generator from the plugin manifest.
+ * Drive the embedded migration generator. Two input modes:
  *
- * Each plugin (the app is itself a plugin) declares `schema` + `migrations`
- * in its `zenbu.plugin.json`; that's the same place `discoverSections` reads
- * at runtime. By feeding `zen db generate` from the same source we keep one
- * source of truth — no parallel `db.config.ts` to drift.
+ *   • Manifest mode (default for plugins). Walks up from cwd to the
+ *     nearest `zenbu.plugin.json` and reads `schema` + `migrations` from
+ *     it — same paths `discoverSections` consumes at runtime, so there's
+ *     one source of truth per plugin.
  *
- * Resolution order:
- *   1. `--manifest <path>` flag
- *   2. Walk up from cwd to the nearest `zenbu.plugin.json`
+ *   • Direct mode (`--schema <path> --migrations <path>`). Skips manifest
+ *     discovery entirely. Used for schemas that aren't a zenbu plugin —
+ *     notably `@zenbujs/core`'s framework schema, which is invoked through
+ *     a `db:generate` script in `packages/core/package.json`. Composable
+ *     for any future internal section without growing privileged flags
+ *     into the CLI.
+ *
+ * Resolution order: direct mode wins when both paths are given; otherwise
+ * `--manifest`; otherwise the walk-up. Mixing direct + manifest is an
+ * error (the user almost certainly meant one or the other).
  */
 function findManifest(from: string): string | null {
   let dir = path.resolve(from)
@@ -267,17 +278,29 @@ function findManifest(from: string): string | null {
 
 type GenerateFlags = {
   manifest: string | null
+  schema: string | null
+  migrationsOut: string | null
   name?: string
   custom: boolean
   amend: boolean
 }
 
 function parseGenerateArgs(argv: string[]): GenerateFlags {
-  const out: GenerateFlags = { manifest: null, custom: false, amend: false }
+  const out: GenerateFlags = {
+    manifest: null,
+    schema: null,
+    migrationsOut: null,
+    custom: false,
+    amend: false,
+  }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === "--manifest" && i + 1 < argv.length) out.manifest = argv[++i]!
     else if (arg.startsWith("--manifest=")) out.manifest = arg.slice("--manifest=".length)
+    else if (arg === "--schema" && i + 1 < argv.length) out.schema = argv[++i]!
+    else if (arg.startsWith("--schema=")) out.schema = arg.slice("--schema=".length)
+    else if (arg === "--migrations" && i + 1 < argv.length) out.migrationsOut = argv[++i]!
+    else if (arg.startsWith("--migrations=")) out.migrationsOut = arg.slice("--migrations=".length)
     else if (arg === "--name" && i + 1 < argv.length) out.name = argv[++i]!
     else if (arg.startsWith("--name=")) out.name = arg.slice("--name=".length)
     else if (arg === "--custom") out.custom = true
@@ -288,6 +311,37 @@ function parseGenerateArgs(argv: string[]): GenerateFlags {
 
 async function runGenerate(argv: string[]): Promise<void> {
   const flags = parseGenerateArgs(argv)
+  const { generateMigration } = await import("@zenbu/kyju/cli")
+
+  // Direct mode: --schema + --migrations bypasses manifest entirely.
+  if (flags.schema || flags.migrationsOut) {
+    if (!flags.schema || !flags.migrationsOut) {
+      console.error(
+        "zen db generate: --schema and --migrations must be passed together.",
+      )
+      process.exit(1)
+    }
+    if (flags.manifest) {
+      console.error(
+        "zen db generate: --manifest is incompatible with --schema/--migrations; pick one input mode.",
+      )
+      process.exit(1)
+    }
+    const schemaPath = resolvePath(process.cwd(), flags.schema)
+    const outPath = resolvePath(process.cwd(), flags.migrationsOut)
+    console.log(`Schema:  ${schemaPath}`)
+    console.log(`Output:  ${outPath}`)
+    await generateMigration({
+      schemaPath,
+      outPath,
+      name: flags.name,
+      custom: flags.custom,
+      amend: flags.amend,
+    })
+    return
+  }
+
+  // Manifest mode (default).
   const manifestPath = flags.manifest
     ? resolvePath(process.cwd(), flags.manifest)
     : findManifest(process.cwd())
@@ -296,7 +350,10 @@ async function runGenerate(argv: string[]): Promise<void> {
       "zen db generate: no zenbu.plugin.json found in cwd or any parent.",
     )
     console.error(
-      "                 Run from inside the plugin or pass --manifest <path>.",
+      "                 Run from inside the plugin, pass --manifest <path>,",
+    )
+    console.error(
+      "                 or use --schema <path> --migrations <path> directly.",
     )
     process.exit(1)
   }
@@ -336,7 +393,6 @@ async function runGenerate(argv: string[]): Promise<void> {
   console.log(`Plugin: ${manifest.name ?? path.basename(baseDir)}`)
   console.log(`Manifest: ${manifestPath}`)
 
-  const { generateMigration } = await import("@zenbu/kyju/cli")
   await generateMigration({
     schemaPath,
     outPath,
