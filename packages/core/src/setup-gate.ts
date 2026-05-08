@@ -8,7 +8,6 @@ import { bootstrapEnv } from "./env-bootstrap";
 
 type PackageJson = {
   name?: string;
-  repository?: string | { url?: string };
   zenbu?: {
     host?: string;
     branch?: string;
@@ -37,25 +36,6 @@ function readPackageJson(packageDir: string): PackageJson {
   return JSON.parse(fs.readFileSync(pkgPath, "utf8")) as PackageJson;
 }
 
-function repositoryUrl(pkg: PackageJson): string | null {
-  if (typeof pkg.repository === "string") return pkg.repository;
-  return pkg.repository?.url ?? null;
-}
-
-function requiredManagedTool(projectDir: string, name: string): string {
-  const root = process.env.ZENBU_TOOLCHAIN_ROOT
-    ? path.resolve(process.env.ZENBU_TOOLCHAIN_ROOT)
-    : path.join(projectDir, ".zenbu", "toolchain");
-  const toolPath = path.join(root, "bin", name);
-  if (!fs.existsSync(toolPath)) {
-    throw new Error(
-      `Zenbu managed tool is missing: ${toolPath}. ` +
-        "Run `npx @zenbujs/init --yes` in this project to provision the local runtime.",
-    );
-  }
-  return toolPath;
-}
-
 function findProjectRoot(projectDir: string): string {
   let dir = path.resolve(projectDir);
   while (dir !== path.dirname(dir)) {
@@ -76,53 +56,6 @@ function resolveConfigPath(projectRoot: string): string {
 function findTsconfig(projectRoot: string): string | false {
   const candidate = path.join(projectRoot, "tsconfig.json");
   return fs.existsSync(candidate) ? candidate : false;
-}
-
-async function cloneIfMissing(
-  projectDir: string,
-  repoUrl: string | null,
-): Promise<void> {
-  if (fs.existsSync(projectDir)) return;
-  if (!repoUrl) {
-    throw new Error(
-      `Project directory ${projectDir} does not exist and package.json#repository.url is missing`,
-    );
-  }
-  const git = requiredManagedTool(projectDir, "git");
-  const { spawn } = await import("node:child_process");
-  await fs.promises.mkdir(path.dirname(projectDir), { recursive: true });
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(git, ["clone", repoUrl, projectDir], {
-      stdio: "inherit",
-      env: process.env,
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`git clone failed with exit code ${code}`));
-    });
-  });
-}
-
-async function runZenInstall(projectDir: string): Promise<void> {
-  const pnpm =
-    process.env.ZENBU_SKIP_INSTALL === "1"
-      ? null
-      : requiredManagedTool(projectDir, "pnpm");
-  if (!pnpm) return;
-  const { spawn } = await import("node:child_process");
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(pnpm, ["install"], {
-      cwd: projectDir,
-      stdio: "inherit",
-      env: process.env,
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`pnpm install failed with exit code ${code}`));
-    });
-  });
 }
 
 function loadElectronApp(): ElectronApp {
@@ -174,8 +107,13 @@ export async function setupGate(): Promise<void> {
       appDirName(appName),
     );
 
-  await cloneIfMissing(resolvedProjectDir, repositoryUrl(bundledPkg));
-  await runZenInstall(resolvedProjectDir);
+  if (!fs.existsSync(resolvedProjectDir)) {
+    throw new Error(
+      `setup-gate: project directory ${resolvedProjectDir} does not exist. ` +
+        `In a shipped .app, the launcher provisions this dir before invoking setup-gate. ` +
+        `In dev, point at an existing project with --project=.`,
+    );
+  }
 
   const projectRoot = findProjectRoot(resolvedProjectDir);
   const configPath = resolveConfigPath(projectRoot);

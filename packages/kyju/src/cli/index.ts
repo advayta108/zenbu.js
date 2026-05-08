@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { findConfigFile, loadConfig, loadSchema } from "./config";
+import { loadSchema } from "./config";
 import { serializeSchema, emptySnapshot } from "./serializer";
 import { diffSnapshots } from "./differ";
 import { generate, readJournal, getLastSnapshot, getSnapshotAtIndex } from "./generator";
@@ -54,23 +54,39 @@ function parseArgs(argv: string[]): {
   return result;
 }
 
-async function runGenerate(opts: { config?: string; name?: string; custom: boolean; amend: boolean }) {
-  const configPath = opts.config ?? findConfigFile(process.cwd());
-  const resolved = await loadConfig(configPath);
+/**
+ * Programmatic entry for the migration generator. Takes already-resolved
+ * absolute paths so callers (including `zen db generate`) can drive the
+ * generator without going through a `db.config.ts` file. The plugin manifest
+ * (`schema` + `migrations`) is the canonical source of these paths.
+ */
+export async function generateMigration(opts: {
+  schemaPath: string;
+  outPath: string;
+  alias?: string;
+  name?: string;
+  custom?: boolean;
+  amend?: boolean;
+}): Promise<void> {
+  const { schemaPath, outPath } = opts;
+  const amend = !!opts.amend;
+  const custom = !!opts.custom;
 
-  console.log(`Schema: ${resolved.schemaPath}`);
-  console.log(`Output: ${resolved.outPath}`);
+  console.log(`Schema: ${schemaPath}`);
+  console.log(`Output: ${outPath}`);
 
-  const schema = await loadSchema(resolved.schemaPath);
-  const journal = readJournal(resolved.outPath);
+  const schema = await loadSchema(schemaPath);
+  const journal = readJournal(outPath);
 
   let prevSnapshot;
-  if (opts.amend && journal.entries.length >= 2) {
-    prevSnapshot = getSnapshotAtIndex(resolved.outPath, journal, journal.entries.length - 2) ?? emptySnapshot;
-  } else if (opts.amend) {
+  if (amend && journal.entries.length >= 2) {
+    prevSnapshot =
+      getSnapshotAtIndex(outPath, journal, journal.entries.length - 2) ??
+      emptySnapshot;
+  } else if (amend) {
     prevSnapshot = emptySnapshot;
   } else {
-    prevSnapshot = getLastSnapshot(resolved.outPath, journal) ?? emptySnapshot;
+    prevSnapshot = getLastSnapshot(outPath, journal) ?? emptySnapshot;
   }
 
   const currentSnapshot = serializeSchema(
@@ -79,43 +95,44 @@ async function runGenerate(opts: { config?: string; name?: string; custom: boole
     prevSnapshot.id,
   );
 
-  const ops = diffSnapshots(prevSnapshot!, currentSnapshot);
+  const ops = diffSnapshots(prevSnapshot, currentSnapshot);
 
-  if (ops.length === 0 && !opts.amend) {
+  if (ops.length === 0 && !amend) {
     console.log("\nNo schema changes detected.");
-  } else {
-    console.log(`\nDetected ${ops.length} change(s):`);
-    for (const op of ops) {
-      if (op.op === "add") {
-        console.log(`  + ${op.key} (${op.kind})`);
-      } else if (op.op === "remove") {
-        console.log(`  - ${op.key} (${op.kind})`);
-      } else if (op.op === "alter") {
-        console.log(`  ~ ${op.key} (altered)`);
-      }
-    }
-
-    const hasAlter = ops.some((o) => o.op === "alter");
-    if (hasAlter) {
-      console.log(
-        "\n⚠ Field type changes detected. Generating custom migration skeleton.",
-      );
-    }
-
-    const result = generate({
-      outPath: resolved.outPath,
-      snapshot: currentSnapshot,
-      ops,
-      name: opts.name,
-      custom: opts.custom,
-      amend: opts.amend,
-      alias: resolved.alias,
-    });
-
-    console.log(`\n${opts.amend ? "Amended" : "Generated"}:`);
-    console.log(`  Migration: ${result.migrationPath}`);
-    console.log(`  Snapshot:  ${result.snapshotPath}`);
+    return;
   }
+
+  console.log(`\nDetected ${ops.length} change(s):`);
+  for (const op of ops) {
+    if (op.op === "add") {
+      console.log(`  + ${op.key} (${op.kind})`);
+    } else if (op.op === "remove") {
+      console.log(`  - ${op.key} (${op.kind})`);
+    } else if (op.op === "alter") {
+      console.log(`  ~ ${op.key} (altered)`);
+    }
+  }
+
+  const hasAlter = ops.some((o) => o.op === "alter");
+  if (hasAlter) {
+    console.log(
+      "\n⚠ Field type changes detected. Generating custom migration skeleton.",
+    );
+  }
+
+  const result = generate({
+    outPath,
+    snapshot: currentSnapshot,
+    ops,
+    name: opts.name,
+    custom,
+    amend,
+    alias: opts.alias,
+  });
+
+  console.log(`\n${amend ? "Amended" : "Generated"}:`);
+  console.log(`  Migration: ${result.migrationPath}`);
+  console.log(`  Snapshot:  ${result.snapshotPath}`);
 }
 
 export async function run(argv: string[]): Promise<void> {
@@ -132,7 +149,21 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   if (args.command === "generate") {
-    await runGenerate({ config: args.config, name: args.name, custom: args.custom, amend: args.amend });
+    // The legacy CLI entry kept for direct `kyju generate --config <db.config.ts>`
+    // invocations. `zen db generate` no longer uses this path; it resolves
+    // schema + migrations from the nearest `zenbu.plugin.json` and calls
+    // `generateMigration` directly.
+    const { findConfigFile, loadConfig } = await import("./config");
+    const configPath = args.config ?? findConfigFile(process.cwd());
+    const resolved = await loadConfig(configPath);
+    await generateMigration({
+      schemaPath: resolved.schemaPath,
+      outPath: resolved.outPath,
+      alias: resolved.alias,
+      name: args.name,
+      custom: args.custom,
+      amend: args.amend,
+    });
   } else {
     console.error(`Unknown command: ${args.command}`);
     printUsage();

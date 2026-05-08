@@ -19,7 +19,6 @@ import {
   type CollectionRefBrand as _CollectionRefBrand,
   type CollectionRefValue as _CollectionRefValue,
 } from "@zenbu/kyju/schema";
-import { defineConfig as _defineConfig } from "@zenbu/kyju/config";
 import {
   connectReplica as _connectReplica,
   dbStringify,
@@ -41,19 +40,5 @@ export type CollectionRefBrand<T = unknown> = _CollectionRefBrand<T>;
 export type CollectionRefValue<T = unknown> = _CollectionRefValue<T>;
 export type CollectionNode<T = unknown> = _CollectionNode<T>;
 export type DbClient<T extends _SchemaShape = _SchemaShape> = _ClientProxy<T>;
-
-export type DbConfig = {
-  /** Path to the schema module (relative to this config file). */
-  schema: string;
-  /** Where generated migrations + snapshots live (default: `./db`). */
-  out?: string;
-  /**
-   * Optional import alias the generator should use in the migration files'
-   * `import type { Migration }` line. Useful when you want generated files to
-   * stay decoupled from the absolute path of the framework.
-   */
-  alias?: string;
-};
-export const defineDbConfig: (config: DbConfig) => DbConfig = _defineConfig;
 
 export const connectDb: typeof _connectReplica = _connectReplica;

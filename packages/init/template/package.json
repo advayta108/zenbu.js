@@ -5,8 +5,10 @@
   "main": "node_modules/@zenbujs/core/dist/setup-gate.mjs",
   "scripts": {
     "dev": "electron . --project=.",
-    "build:electron": "zen build:electron",
-    "build:content": "zen build:content"
+    "build:source": "zen build:source",
+    "build:desktop": "zen build:desktop",
+    "publish:source": "zen publish:source",
+    "publish:desktop": "zen publish:desktop"
   },
   "dependencies": {
     "@zenbujs/core": "0.0.0",

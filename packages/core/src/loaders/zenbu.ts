@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
 type LoaderContext = {
@@ -301,6 +301,74 @@ function buildBarrel(manifestPath: string): {
   };
 }
 
+/**
+ * Canonical path for `@zenbujs/core` and its subpaths, computed from the
+ * loader's own URL. The loader file itself lives inside `@zenbujs/core/dist/`,
+ * so the package root is two directories up. We resolve subpaths through
+ * that package's `exports` field manually, instead of going through Node's
+ * usual node_modules walk-up — that walk would pick up a plugin-local
+ * `@zenbujs/core` (devDep) before reaching the real one. Rewriting in the
+ * loader keeps `runtime.register`, `serviceWithDeps`, and the `Service`
+ * class identity unique across every plugin's main-process code.
+ */
+type ExportEntry = string | { import?: string; default?: string; types?: string };
+type ExportsField = Record<string, ExportEntry>;
+
+const CORE_PACKAGE_ROOT_FOR_LOADER = (() => {
+  // This file lives at `<core>/src/loaders/zenbu.ts` in source and
+  // `<core>/dist/loaders/zenbu.mjs` after build — two parents up either
+  // way reach the package root. We then walk up further if needed,
+  // looking for a `package.json` named `@zenbujs/core`, so this stays
+  // robust if the build layout ever shifts.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  let dir = path.resolve(here, "..", "..");
+  while (dir !== path.dirname(dir)) {
+    const pkg = path.join(dir, "package.json");
+    if (fs.existsSync(pkg)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(pkg, "utf8"));
+        if (parsed.name === "@zenbujs/core") return dir;
+      } catch {}
+    }
+    dir = path.dirname(dir);
+  }
+  return path.resolve(here, "..", "..");
+})();
+
+let coreExportsCache: ExportsField | null = null;
+function getCoreExports(): ExportsField | null {
+  if (coreExportsCache) return coreExportsCache;
+  try {
+    const pkgPath = path.join(CORE_PACKAGE_ROOT_FOR_LOADER, "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+      name?: string;
+      exports?: ExportsField;
+    };
+    if (pkg.name === "@zenbujs/core" && pkg.exports) {
+      coreExportsCache = pkg.exports;
+      return coreExportsCache;
+    }
+  } catch {}
+  return null;
+}
+
+function resolveCoreSubpath(specifier: string): string | null {
+  const exports = getCoreExports();
+  if (!exports) return null;
+  const sub =
+    specifier === "@zenbujs/core"
+      ? "."
+      : "./" + specifier.slice("@zenbujs/core/".length);
+  const entry = exports[sub];
+  if (!entry) return null;
+  const file =
+    typeof entry === "string"
+      ? entry
+      : entry.import ?? entry.default ?? null;
+  if (!file) return null;
+  return path.resolve(CORE_PACKAGE_ROOT_FOR_LOADER, file);
+}
+
 export function resolve(
   specifier: string,
   context: LoaderContext,
@@ -313,6 +381,15 @@ export function resolve(
         url: new URL("../advice-runtime.mjs", import.meta.url).href,
         shortCircuit: true,
       };
+    }
+    if (specifier === "@zenbujs/core" || specifier.startsWith("@zenbujs/core/")) {
+      const resolved = resolveCoreSubpath(specifier);
+      if (resolved) {
+        return {
+          url: pathToFileURL(resolved).href,
+          shortCircuit: true,
+        };
+      }
     }
     if (specifier.startsWith("zenbu:")) {
       return { url: specifier, shortCircuit: true };

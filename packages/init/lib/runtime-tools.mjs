@@ -146,32 +146,6 @@ async function ensurePnpm(root, versions, silent) {
   writeMarker(binDir, "pnpm", versions.pnpm.version);
 }
 
-async function ensureGit(root, versions, silent) {
-  const binDir = path.join(root, "bin");
-  const target = `darwin-${archSuffix()}`;
-  const info = versions.git.targets[target];
-  if (!info) throw new Error(`unsupported git target: ${target}`);
-  const gitRoot = path.join(root, "git");
-  const gitLink = path.join(binDir, "git");
-  if (fs.existsSync(gitLink) && readMarker(binDir, "git") === versions.git.version) return;
-
-  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "zenbu-git-"));
-  const archivePath = path.join(tmp, "git.tar.gz");
-  log(`Downloading Git ${versions.git.version}`, silent);
-  await download(info.url, archivePath);
-  await fsp.rm(gitRoot, { recursive: true, force: true });
-  await fsp.mkdir(gitRoot, { recursive: true });
-  await execFileAsync("tar", ["-xzf", archivePath, "-C", gitRoot]);
-  const gitBin = await findExecutable(gitRoot, "git");
-  if (!gitBin) throw new Error("could not find git in dugite-native archive");
-  try {
-    await fsp.unlink(gitLink);
-  } catch {}
-  await fsp.symlink(gitBin, gitLink);
-  writeMarker(binDir, "git", versions.git.version);
-  await fsp.rm(tmp, { recursive: true, force: true });
-}
-
 export async function ensureRuntimeTools(projectDir, { silent = false } = {}) {
   if (process.platform !== "darwin") {
     throw new Error(`Zenbu runtime tools only support macOS today (got ${process.platform})`);
@@ -181,13 +155,11 @@ export async function ensureRuntimeTools(projectDir, { silent = false } = {}) {
   const versions = JSON.parse(await fsp.readFile(versionsPath, "utf8"));
   await ensureBun(root, versions, silent);
   await ensurePnpm(root, versions, silent);
-  await ensureGit(root, versions, silent);
   return {
     root,
     binDir: path.join(root, "bin"),
     bun: path.join(root, "bin", "bun"),
     node: path.join(root, "bin", "node"),
     pnpm: path.join(root, "bin", "pnpm"),
-    git: path.join(root, "bin", "git"),
   };
 }

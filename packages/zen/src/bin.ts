@@ -17,8 +17,10 @@ const SUBCOMMANDS = new Set([
   "setup-app",
   "launch",
   "dev",
-  "build",
-  "publish",
+  "build:source",
+  "build:desktop",
+  "publish:source",
+  "publish:desktop",
   "help",
   "--help",
   "-h",
@@ -43,6 +45,11 @@ Usage:
   zen exec -e '<ts>' | zen exec <file.ts>        Run TS with rpc/events pre-opened
   zen profile [--duration <ms>] [--out <path>]   CPU profile the kernel main process
   zen profile heap [--out <path>]                Heap snapshot of the kernel main process
+
+  zen build:source                               Transform user TS to .zenbu/source/ (no network)
+  zen build:desktop                              Bundle launcher + seed -> dist/<name>.app
+  zen publish:source [init|push]                 Push staged source to the mirror repo
+  zen publish:desktop                            Upload the .app to a GitHub release
 
 Open flags:
   --blocking           Keep zen attached to the Electron process
@@ -147,16 +154,28 @@ async function main() {
       await runDev(rest)
       }
       return
-    case "build":
+    case "build:source":
       {
-        const { runBuild } = await import("./commands/build")
-      await runBuild(rest)
+        const { runBuildSource } = await import("./commands/build-source")
+        await runBuildSource(rest)
       }
       return
-    case "publish":
+    case "build:desktop":
       {
-        const { runPublish } = await import("./commands/publish")
-      await runPublish(rest)
+        const { runBuildDesktop } = await import("./commands/build-desktop")
+        await runBuildDesktop(rest)
+      }
+      return
+    case "publish:source":
+      {
+        const { runPublishSource } = await import("./commands/publish-source")
+        await runPublishSource(rest)
+      }
+      return
+    case "publish:desktop":
+      {
+        const { runPublishDesktop } = await import("./commands/publish-desktop")
+        await runPublishDesktop(rest)
       }
       return
     case "help":

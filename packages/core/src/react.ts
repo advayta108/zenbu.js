@@ -241,14 +241,24 @@ export function ZenbuProvider({
     };
   }, [wsUrl]);
 
-  if (state.status === "connecting" && fallback !== undefined) {
-    return createElement("span", { "data-zenbu-connecting": true }, fallback);
+  // Children only render when the connection is fully wired. Rendering
+  // them earlier would let `useDb`/`useRpc`/`useEvents` execute against a
+  // not-yet-ready connection and throw — and we'd rather have a quiet,
+  // empty placeholder than a thrown hook for the (very common) case where
+  // a plugin author wrapped their tree in `<ZenbuProvider>` without
+  // bothering to pass a fallback.
+  if (state.status === "connecting") {
+    return createElement(
+      "span",
+      { "data-zenbu-connecting": true },
+      fallback ?? null,
+    );
   }
-  if (state.status === "error" && errorFallback) {
+  if (state.status === "error") {
     return createElement(
       "span",
       { "data-zenbu-error": true },
-      errorFallback(state.error),
+      errorFallback ? errorFallback(state.error) : null,
     );
   }
 

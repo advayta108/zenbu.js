@@ -1,3 +1,5 @@
+import fs from "node:fs"
+import path from "node:path"
 import { resolve as resolvePath } from "node:path"
 import {
   addDb,
@@ -20,10 +22,12 @@ Usage:
   zen db add <path>           Register a path (mkdir -p) without launching
   zen db default [<path>]     Set the default DB (interactive when omitted)
   zen db remove [<path>]      Drop a path from the registry (interactive when omitted)
-  zen db generate [...]       Diff your schema against the last snapshot and
-                              write a new migration (delegates to the embedded
-                              migration generator). Common flags:
-                                --config <path>   db.config.ts (auto-detected)
+  zen db generate [...]       Diff your plugin's schema against the last
+                              snapshot and write a new migration. Run from
+                              inside any plugin (or the app) — the command
+                              walks up to the nearest zenbu.plugin.json and
+                              reads "schema" + "migrations" from it. Flags:
+                                --manifest <path> override manifest path
                                 --name <tag>      custom migration name
                                 --custom          generate editable migrate()
                                 --amend           replace the last migration
@@ -239,26 +243,105 @@ export async function runDb(argv: string[]): Promise<void> {
 }
 
 /**
- * Delegate to the embedded migration generator. Translates `db.config.ts`
- * into the underlying engine's expected default name (`kyju.config.ts`)
- * when no `--config` is passed and only the user-facing name exists.
+ * Drive the embedded migration generator from the plugin manifest.
+ *
+ * Each plugin (the app is itself a plugin) declares `schema` + `migrations`
+ * in its `zenbu.plugin.json`; that's the same place `discoverSections` reads
+ * at runtime. By feeding `zen db generate` from the same source we keep one
+ * source of truth — no parallel `db.config.ts` to drift.
+ *
+ * Resolution order:
+ *   1. `--manifest <path>` flag
+ *   2. Walk up from cwd to the nearest `zenbu.plugin.json`
  */
-async function runGenerate(argv: string[]): Promise<void> {
-  const { run: runEmbedded } = await import("@zenbu/kyju/cli")
-  const hasConfigFlag = argv.some((a) => a === "--config" || a.startsWith("--config="))
-  const finalArgs = ["generate", ...argv]
-  if (!hasConfigFlag) {
-    const candidates = ["db.config.ts", "db.config.js", "db.config.mjs"]
-    for (const name of candidates) {
-      const candidate = resolvePath(process.cwd(), name)
-      try {
-        const fs = await import("node:fs")
-        if (fs.existsSync(candidate)) {
-          finalArgs.push("--config", candidate)
-          break
-        }
-      } catch {}
-    }
+function findManifest(from: string): string | null {
+  let dir = path.resolve(from)
+  while (true) {
+    const candidate = path.join(dir, "zenbu.plugin.json")
+    if (fs.existsSync(candidate)) return candidate
+    const parent = path.dirname(dir)
+    if (parent === dir) return null
+    dir = parent
   }
-  await runEmbedded(finalArgs)
+}
+
+type GenerateFlags = {
+  manifest: string | null
+  name?: string
+  custom: boolean
+  amend: boolean
+}
+
+function parseGenerateArgs(argv: string[]): GenerateFlags {
+  const out: GenerateFlags = { manifest: null, custom: false, amend: false }
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!
+    if (arg === "--manifest" && i + 1 < argv.length) out.manifest = argv[++i]!
+    else if (arg.startsWith("--manifest=")) out.manifest = arg.slice("--manifest=".length)
+    else if (arg === "--name" && i + 1 < argv.length) out.name = argv[++i]!
+    else if (arg.startsWith("--name=")) out.name = arg.slice("--name=".length)
+    else if (arg === "--custom") out.custom = true
+    else if (arg === "--amend") out.amend = true
+  }
+  return out
+}
+
+async function runGenerate(argv: string[]): Promise<void> {
+  const flags = parseGenerateArgs(argv)
+  const manifestPath = flags.manifest
+    ? resolvePath(process.cwd(), flags.manifest)
+    : findManifest(process.cwd())
+  if (!manifestPath) {
+    console.error(
+      "zen db generate: no zenbu.plugin.json found in cwd or any parent.",
+    )
+    console.error(
+      "                 Run from inside the plugin or pass --manifest <path>.",
+    )
+    process.exit(1)
+  }
+
+  let manifest: { name?: string; schema?: string; migrations?: string }
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+  } catch (err) {
+    console.error(
+      `zen db generate: failed to parse ${manifestPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    )
+    process.exit(1)
+  }
+
+  if (!manifest.schema) {
+    console.error(
+      `zen db generate: ${manifestPath} is missing the required "schema" field.`,
+    )
+    process.exit(1)
+  }
+  if (!manifest.migrations) {
+    console.error(
+      `zen db generate: ${manifestPath} is missing the required "migrations" field`,
+    )
+    console.error(
+      `                 (the directory the generator writes migrations into).`,
+    )
+    process.exit(1)
+  }
+
+  const baseDir = path.dirname(manifestPath)
+  const schemaPath = path.resolve(baseDir, manifest.schema)
+  const outPath = path.resolve(baseDir, manifest.migrations)
+
+  console.log(`Plugin: ${manifest.name ?? path.basename(baseDir)}`)
+  console.log(`Manifest: ${manifestPath}`)
+
+  const { generateMigration } = await import("@zenbu/kyju/cli")
+  await generateMigration({
+    schemaPath,
+    outPath,
+    name: flags.name,
+    custom: flags.custom,
+    amend: flags.amend,
+  })
 }

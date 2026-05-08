@@ -16,6 +16,8 @@ export default defineConfig({
     db: "src/db.ts",
     rpc: "src/rpc.ts",
     react: "src/react.ts",
+    advice: "src/advice.ts",
+    vite: "src/vite.ts",
   },
   format: "esm",
   dts: { eager: true },

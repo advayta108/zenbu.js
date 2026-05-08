@@ -7,6 +7,7 @@ import { createServer as createNetServer } from "node:net"
 import { Service, runtime } from "../runtime"
 import { INTERNAL_DIR } from "../shared/paths"
 import { createLogger } from "../shared/log"
+import { zenbuVitePlugins } from "../vite-plugins"
 
 const log = createLogger("reloader")
 
@@ -104,14 +105,22 @@ async function startRendererServer(options: RendererServerOptions): Promise<Vite
     logLevel: "warn" as const,
   }
 
+  // Framework plugins (advice prelude + content-script injection + advice
+  // babel transform) are injected for every renderer regardless of whether
+  // the user supplies a `vite.config.ts`. Vite merges inline `plugins` with
+  // the loaded config, so a user `vite.config.ts` keeps full control of its
+  // own plugin stack while still picking up framework wiring for free.
+  const frameworkPlugins = zenbuVitePlugins()
+
   if (options.configFile) {
     server = await createServer({
       ...sharedConfig,
       root: options.root,
       configFile: options.configFile,
+      plugins: [...frameworkPlugins, ...(options.plugins ?? [])],
     })
   } else {
-    const plugins: any[] = [...(options.plugins ?? [])]
+    const plugins: any[] = [...frameworkPlugins, ...(options.plugins ?? [])]
     if (options.reactPlugin) {
       plugins.unshift(options.reactPlugin())
     } else {

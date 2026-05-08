@@ -10,6 +10,22 @@
     "zen": "./dist/bin.mjs"
   },
   "main": "./dist/bin.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/bin.mjs"
+    },
+    "./build": {
+      "import": "./dist/build.mjs"
+    },
+    "./launcher": {
+      "import": "./dist/launcher.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "package.json"
+  ],
   "scripts": {
     "build": "tsdown",
     "lint": "eslint . --max-warnings=0"
@@ -24,6 +40,7 @@
     "@zenbu/kyju": "workspace:*",
     "@zenbu/lint": "workspace:*",
     "@zenbu/zenrpc": "workspace:*",
+    "electron": "^42.0.0",
     "eslint": "^9.0.0",
     "tsdown": "^0.21.10",
     "typescript": "^5.0.0"

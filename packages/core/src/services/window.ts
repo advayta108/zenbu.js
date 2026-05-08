@@ -5,6 +5,7 @@ import {
   shell,
   type OpenDialogOptions,
 } from "electron";
+import electronContextMenu from "electron-context-menu";
 import { URLSearchParams } from "node:url";
 import { runtime, serviceWithDeps } from "../runtime";
 import { BaseWindowService, MAIN_WINDOW_ID } from "./base-window";
@@ -19,6 +20,7 @@ type MountedView = {
   windowId: string;
   scope: string;
   view: WebContentsView;
+  disposeContextMenu: () => void;
 };
 
 function queryString(query?: Record<string, string | number | boolean | null | undefined>): string {
@@ -50,6 +52,9 @@ export class WindowService extends serviceWithDeps({
           try {
             win?.contentView.removeChildView(mounted.view);
           } catch {}
+          try {
+            mounted.disposeContextMenu();
+          } catch {}
           mounted.view.webContents.close();
         }
         this.mounted.clear();
@@ -76,6 +81,9 @@ export class WindowService extends serviceWithDeps({
       try {
         win.contentView.removeChildView(existing.view);
       } catch {}
+      try {
+        existing.disposeContextMenu();
+      } catch {}
       existing.view.webContents.close();
       this.mounted.delete(windowId);
     }
@@ -90,6 +98,36 @@ export class WindowService extends serviceWithDeps({
     view.setBackgroundColor("#F4F4F4");
     win.contentView.addChildView(view);
 
+    // Right-click → standard browser context menu with "Inspect Element" so
+    // the framework's iframes are debuggable out of the box.
+    const disposeContextMenu = electronContextMenu({
+      window: view,
+      showInspectElement: true,
+      showSearchWithGoogle: false,
+      showSelectAll: true,
+    });
+
+    // Keyboard shortcut to toggle devtools without right-clicking. Mirrors
+    // Chrome / Electron's defaults, which a `WebContentsView` doesn't get
+    // automatically (those defaults only fire on a top-level `BrowserWindow`).
+    const handleInput = (
+      _event: Electron.Event,
+      input: Electron.Input,
+    ) => {
+      const isToggle =
+        (input.key === "I" || input.key === "i") &&
+        ((process.platform === "darwin" && input.alt && input.meta) ||
+          (process.platform !== "darwin" && input.shift && input.control));
+      if (isToggle || input.key === "F12") {
+        if (view.webContents.isDevToolsOpened()) {
+          view.webContents.closeDevTools();
+        } else {
+          view.webContents.openDevTools({ mode: "detach" });
+        }
+      }
+    };
+    view.webContents.on("before-input-event", handleInput);
+
     const layout = () => {
       const { width, height } = win.getContentBounds();
       view.setBounds({ x: 0, y: 0, width, height });
@@ -98,6 +136,9 @@ export class WindowService extends serviceWithDeps({
     win.on("resize", layout);
     view.webContents.once("destroyed", () => {
       win.off("resize", layout);
+      try {
+        disposeContextMenu();
+      } catch {}
     });
 
     const url = `${entry.url.replace(/\/$/, "")}/index.html${queryString({
@@ -105,10 +146,19 @@ export class WindowService extends serviceWithDeps({
       wsPort: this.ctx.http.port,
       wsToken: this.ctx.http.authToken,
       windowId,
+      // The advice/content-script prelude reads `?scope=` to pick which
+      // registrations apply to this iframe (mirrors how Chrome extensions
+      // match content scripts to URLs).
+      scope: args.scope,
     })}`;
     await view.webContents.loadURL(url);
 
-    this.mounted.set(windowId, { windowId, scope: args.scope, view });
+    this.mounted.set(windowId, {
+      windowId,
+      scope: args.scope,
+      view,
+      disposeContextMenu,
+    });
     if (!win.isVisible()) win.show();
     win.focus();
     log.verbose(`mounted "${args.scope}" in window "${windowId}"`);
