@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "pack:local": "rm -rf dist/packages && mkdir -p dist/packages && pnpm --filter @zenbujs/core build && pnpm -C packages/core pack --pack-destination ../../dist/packages && pnpm --filter @zenbujs/cli build && pnpm -C packages/zen pack --pack-destination ../../dist/packages",
+    "pack:local": "rm -rf dist/packages && mkdir -p dist/packages && pnpm --filter @zenbujs/core build && pnpm -C packages/core pack --pack-destination ../../dist/packages && pnpm -C packages/create-zenbu-app pack --pack-destination ../../dist/packages",
     "typecheck": "pnpm -r --no-bail run typecheck",
     "lint": "pnpm -r --no-bail run lint",
     "check:ts-ignores": "bash scripts/check-ts-ignores.sh",

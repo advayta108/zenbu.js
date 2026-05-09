@@ -24,46 +24,40 @@ At its core is Zenbu.js, a JavaScript framework for building desktop apps. All a
 Zenbu is currently under heavy construction. If you are interested in the project, you should join the discord - [invite link](https://discord.gg/t3jzHHfc6z)
 
 
+## Quickstart
+
+> [!IMPORTANT]
+> Zenbu currently requires **pnpm 10+**. The scaffolded app's lockfile is pnpm; using npm or yarn will produce a non-portable install (the bundled .app re-installs from the pnpm lockfile at first launch). A future config knob will let you bundle a different package manager.
+
+~~~bash
+pnpm create zenbu-app my-app
+cd my-app
+pnpm install
+pnpm dev
+~~~
+
+## CLI
+
+The `zen` CLI ships as a `bin` of `@zenbujs/core` — every scaffolded app gets it automatically through `pnpm install`.
+
+~~~bash
+zen dev                              # run the local app with HMR
+zen build:source                     # transform src/ into a portable seed
+zen build:electron                   # bundle .app via electron-builder
+zen build:electron -- --publish always
+                                     # forward args to electron-builder
+zen publish:source [init|push]       # sync the seed to a mirror github repo
+zen link                              # regenerate registry types
+~~~
+
+## Distribution
+
+Two complementary channels:
+
+- **GitHub release of the .app** — driven by your own `electron-builder.json`. `zen build:electron -- --publish always` hands the build off to electron-builder's native publish flow.
+- **Source mirror repo** — `zen publish:source` pushes the transformed seed to a github repo declared in `zenbu.build.ts#mirror.target`. Apps already in the field can `git pull` updates without a full re-download.
+
 ## Development Tips
-
-### CLI
-
-The cli lets your agent easily control and introspect the app. It also comes with tools to help manage and scaffold plugins.
-~~~bash
-zen                     # open a new window
-zen --agent claude      # open with a specific agent
-zen init my-plugin      # scaffold a new plugin
-zen doctor              # re-run setup checks
-zen link                # regenerate registry types after editing a service or schema
-~~~
-
-Inspect the local database:
-
-~~~bash
-zen kyju db root
-zen kyju db collections
-zen kyju db collection <id>
-~~~
-
-Generate a migration after changing a plugin schema:
-
-~~~bash
-zen kyju generate --name add_my_field
-~~~
-
-Call procedures exposed by plugins:
-
-~~~bash
-zen exec -e 'console.log(await rpc.cli.listAgents())'
-zen exec -e 'const a = await rpc.cli.listAgents(); console.log(a.agents.length)'
-zen exec ./my-automation.ts
-~~~
-
-Run this for the full list of commands:
-
-~~~bash
-zen --help
-~~~
 
 ### Resetting local state
 

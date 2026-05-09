@@ -6,6 +6,9 @@
     "access": "public"
   },
   "main": "./dist/setup-gate.mjs",
+  "bin": {
+    "zen": "./dist/cli/bin.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",
@@ -14,6 +17,10 @@
     "./setup-gate": {
       "types": "./dist/setup-gate.d.mts",
       "import": "./dist/setup-gate.mjs"
+    },
+    "./build": {
+      "types": "./dist/cli/build.d.mts",
+      "import": "./dist/cli/build.mjs"
     },
     "./loaders/zenbu": {
       "types": "./dist/loaders/zenbu.d.mts",

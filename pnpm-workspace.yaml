@@ -1,7 +1,5 @@
 packages:
   - 'packages/*'
-  - 'docs/*'
-  - 'explorations/*'
 
 settings:
   autoInstallPeers: false

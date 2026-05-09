@@ -1,0 +1,43 @@
+import { defineBuildConfig, stripIfDisabled, dropFiles } from "@zenbujs/core/build";
+
+/**
+ * Build pipeline for `zen build:source` and `zen build:electron`.
+ *
+ * Edit `include`/`ignore` to choose what gets shipped to the mirror repo and
+ * seeded inside the .app. Add transforms to strip feature-flagged code,
+ * drop test files, etc.
+ *
+ * Set `mirror.target` to "<owner>/<repo>" (a GitHub repo) to enable
+ * `zen publish:source init` / `zen publish:source push`.
+ */
+export default defineBuildConfig({
+  source: ".",
+  out: ".zenbu/build/seed",
+
+  include: [
+    "src/**/*",
+    "package.json",
+    "pnpm-lock.yaml",
+    "tsconfig.json",
+    "zenbu.plugin.json",
+    "config.json",
+    "db/**",
+    "db.config.ts",
+    "vite.config.ts",
+    "loading.html",
+  ],
+  ignore: [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx",
+    "src/dev-only/**",
+  ],
+
+  transforms: [
+    stripIfDisabled({ FLAG_BETA: false }),
+    dropFiles(/\.stories\.tsx?$/),
+  ],
+
+  // mirror: { target: "{{owner}}/{{repo}}", branch: "main" },
+});
