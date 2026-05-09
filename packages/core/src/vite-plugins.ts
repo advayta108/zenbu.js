@@ -1,8 +1,8 @@
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { zenbuAdvicePlugin } from "@zenbu/advice/vite";
+import { getPlugins } from "./runtime";
 import {
   getAdvice,
   getAllScopes,
@@ -93,31 +93,14 @@ export function zenbuFrameworkResolve(): Plugin {
      * proactively calls `server.restart()` on add/change/unlink of any
      * `tsconfig.local.json`.
      */
-    async configureServer(server) {
-      const configPath = process.env.ZENBU_CONFIG_PATH;
-      if (!configPath) return;
-      const configDir = path.dirname(configPath);
-
-      let tsconfigPaths: string[] = [];
-      try {
-        const raw = await fsp.readFile(configPath, "utf8");
-        const config = JSON.parse(raw) as { plugins?: unknown };
-        if (Array.isArray(config.plugins)) {
-          for (const entry of config.plugins) {
-            if (typeof entry !== "string") continue;
-            const manifestAbs = path.isAbsolute(entry)
-              ? entry
-              : path.resolve(configDir, entry);
-            tsconfigPaths.push(
-              path.join(path.dirname(manifestAbs), "tsconfig.local.json"),
-            );
-          }
-        }
-      } catch {
-        // Best-effort: if config.json is missing/malformed, skip — the rest
-        // of the dev pipeline will already be surfacing that error.
-        return;
-      }
+    configureServer(server) {
+      // Plugin dirs come from the runtime registry, populated by the
+      // loader-emitted barrel before any service evaluates. Since reloader
+      // boots after `runtime.replacePlugins(...)` runs, the registry is
+      // fully populated when this hook fires.
+      const tsconfigPaths = getPlugins().map((p) =>
+        path.join(p.dir, "tsconfig.local.json"),
+      );
       if (tsconfigPaths.length === 0) return;
       server.watcher.add(tsconfigPaths);
 

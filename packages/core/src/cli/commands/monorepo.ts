@@ -2,6 +2,9 @@ import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { execFileSync } from "node:child_process"
+/**
+ * todo: should only be exposed when an env var is passed
+ */
 
 const MARKER_FILE = ".zenbu-dev-link"
 const DEFAULT_MONOREPO = path.join(os.homedir(), ".zenbu", "plugins", "zenbu")
@@ -9,13 +12,13 @@ const DEFAULT_MONOREPO = path.join(os.homedir(), ".zenbu", "plugins", "zenbu")
 function resolveProjectDir(): string {
   const cwd = process.cwd()
   if (
-    fs.existsSync(path.join(cwd, "zenbu.plugin.json")) ||
+    fs.existsSync(path.join(cwd, "zenbu.config.ts")) ||
     fs.existsSync(path.join(cwd, "zenbu")) ||
     fs.existsSync(path.join(cwd, MARKER_FILE))
   ) {
     return cwd
   }
-  console.error("zen monorepo: not in a zenbu project (no zenbu.plugin.json or zenbu/ found)")
+  console.error("zen monorepo: not in a zenbu project (no zenbu.config.ts or zenbu/ found)")
   process.exit(1)
 }
 

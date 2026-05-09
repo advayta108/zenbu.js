@@ -1,7 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { register as registerLoader, createRequire } from "node:module";
+import { register as registerLoaderImpl, createRequire } from "node:module";
+
+function registerLoader(specifier: string, opts?: { data?: unknown }) {
+  // `node:module#register` typings don't include the `data` field in older
+  // @types/node, so we cast at the boundary.
+  return (registerLoaderImpl as unknown as (
+    specifier: string,
+    parentURL?: string | URL,
+    options?: { data?: unknown },
+  ) => unknown)(specifier, undefined, opts);
+}
 import { pathToFileURL } from "node:url";
 import { register as registerTsx } from "tsx/esm/api";
 import { bootstrapEnv } from "./env-bootstrap";
@@ -53,11 +63,19 @@ function findProjectRoot(projectDir: string): string {
 }
 
 function resolveConfigPath(projectRoot: string): string {
-  const configPath = path.join(projectRoot, "config.json");
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`config.json not found at ${configPath}`);
+  const candidates = [
+    "zenbu.config.ts",
+    "zenbu.config.mts",
+    "zenbu.config.js",
+    "zenbu.config.mjs",
+  ];
+  for (const name of candidates) {
+    const candidate = path.join(projectRoot, name);
+    if (fs.existsSync(candidate)) return candidate;
   }
-  return configPath;
+  throw new Error(
+    `No zenbu config found at ${projectRoot}. Expected one of: ${candidates.join(", ")}`,
+  );
 }
 
 function findTsconfig(projectRoot: string): string | false {
@@ -82,9 +100,38 @@ async function closeRegisteredWatchers(): Promise<void> {
 }
 
 async function registerLoaders(tsconfig: string | false, projectRoot: string): Promise<void> {
-  registerLoader(import.meta.resolve("@zenbujs/core/loaders/zenbu"));
-
+  // tsx must be registered BEFORE we resolve zenbu.config.ts (which is
+  // typescript). We register tsx first, then load the config, then register
+  // our zenbu loader. Node 22+ runs loader hooks in a worker thread, so the
+  // resolved config is passed across the worker boundary via `register()`'s
+  // `data` argument — a process-global stash on the main thread is not
+  // visible to the loader.
   registerTsx({ tsconfig });
+
+  const { loadConfig } = await import("./cli/lib/load-config");
+  const { resolved, pluginSourceFiles } = await loadConfig(projectRoot);
+  const loaderData = {
+    payload: {
+      plugins: resolved.plugins.map((p) => ({
+        name: p.name,
+        dir: p.dir,
+        services: p.services,
+        schemaPath: p.schemaPath,
+        migrationsPath: p.migrationsPath,
+        preloadPath: p.preloadPath,
+        eventsPath: p.eventsPath,
+        icons: p.icons,
+      })),
+      appEntrypoint: resolved.uiEntrypointPath,
+    },
+    pluginSourceFiles,
+  };
+  ;(globalThis as unknown as { __zenbu_main_resolved_config__?: typeof loaderData })
+    .__zenbu_main_resolved_config__ = loaderData;
+
+  registerLoader(import.meta.resolve("@zenbujs/core/loaders/zenbu"), {
+    data: loaderData,
+  });
 
   process.env.ZENBU_ADVICE_ROOT = projectRoot;
   await import("@zenbu/advice/node");

@@ -24,11 +24,10 @@ Usage:
   zen db remove [<path>]      Drop a path from the registry (interactive when omitted)
   zen db generate [...]       Diff a schema against the last snapshot and
                               write a new migration. Default: walks up from
-                              cwd to the nearest zenbu.plugin.json and reads
-                              "schema" + "migrations" from it. Flags:
-                                --manifest <path>     override manifest path
+                              cwd to the host's zenbu.config.ts, then picks
+                              the plugin whose dir contains cwd. Flags:
                                 --schema <path>       schema file (bypasses
-                                                      manifest discovery; must
+                                                      plugin discovery; must
                                                       be paired with --migrations)
                                 --migrations <path>   migrations output dir
                                                       (paired with --schema)
@@ -261,15 +260,17 @@ export async function runDb(argv: string[]): Promise<void> {
  *     for any future internal section without growing privileged flags
  *     into the CLI.
  *
- * Resolution order: direct mode wins when both paths are given; otherwise
- * `--manifest`; otherwise the walk-up. Mixing direct + manifest is an
- * error (the user almost certainly meant one or the other).
+ * Resolution: direct mode (--schema + --migrations) bypasses everything;
+ * otherwise the cwd is matched against the plugins declared in the host
+ * project's `zenbu.config.ts`, picking the plugin whose `dir` contains the
+ * cwd. Mixing direct + plugin discovery is an error.
  */
-function findManifest(from: string): string | null {
+function findProjectDir(from: string): string | null {
   let dir = path.resolve(from)
   while (true) {
-    const candidate = path.join(dir, "zenbu.plugin.json")
-    if (fs.existsSync(candidate)) return candidate
+    for (const name of ["zenbu.config.ts", "zenbu.config.mts", "zenbu.config.js", "zenbu.config.mjs"]) {
+      if (fs.existsSync(path.join(dir, name))) return dir
+    }
     const parent = path.dirname(dir)
     if (parent === dir) return null
     dir = parent
@@ -277,7 +278,6 @@ function findManifest(from: string): string | null {
 }
 
 type GenerateFlags = {
-  manifest: string | null
   schema: string | null
   migrationsOut: string | null
   name?: string
@@ -287,7 +287,6 @@ type GenerateFlags = {
 
 function parseGenerateArgs(argv: string[]): GenerateFlags {
   const out: GenerateFlags = {
-    manifest: null,
     schema: null,
     migrationsOut: null,
     custom: false,
@@ -295,9 +294,7 @@ function parseGenerateArgs(argv: string[]): GenerateFlags {
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
-    if (arg === "--manifest" && i + 1 < argv.length) out.manifest = argv[++i]!
-    else if (arg.startsWith("--manifest=")) out.manifest = arg.slice("--manifest=".length)
-    else if (arg === "--schema" && i + 1 < argv.length) out.schema = argv[++i]!
+    if (arg === "--schema" && i + 1 < argv.length) out.schema = argv[++i]!
     else if (arg.startsWith("--schema=")) out.schema = arg.slice("--schema=".length)
     else if (arg === "--migrations" && i + 1 < argv.length) out.migrationsOut = argv[++i]!
     else if (arg.startsWith("--migrations=")) out.migrationsOut = arg.slice("--migrations=".length)
@@ -313,17 +310,11 @@ async function runGenerate(argv: string[]): Promise<void> {
   const flags = parseGenerateArgs(argv)
   const { generateMigration } = await import("@zenbu/kyju/cli")
 
-  // Direct mode: --schema + --migrations bypasses manifest entirely.
+  // Direct mode: --schema + --migrations bypasses plugin discovery entirely.
   if (flags.schema || flags.migrationsOut) {
     if (!flags.schema || !flags.migrationsOut) {
       console.error(
         "zen db generate: --schema and --migrations must be passed together.",
-      )
-      process.exit(1)
-    }
-    if (flags.manifest) {
-      console.error(
-        "zen db generate: --manifest is incompatible with --schema/--migrations; pick one input mode.",
       )
       process.exit(1)
     }
@@ -341,61 +332,65 @@ async function runGenerate(argv: string[]): Promise<void> {
     return
   }
 
-  // Manifest mode (default).
-  const manifestPath = flags.manifest
-    ? resolvePath(process.cwd(), flags.manifest)
-    : findManifest(process.cwd())
-  if (!manifestPath) {
+  // Plugin-discovery mode: walk up to the host's zenbu.config.ts, load it,
+  // and pick the plugin whose dir contains cwd.
+  const projectDir = findProjectDir(process.cwd())
+  if (!projectDir) {
     console.error(
-      "zen db generate: no zenbu.plugin.json found in cwd or any parent.",
+      "zen db generate: no zenbu.config.ts found in cwd or any parent.",
     )
     console.error(
-      "                 Run from inside the plugin, pass --manifest <path>,",
+      "                 Run from inside a Zenbu project, or use",
     )
     console.error(
-      "                 or use --schema <path> --migrations <path> directly.",
-    )
-    process.exit(1)
-  }
-
-  let manifest: { name?: string; schema?: string; migrations?: string }
-  try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
-  } catch (err) {
-    console.error(
-      `zen db generate: failed to parse ${manifestPath}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      "                 --schema <path> --migrations <path> directly.",
     )
     process.exit(1)
   }
 
-  if (!manifest.schema) {
-    console.error(
-      `zen db generate: ${manifestPath} is missing the required "schema" field.`,
-    )
-    process.exit(1)
+  const { loadConfig } = await import("../lib/load-config")
+  const { resolved } = await loadConfig(projectDir)
+
+  const cwd = path.resolve(process.cwd())
+  let bestMatch: { dir: string; depth: number; plugin: typeof resolved.plugins[number] } | null = null
+  for (const plugin of resolved.plugins) {
+    const rel = path.relative(plugin.dir, cwd)
+    if (rel.startsWith("..") || path.isAbsolute(rel)) continue
+    const depth = plugin.dir.split(path.sep).length
+    if (!bestMatch || depth > bestMatch.depth) {
+      bestMatch = { dir: plugin.dir, depth, plugin }
+    }
   }
-  if (!manifest.migrations) {
+
+  if (!bestMatch) {
     console.error(
-      `zen db generate: ${manifestPath} is missing the required "migrations" field`,
-    )
-    console.error(
-      `                 (the directory the generator writes migrations into).`,
+      `zen db generate: cwd ${cwd} is not inside any plugin declared in ${path.relative(projectDir, resolved.configPath)}.`,
     )
     process.exit(1)
   }
 
-  const baseDir = path.dirname(manifestPath)
-  const schemaPath = path.resolve(baseDir, manifest.schema)
-  const outPath = path.resolve(baseDir, manifest.migrations)
+  const plugin = bestMatch.plugin
+  if (!plugin.schemaPath) {
+    console.error(
+      `zen db generate: plugin "${plugin.name}" is missing a \`schema\` field in its definePlugin({...}).`,
+    )
+    process.exit(1)
+  }
+  if (!plugin.migrationsPath) {
+    console.error(
+      `zen db generate: plugin "${plugin.name}" is missing a \`migrations\` field in its definePlugin({...}) ` +
+        `(the directory the generator writes migrations into).`,
+    )
+    process.exit(1)
+  }
 
-  console.log(`Plugin: ${manifest.name ?? path.basename(baseDir)}`)
-  console.log(`Manifest: ${manifestPath}`)
+  console.log(`Plugin: ${plugin.name}`)
+  console.log(`Schema:  ${plugin.schemaPath}`)
+  console.log(`Output:  ${plugin.migrationsPath}`)
 
   await generateMigration({
-    schemaPath,
-    outPath,
+    schemaPath: plugin.schemaPath,
+    outPath: plugin.migrationsPath,
     name: flags.name,
     custom: flags.custom,
     amend: flags.amend,

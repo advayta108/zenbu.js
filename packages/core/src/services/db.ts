@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { WebSocket } from "ws";
 import { createDb, type Db, type SectionConfig } from "@zenbu/kyju";
@@ -13,7 +12,7 @@ import type {
 import type * as Effect from "effect/Effect";
 import { createRouter, dbStringify, dbParse } from "@zenbu/kyju/transport";
 import { loadMigrationsFromDir } from "@zenbu/kyju/loader";
-import { Service, runtime } from "../runtime";
+import { Service, runtime, getPlugins } from "../runtime";
 import type { ResolvedDbRoot } from "../registry";
 import { schema as coreSchema } from "../schema";
 import { addDb, resolveDbPath } from "../shared/db-registry";
@@ -146,106 +145,33 @@ async function importFreshModule(modulePath: string): Promise<any> {
   return import(pathToFileURL(modulePath).href);
 }
 
-async function resolveConfigPath(): Promise<string> {
-  if (process.env.ZENBU_CONFIG_PATH) return process.env.ZENBU_CONFIG_PATH;
-  const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc");
-  try {
-    await fs.access(jsonc);
-    return jsonc;
-  } catch {
-    return path.join(os.homedir(), ".zenbu", "config.json");
+function resolveConfigPath(): string {
+  const fromEnv = process.env.ZENBU_CONFIG_PATH;
+  if (!fromEnv) {
+    throw new Error(
+      "ZENBU_CONFIG_PATH is not set; setup-gate populates this before services boot.",
+    );
   }
+  return fromEnv;
 }
 
 /**
- * Parse the app's `config.json` (jsonc tolerated) and return the fields
- * `setupGate`/`DbService` care about. `db` is required — `resolveDbPath`
- * later asserts on it; we do the read here so both `discoverSections` and
- * `resolveDbPath` see one parse.
+ * Load just the `db` field from the user's `zenbu.config.ts`. Used to feed
+ * `resolveDbPath` (which expects a relative-or-absolute string). The full
+ * plugin set comes from `runtime.getPlugins()` instead — populated by the
+ * loader-emitted barrel before any service evaluates.
  */
-type AppConfig = {
-  db: string;
-  plugins: string[];
-};
-
-async function loadAppConfig(configPath: string): Promise<AppConfig> {
-  let raw: unknown;
-  try {
-    const text = await fs.readFile(configPath, "utf8");
-    raw = parseJsonc(text);
-  } catch (err) {
-    throw new Error(
-      `Failed to read Zenbu config at ${configPath}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-  }
-  if (!raw || typeof raw !== "object") {
-    throw new Error(`Zenbu config at ${configPath} is not a JSON object`);
-  }
-  const obj = raw as Record<string, unknown>;
-  const plugins = Array.isArray(obj.plugins)
-    ? (obj.plugins.filter((p): p is string => typeof p === "string"))
-    : [];
-  const db = typeof obj.db === "string" ? obj.db : "";
-  return { db, plugins };
+async function loadAppDbField(configPath: string): Promise<string> {
+  const { loadConfig } = await import("../cli/lib/load-config");
+  const { resolved } = await loadConfig(path.dirname(configPath));
+  return resolved.dbPath;
 }
 
-function parseJsonc(str: string): unknown {
-  let result = "";
-  let i = 0;
-  while (i < str.length) {
-    if (str[i] === '"') {
-      let j = i + 1;
-      while (j < str.length) {
-        if (str[j] === "\\") {
-          j += 2;
-        } else if (str[j] === '"') {
-          j++;
-          break;
-        } else {
-          j++;
-        }
-      }
-      result += str.slice(i, j);
-      i = j;
-    } else if (str[i] === "/" && str[i + 1] === "/") {
-      i += 2;
-      while (i < str.length && str[i] !== "\n") i++;
-    } else if (str[i] === "/" && str[i + 1] === "*") {
-      i += 2;
-      while (i < str.length && !(str[i] === "*" && str[i + 1] === "/")) i++;
-      i += 2;
-    } else {
-      result += str[i];
-      i++;
-    }
-  }
-  return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"));
-}
+export async function discoverSections(): Promise<SectionConfig[]> {
+  const plugins = getPlugins();
 
-export async function discoverSections(
-  configPath?: string,
-): Promise<SectionConfig[]> {
-  const resolvedConfigPath = configPath ?? (await resolveConfigPath());
-  let config: { plugins: string[] } = { plugins: [] };
-  try {
-    const raw = await fs.readFile(resolvedConfigPath, "utf8");
-    config = parseJsonc(raw) as { plugins: string[] };
-  } catch (error) {
-    log.error(
-      `failed to read plugin config at ${resolvedConfigPath}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-    return [];
-  }
-
-  // Per-plugin accounting. Each task fills its own entry; push order doesn't
-  // matter because we sort before logging.
   const perPluginTimings: Array<{
     name: string;
-    manifestMs: number;
     resolveSchemaMs: number;
     importSchemaMs: number;
     resolveMigrationsMs: number;
@@ -254,43 +180,36 @@ export async function discoverSections(
   }> = [];
 
   // Parallelize two axes:
-  //   • Across plugins: all manifests process concurrently (outer Promise.all)
-  //   • Within a plugin: schema chain and migrations chain overlap
-  //
-  // The imports are IO-bound (tsx compile, dynohot wrap, JS evaluation). Node's
-  // ESM loader handles concurrent imports safely and the V8 compile cache
-  // deduplicates work across overlapping compiles of the same file.
-  const tasks = config.plugins.map(
-    async (manifestPath): Promise<SectionConfig | null> => {
+  //   - Across plugins: all manifests process concurrently (outer Promise.all)
+  //   - Within a plugin: schema chain and migrations chain overlap
+  const tasks = plugins.map(
+    async (plugin): Promise<SectionConfig | null> => {
       const pluginStart = Date.now();
-      let manifestMs = 0;
       let resolveSchemaMs = 0;
       let importSchemaMs = 0;
       let resolveMigrationsMs = 0;
       let importMigrationsMs = 0;
-      let pluginName = path.basename(path.dirname(manifestPath));
+
+      const finish = (result: SectionConfig | null) => {
+        perPluginTimings.push({
+          name: plugin.name,
+          resolveSchemaMs,
+          importSchemaMs,
+          resolveMigrationsMs,
+          importMigrationsMs,
+          totalMs: Date.now() - pluginStart,
+        });
+        return result;
+      };
+
+      if (!plugin.schemaPath) return finish(null);
 
       try {
-        const t0 = Date.now();
-        const raw = await fs.readFile(manifestPath, "utf8");
-        manifestMs = Date.now() - t0;
-
-        const manifest = JSON.parse(raw);
-        pluginName = manifest.name ?? pluginName;
-        if (!manifest.name || !manifest.schema) {
-          log.error(
-            `skipping manifest without name/schema: ${manifestPath}`,
-          );
-          return null;
-        }
-
-        const baseDir = path.dirname(path.resolve(manifestPath));
-
         const schemaChain = (async () => {
           const s0 = Date.now();
           const schemaPath = await resolveManifestModulePath(
-            baseDir,
-            manifest.schema,
+            plugin.dir,
+            plugin.schemaPath!,
           );
           resolveSchemaMs = Date.now() - s0;
 
@@ -301,19 +220,19 @@ export async function discoverSections(
           return { schemaPath, schemaModule };
         })();
 
-        const migrationsChain = manifest.migrations
+        const migrationsChain = plugin.migrationsPath
           ? (async () => {
               try {
                 const m0 = Date.now();
                 const migrationsPath = await resolveManifestModulePath(
-                  baseDir,
-                  manifest.migrations,
+                  plugin.dir,
+                  plugin.migrationsPath!,
                 );
                 resolveMigrationsMs = Date.now() - m0;
 
                 const m1 = Date.now();
                 const stat = await fs.stat(migrationsPath);
-                let migrations: any[];
+                let migrations: KyjuMigration[];
                 if (stat.isDirectory()) {
                   migrations = await loadMigrationsFromDir(migrationsPath);
                 } else {
@@ -326,15 +245,15 @@ export async function discoverSections(
                 return { migrations, failed: false as const };
               } catch (error) {
                 log.error(
-                  `failed to load migrations from ${manifestPath}: ${
+                  `failed to load migrations for plugin "${plugin.name}": ${
                     error instanceof Error ? error.message : String(error)
                   }`,
                 );
-                return { migrations: [] as any[], failed: true as const };
+                return { migrations: [] as KyjuMigration[], failed: true as const };
               }
             })()
           : Promise.resolve({
-              migrations: [] as any[],
+              migrations: [] as KyjuMigration[],
               failed: false as const,
             });
 
@@ -343,7 +262,7 @@ export async function discoverSections(
           migrationsChain,
         ]);
 
-        if (migrationsResult.failed) return null;
+        if (migrationsResult.failed) return finish(null);
 
         const schema =
           schemaResult.schemaModule.schema ?? schemaResult.schemaModule.default;
@@ -351,72 +270,37 @@ export async function discoverSections(
           log.error(
             `schema module did not export a valid schema: ${schemaResult.schemaPath}`,
           );
-          return null;
+          return finish(null);
         }
 
-        return { name: manifest.name, schema, migrations: migrationsResult.migrations };
+        return finish({
+          name: plugin.name,
+          schema,
+          migrations: migrationsResult.migrations,
+        });
       } catch (error) {
         log.error(
-          `failed to load section from ${manifestPath}: ${
+          `failed to load section for plugin "${plugin.name}": ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
-        return null;
-      } finally {
-        perPluginTimings.push({
-          name: pluginName,
-          manifestMs,
-          resolveSchemaMs,
-          importSchemaMs,
-          resolveMigrationsMs,
-          importMigrationsMs,
-          totalMs: Date.now() - pluginStart,
-        });
+        return finish(null);
       }
     },
   );
 
   const resolvedSections = await Promise.all(tasks);
-  // Preserve config.plugins order: Promise.all keeps indices, filter drops
-  // failed ones without shuffling.
   const sections: SectionConfig[] = resolvedSections.filter(
-    (s): s is SectionConfig => s !== null,
+    (sec): sec is SectionConfig => sec !== null,
   );
 
   const sorted = [...perPluginTimings].sort((a, b) => b.totalMs - a.totalMs);
-  const sum = (k: keyof (typeof perPluginTimings)[number]) =>
-    perPluginTimings.reduce((acc, p) => acc + (p[k] as number), 0);
   log.verbose("per-plugin breakdown (ms, parallel):");
-  log.verbose(
-    `  ${"plugin".padEnd(28)} ${"total".padStart(6)} ${"man".padStart(
-      5,
-    )} ${"resS".padStart(5)} ${"impS".padStart(6)} ${"resM".padStart(
-      5,
-    )} ${"impM".padStart(6)}`,
-  );
-  for (const p of sorted) {
+  for (const ptm of sorted) {
     log.verbose(
-      `  ${p.name.padEnd(28)} ${String(p.totalMs).padStart(6)} ${String(
-        p.manifestMs,
-      ).padStart(5)} ${String(p.resolveSchemaMs).padStart(5)} ${String(
-        p.importSchemaMs,
-      ).padStart(6)} ${String(p.resolveMigrationsMs).padStart(5)} ${String(
-        p.importMigrationsMs,
-      ).padStart(6)}`,
+      `  ${ptm.name.padEnd(28)} total=${String(ptm.totalMs).padStart(6)} resS=${String(ptm.resolveSchemaMs).padStart(5)} impS=${String(ptm.importSchemaMs).padStart(6)} resM=${String(ptm.resolveMigrationsMs).padStart(5)} impM=${String(ptm.importMigrationsMs).padStart(6)}`,
     );
   }
-  log.verbose(
-    `  ${"SUM(cpu)".padEnd(28)} ${String(sum("totalMs")).padStart(6)} ${String(
-      sum("manifestMs"),
-    ).padStart(5)} ${String(sum("resolveSchemaMs")).padStart(5)} ${String(
-      sum("importSchemaMs"),
-    ).padStart(6)} ${String(sum("resolveMigrationsMs")).padStart(5)} ${String(
-      sum("importMigrationsMs"),
-    ).padStart(6)}`,
-  );
-  log.verbose(
-    `  (wall time: look at db.discover-sections span — should be ~max(totalMs) not SUM)`,
-  );
 
   return sections;
 }
@@ -480,14 +364,14 @@ export class DbService extends Service {
   }
 
   async evaluate() {
-    const configPath = await resolveConfigPath();
+    const configPath = resolveConfigPath();
     const configDir = path.dirname(configPath);
-    const appConfig = await loadAppConfig(configPath);
+    const configDbAbs = await loadAppDbField(configPath);
     const [coreSec, pluginSections, resolved] = await Promise.all([
       this.trace("build-core-section", () => buildCoreSection()),
-      this.trace("discover-sections", () => discoverSections(configPath)),
+      this.trace("discover-sections", () => discoverSections()),
       resolveDbPath(process.argv, {
-        configDb: appConfig.db,
+        configDb: configDbAbs,
         configDir,
         configPath,
       }),

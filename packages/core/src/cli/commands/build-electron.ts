@@ -6,7 +6,7 @@ import { execFileSync, spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 
-import { findBuildConfig, loadBuildConfig } from "../lib/load-build-config"
+import { loadConfig } from "../lib/load-config"
 import { provisionToolchain } from "../lib/toolchain"
 
 interface BuildElectronFlags {
@@ -62,8 +62,10 @@ const ELECTRON_BUILDER_CONFIG_NAMES = [
 
 function resolveProjectDir(): string {
   const cwd = process.cwd()
-  if (fs.existsSync(path.join(cwd, "zenbu.plugin.json"))) return cwd
-  console.error("zen build:electron: no zenbu.plugin.json found in current directory")
+  for (const name of ["zenbu.config.ts", "zenbu.config.mts", "zenbu.config.js", "zenbu.config.mjs"]) {
+    if (fs.existsSync(path.join(cwd, name))) return cwd
+  }
+  console.error("zen build:electron: no zenbu.config.ts found in current directory")
   process.exit(1)
 }
 
@@ -302,11 +304,10 @@ async function copyFile(src: string, dest: string): Promise<void> {
 export async function runBuildElectron(argv: string[]): Promise<void> {
   const projectDir = resolveProjectDir()
   const flags = parseFlags(argv)
+  void flags // legacy --config flag is currently a no-op; kept for back-compat
 
-  const configPath = flags.config
-    ? path.resolve(projectDir, flags.config)
-    : findBuildConfig(projectDir)
-  const config = await loadBuildConfig(configPath)
+  const { resolved } = await loadConfig(projectDir)
+  const config = resolved.build
 
   // The mirror is now strictly required: the launcher clones from it on
   // first run instead of unpacking a bundled seed. Building without one
@@ -314,9 +315,9 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
   const mirrorTarget = config.mirror?.target
   if (!mirrorTarget) {
     throw new Error(
-      "zen build:electron: `mirror.target` is required in zenbu.build.ts. " +
-        'Set mirror: { target: "<owner>/<repo>", branch: "main" } and run ' +
-        "`zen publish:source init` before building.",
+      "zen build:electron: `build.mirror.target` is required in zenbu.config.ts. " +
+        'Set build: defineBuildConfig({ mirror: { target: "<owner>/<repo>", branch: "main" }, ... }) ' +
+        "and run `zen publish:source init` before building.",
     )
   }
   const mirrorBranch = config.mirror?.branch ?? "main"

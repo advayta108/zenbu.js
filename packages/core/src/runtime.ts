@@ -554,6 +554,9 @@ export class ServiceRuntime {
     return levels;
   }
 }
+/**
+ * fixme: i don't think these commments make sense
+ */
 
 // The runtime is a process-singleton. On a hot reload of THIS file, dynohot
 // re-evaluates the module body — but `??=` keeps the existing instance so we
@@ -603,3 +606,101 @@ export const runtime: ServiceRuntime = (() => {
   installDevHook(fresh);
   return fresh;
 })();
+
+// =============================================================================
+//                        Plugin / app-entrypoint registry
+// =============================================================================
+//
+// The single source of truth for plugin metadata at runtime. Populated by the
+// generated barrel (see `loaders/zenbu.ts`), which emits one
+// `registerPlugin({...})` call per resolved plugin BEFORE any of that
+// plugin's service files import. Consumers (services/db, vite-plugins,
+// advice-config) read from here instead of walking the filesystem looking
+// for `zenbu.plugin.json`.
+//
+// Module-singleton via `globalThis.__zenbu_plugin_registry__`, same trick as
+// the service runtime, so a hot reload of THIS file keeps the existing
+// registry contents.
+
+/**
+ * A plugin manifest after the loader has resolved every relative path to
+ * absolute. Mirrors `ResolvedPlugin` in `cli/lib/build-config.ts` but is
+ * declared inline here to avoid runtime.ts importing CLI code.
+ */
+export interface PluginRecord {
+  name: string;
+  dir: string;
+  services: string[];
+  schemaPath?: string;
+  migrationsPath?: string;
+  preloadPath?: string;
+  eventsPath?: string;
+  icons?: Record<string, string>;
+}
+
+interface PluginRegistry {
+  plugins: Map<string, PluginRecord>;
+  /** Absolute path of the boot-window HTML, or null until registered. */
+  appEntrypoint: string | null;
+}
+
+function getPluginRegistry(): PluginRegistry {
+  const slot = globalThis as unknown as {
+    __zenbu_plugin_registry__?: PluginRegistry;
+  };
+  if (!slot.__zenbu_plugin_registry__) {
+    slot.__zenbu_plugin_registry__ = {
+      plugins: new Map(),
+      appEntrypoint: null,
+    };
+  }
+  return slot.__zenbu_plugin_registry__;
+}
+
+/**
+ * Register a plugin's resolved manifest. Idempotent — replaces any existing
+ * entry for the same `name`. Called by the loader-emitted barrel; user code
+ * normally does not call this directly.
+ */
+export function registerPlugin(record: PluginRecord): void {
+  getPluginRegistry().plugins.set(record.name, record);
+}
+
+/**
+ * Drop a plugin from the registry. Used when the loader regenerates the
+ * barrel and needs to clear stale entries.
+ */
+export function unregisterPlugin(name: string): void {
+  getPluginRegistry().plugins.delete(name);
+}
+
+/**
+ * Replace the entire plugin set in one shot. The loader uses this on every
+ * barrel regeneration so removed plugins disappear cleanly.
+ */
+export function replacePlugins(records: PluginRecord[]): void {
+  const reg = getPluginRegistry();
+  reg.plugins.clear();
+  for (const record of records) reg.plugins.set(record.name, record);
+}
+
+export function getPlugins(): PluginRecord[] {
+  return [...getPluginRegistry().plugins.values()];
+}
+
+export function getPlugin(name: string): PluginRecord | undefined {
+  return getPluginRegistry().plugins.get(name);
+}
+
+/**
+ * Set the boot-window HTML path. Called once by the loader-emitted barrel.
+ * Consumers (`view-registry`, `vite-plugins`) ask for it via
+ * `getAppEntrypoint()`.
+ */
+export function registerAppEntrypoint(htmlPath: string): void {
+  getPluginRegistry().appEntrypoint = htmlPath;
+}
+
+export function getAppEntrypoint(): string | null {
+  return getPluginRegistry().appEntrypoint;
+}

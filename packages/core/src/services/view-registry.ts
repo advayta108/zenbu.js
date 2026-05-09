@@ -1,8 +1,5 @@
-import fsp from "node:fs/promises";
-import path from "node:path";
-import os from "node:os";
 import * as Effect from "effect/Effect";
-import { Service, runtime } from "../runtime";
+import { Service, runtime, getPlugins } from "../runtime";
 import { ReloaderService, type ReloaderEntry } from "./reloader";
 import { DbService } from "./db";
 import { createLogger } from "../shared/log";
@@ -115,9 +112,7 @@ export class ViewRegistryService extends Service {
   }
 
   evaluate() {
-    this.loadManifestIcons().catch((err) => {
-      // log removed
-    });
+    this.loadManifestIcons();
 
     // Wipe stale rows from any prior session; ports are fresh on boot.
     void this.syncToDb();
@@ -135,28 +130,14 @@ export class ViewRegistryService extends Service {
     });
   }
 
-  private async loadManifestIcons(): Promise<void> {
+  private loadManifestIcons(): void {
     this.manifestIcons.clear();
-    try {
-      const configPath = await resolveConfigPath();
-      let raw: string;
-      try {
-        raw = await fsp.readFile(configPath, "utf8");
-      } catch {
-        return;
+    for (const plugin of getPlugins()) {
+      if (!plugin.icons) continue;
+      for (const [scope, svg] of Object.entries(plugin.icons)) {
+        this.manifestIcons.set(scope, svg);
       }
-      const config = parseJsonc(raw) as { plugins?: string[] };
-      for (const manifestPath of config.plugins ?? []) {
-        try {
-          const manifestRaw = await fsp.readFile(manifestPath, "utf8");
-          const manifest = JSON.parse(manifestRaw);
-          const icons: Record<string, string> = manifest.icons ?? {};
-          for (const [scope, svg] of Object.entries(icons)) {
-            this.manifestIcons.set(scope, svg);
-          }
-        } catch {}
-      }
-    } catch {}
+    }
   }
 
   private async syncToDb(): Promise<void> {
@@ -176,50 +157,6 @@ export class ViewRegistryService extends Service {
       // log removed
     });
   }
-}
-
-async function resolveConfigPath(): Promise<string> {
-  if (process.env.ZENBU_CONFIG_PATH) return process.env.ZENBU_CONFIG_PATH;
-  const jsonc = path.join(os.homedir(), ".zenbu", "config.jsonc");
-  try {
-    await fsp.access(jsonc);
-    return jsonc;
-  } catch {
-    return path.join(os.homedir(), ".zenbu", "config.json");
-  }
-}
-
-function parseJsonc(str: string): unknown {
-  let result = "";
-  let i = 0;
-  while (i < str.length) {
-    if (str[i] === '"') {
-      let j = i + 1;
-      while (j < str.length) {
-        if (str[j] === "\\") {
-          j += 2;
-        } else if (str[j] === '"') {
-          j++;
-          break;
-        } else {
-          j++;
-        }
-      }
-      result += str.slice(i, j);
-      i = j;
-    } else if (str[i] === "/" && str[i + 1] === "/") {
-      i += 2;
-      while (i < str.length && str[i] !== "\n") i++;
-    } else if (str[i] === "/" && str[i + 1] === "*") {
-      i += 2;
-      while (i < str.length && !(str[i] === "*" && str[i + 1] === "/")) i++;
-      i += 2;
-    } else {
-      result += str[i];
-      i++;
-    }
-  }
-  return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"));
 }
 
 runtime.register(ViewRegistryService, import.meta);

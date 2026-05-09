@@ -1,7 +1,6 @@
-import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { runtime } from "../runtime"
+import { runtime, getPlugins } from "../runtime"
 // NOTE: do NOT import ReloaderService / RendererHostService / RpcService at the
 // top of this module. This file is reachable from `services/reloader.ts`
 // through `vite-plugins.ts`, and a top-level circular import means the dep
@@ -20,22 +19,30 @@ export interface ViewAdviceEntry {
 }
 
 /**
- * Walk up from the given file URL until we find a `zenbu.plugin.json`. The
- * folder containing it is the plugin root and the anchor that
- * `registerContentScript` / `registerAdvice` resolve relative paths against.
+ * Find the plugin whose `dir` contains the file at `metaUrl`. The runtime
+ * plugin registry (populated by the loader-emitted barrel) is the source
+ * of truth; this no longer walks the filesystem looking for
+ * `zenbu.plugin.json`. Returns the plugin's dir, used as the anchor for
+ * `registerContentScript` / `registerAdvice` relative-path resolution.
  *
- * Throws (with the URL in the message) if no manifest is found, because a
- * silent fallback to `process.cwd()` would attach a content script to a
- * nonsensical location and you'd debug it by staring at empty iframes.
+ * Throws if no plugin matches, because a silent fallback to `process.cwd()`
+ * would attach a content script to a nonsensical location and you'd debug
+ * it by staring at empty iframes.
  */
 function findPluginRoot(metaUrl: string): string {
-  let dir = path.dirname(fileURLToPath(metaUrl))
-  while (dir !== path.dirname(dir)) {
-    if (fs.existsSync(path.join(dir, "zenbu.plugin.json"))) return dir
-    dir = path.dirname(dir)
+  const file = fileURLToPath(metaUrl)
+  let bestMatch: { dir: string; depth: number } | null = null
+  for (const plugin of getPlugins()) {
+    const rel = path.relative(plugin.dir, file)
+    if (rel.startsWith("..") || path.isAbsolute(rel)) continue
+    const depth = plugin.dir.split(path.sep).length
+    if (!bestMatch || depth > bestMatch.depth) {
+      bestMatch = { dir: plugin.dir, depth }
+    }
   }
+  if (bestMatch) return bestMatch.dir
   throw new Error(
-    `Could not find zenbu.plugin.json walking up from ${metaUrl}. ` +
+    `Could not find owning plugin for ${metaUrl}. ` +
       `Pass an absolute path, or call this from a file inside a Zenbu plugin.`,
   )
 }

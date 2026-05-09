@@ -1,6 +1,6 @@
 {
   "name": "@zenbujs/core",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -21,6 +21,10 @@
     "./build": {
       "types": "./dist/cli/build.d.mts",
       "import": "./dist/cli/build.mjs"
+    },
+    "./config": {
+      "types": "./dist/config.d.mts",
+      "import": "./dist/config.mjs"
     },
     "./loaders/zenbu": {
       "types": "./dist/loaders/zenbu.d.mts",
@@ -80,8 +84,8 @@
   "scripts": {
     "build": "node --max-old-space-size=8192 ./node_modules/tsdown/dist/run.mjs",
     "dev": "tsdown --watch",
-    "link:types": "node ../zen/dist/bin.mjs link --types-config ./zenbu-types.config.json --registry ./types",
-    "db:generate": "node ../zen/dist/bin.mjs db generate --schema src/schema.ts --migrations ./migrations",
+    "link:types": "node ./dist/cli/bin.mjs link --types-config ./zenbu-types.config.json --registry ./types",
+    "db:generate": "node ./dist/cli/bin.mjs db generate --schema src/schema.ts --migrations ./migrations",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {

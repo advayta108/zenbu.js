@@ -2,14 +2,16 @@ import fs from "node:fs"
 import fsp from "node:fs/promises"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
-import { findBuildConfig, loadBuildConfig } from "../lib/load-build-config"
+import { loadConfig } from "../lib/load-config"
 import type { ResolvedBuildConfig, Transform, TransformInput } from "../lib/build-config"
 import { hashDir } from "../lib/mirror-sync"
 
 function resolveProjectDir(): string {
   const cwd = process.cwd()
-  if (fs.existsSync(path.join(cwd, "zenbu.plugin.json"))) return cwd
-  console.error("zen build:source: no zenbu.plugin.json found in current directory")
+  for (const name of ["zenbu.config.ts", "zenbu.config.mts", "zenbu.config.js", "zenbu.config.mjs"]) {
+    if (fs.existsSync(path.join(cwd, name))) return cwd
+  }
+  console.error("zen build:source: no zenbu.config.ts found in current directory")
   process.exit(1)
 }
 
@@ -84,18 +86,15 @@ export async function runBuildSource(argv: string[]): Promise<void> {
   const projectDir = resolveProjectDir()
   const flags = parseFlags(argv)
 
-  const configPath = flags.config
-    ? path.resolve(projectDir, flags.config)
-    : findBuildConfig(projectDir)
-
-  const config = await loadBuildConfig(configPath)
+  const { resolved } = await loadConfig(projectDir)
+  const config = { ...resolved.build }
   if (flags.out) config.out = flags.out
 
   const sourceDir = path.resolve(projectDir, config.source)
   const outDir = path.resolve(projectDir, config.out)
 
   console.log(`\n  zen build:source`)
-  console.log(`    config:  ${path.relative(projectDir, configPath) || configPath}`)
+  console.log(`    config:  ${path.relative(projectDir, resolved.configPath) || resolved.configPath}`)
   console.log(`    source:  ${path.relative(projectDir, sourceDir) || "."}`)
   console.log(`    out:     ${path.relative(projectDir, outDir) || "."}`)
 

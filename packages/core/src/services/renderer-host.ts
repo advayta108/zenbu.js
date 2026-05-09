@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { Service, runtime } from "../runtime";
+import { Service, runtime, getAppEntrypoint } from "../runtime";
 import { ReloaderService } from "./reloader";
 import { ViewRegistryService } from "./view-registry";
 import { createLogger } from "../shared/log";
@@ -18,82 +18,41 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-function parseJsonc(str: string): unknown {
-  let result = "";
-  let i = 0;
-  while (i < str.length) {
-    if (str[i] === "\"") {
-      let j = i + 1;
-      while (j < str.length) {
-        if (str[j] === "\\") j += 2;
-        else if (str[j] === "\"") {
-          j++;
-          break;
-        } else {
-          j++;
-        }
-      }
-      result += str.slice(i, j);
-      i = j;
-    } else if (str[i] === "/" && str[i + 1] === "/") {
-      i += 2;
-      while (i < str.length && str[i] !== "\n") i++;
-    } else if (str[i] === "/" && str[i + 1] === "*") {
-      i += 2;
-      while (i < str.length && !(str[i] === "*" && str[i + 1] === "/")) i++;
-      i += 2;
-    } else {
-      result += str[i];
-      i++;
-    }
-  }
-  return JSON.parse(result.replace(/,\s*([\]}])/g, "$1"));
-}
-
+/**
+ * The app's renderer root is the directory containing the boot-window HTML
+ * file (`uiEntrypoint` in `zenbu.config.ts`). Vite's `root` resolves to that
+ * directory, and `index.html` is served from there.
+ *
+ * `vite.config.ts` is picked up from the project root if present (sibling
+ * of `zenbu.config.ts`).
+ */
 async function resolveRendererRoot(): Promise<{
   rendererRoot: string;
   configFile: string | false;
 }> {
+  const entrypoint = getAppEntrypoint();
+  if (!entrypoint) {
+    throw new Error(
+      "[renderer-host] no `uiEntrypoint` registered. " +
+        "Set `uiEntrypoint` in zenbu.config.ts before starting the app.",
+    );
+  }
+
+  const rendererRoot = path.dirname(entrypoint);
+  if (!(await pathExists(rendererRoot))) {
+    throw new Error(
+      `[renderer-host] uiEntrypoint references ${entrypoint} but ${rendererRoot} does not exist.`,
+    );
+  }
+
+  // `vite.config.ts` lives at the project root (next to zenbu.config.ts).
+  // Walk up from the renderer dir to find it.
   const configPath = process.env.ZENBU_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("ZENBU_CONFIG_PATH is required to resolve the app renderer");
-  }
+  const projectDir = configPath ? path.dirname(configPath) : rendererRoot;
+  const viteConfig = path.join(projectDir, "vite.config.ts");
+  const configFile = (await pathExists(viteConfig)) ? viteConfig : false;
 
-  const config = parseJsonc(await fsp.readFile(configPath, "utf8")) as {
-    plugins?: string[];
-  };
-  const configDir = path.dirname(configPath);
-
-  for (const manifestRel of config.plugins ?? []) {
-    const resolvedManifest = path.isAbsolute(manifestRel)
-      ? manifestRel
-      : path.resolve(configDir, manifestRel);
-    try {
-      const manifest = JSON.parse(await fsp.readFile(resolvedManifest, "utf8"));
-      if (!manifest.uiEntrypoint) continue;
-
-      const projectDir = path.dirname(resolvedManifest);
-      const rendererDir = path.resolve(projectDir, manifest.uiEntrypoint);
-      const viteConfig = path.join(projectDir, "vite.config.ts");
-      const configFile = (await pathExists(viteConfig)) ? viteConfig : false;
-      if (!(await pathExists(rendererDir))) continue;
-
-      return { rendererRoot: rendererDir, configFile };
-    } catch {}
-  }
-
-  const rendererDir = path.resolve(configDir, "src", "renderer");
-  const viteConfig = path.join(configDir, "vite.config.ts");
-  if (await pathExists(rendererDir)) {
-    return {
-      rendererRoot: rendererDir,
-      configFile: (await pathExists(viteConfig)) ? viteConfig : false,
-    };
-  }
-
-  throw new Error(
-    `No renderer entrypoint found. Add uiEntrypoint to the app plugin manifest or create ${rendererDir}.`,
-  );
+  return { rendererRoot, configFile };
 }
 
 export class RendererHostService extends Service {

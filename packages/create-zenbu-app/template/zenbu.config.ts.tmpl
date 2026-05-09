@@ -1,0 +1,53 @@
+import {
+  defineConfig,
+  definePlugin,
+  defineBuildConfig,
+  stripIfDisabled,
+  dropFiles,
+} from "@zenbujs/core/config";
+
+export default defineConfig({
+  // Where the kyju database lives (relative to this file).
+  db: "./.zenbu/db",
+
+  // Boot-window HTML. The single ui entrypoint for the whole app.
+  uiEntrypoint: "./src/renderer/index.html",
+
+  // Plugins are pure main-process: services + optional schema/preload/events.
+  // The "host plugin" is just the first entry by convention.
+  plugins: [
+    definePlugin({
+      name: "app",
+      services: ["./src/main/services/*.ts"],
+    }),
+  ],
+
+  // Build pipeline for `zen build:source` (mirror staging) and
+  // `zen build:electron` (signed .app via electron-builder). Set
+  // `mirror.target` to "<owner>/<repo>" before shipping.
+  build: defineBuildConfig({
+    source: ".",
+    out: ".zenbu/build/source",
+    include: [
+      "src/**/*",
+      "package.json",
+      "pnpm-lock.yaml",
+      "tsconfig.json",
+      "zenbu.config.ts",
+      "vite.config.ts",
+      "loading.html",
+    ],
+    ignore: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "src/**/*.spec.ts",
+      "src/**/*.spec.tsx",
+      "src/dev-only/**",
+    ],
+    transforms: [
+      stripIfDisabled({ FLAG_BETA: false }),
+      dropFiles(/\.stories\.tsx?$/),
+    ],
+    // mirror: { target: "{{owner}}/{{repo}}", branch: "main" },
+  }),
+});

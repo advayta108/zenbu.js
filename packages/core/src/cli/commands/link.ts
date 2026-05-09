@@ -1,5 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
+import { loadConfig } from "../lib/load-config"
+import type { ResolvedPlugin } from "../lib/build-config"
 
 type ServiceEntry = { className: string; key: string; filePath: string }
 type SchemaEntry = { name: string; schemaPath: string }
@@ -14,11 +16,14 @@ type LinkConfig = {
   devAppPath?: string
 }
 
-function findManifest(from: string): string | null {
+const CONFIG_NAMES = ["zenbu.config.ts", "zenbu.config.mts", "zenbu.config.js", "zenbu.config.mjs"]
+
+function findProjectDir(from: string): string | null {
   let dir = path.resolve(from)
   while (true) {
-    const candidate = path.join(dir, "zenbu.plugin.json")
-    if (fs.existsSync(candidate)) return candidate
+    for (const name of CONFIG_NAMES) {
+      if (fs.existsSync(path.join(dir, name))) return dir
+    }
     const parent = path.dirname(dir)
     if (parent === dir) return null
     dir = parent
@@ -68,25 +73,12 @@ function readRegistryDirFromTsconfig(tsconfigPath: string): string | null {
 }
 
 /**
- * An app root is the nearest ancestor (or self) that contains BOTH a
- * `zenbu.plugin.json` and a `config.json` whose `plugins` is an array.
- * That signature distinguishes the app from a bare plugin manifest.
+ * An app root is the nearest ancestor (or self) that contains a
+ * `zenbu.config.ts` (or its .mts/.js/.mjs variants). That single file
+ * uniquely identifies a Zenbu project root.
  */
 function findAppRoot(from: string): string | null {
-  let dir = path.resolve(from)
-  while (true) {
-    const manifest = path.join(dir, "zenbu.plugin.json")
-    const config = path.join(dir, "config.json")
-    if (fs.existsSync(manifest) && fs.existsSync(config)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(config, "utf8"))
-        if (Array.isArray(parsed?.plugins)) return dir
-      } catch {}
-    }
-    const parent = path.dirname(dir)
-    if (parent === dir) return null
-    dir = parent
-  }
+  return findProjectDir(from)
 }
 
 /**
@@ -127,15 +119,15 @@ function resolveRegistryDir(opts: {
   )
   console.error(`         Try one of:`)
   console.error(
-    `         • run from inside an app dir (with both zenbu.plugin.json and config.json),`,
+    `         - run from inside an app dir (with a zenbu.config.ts),`,
   )
   console.error(
-    `         • add a "devAppPath" field to ${path.basename(opts.manifestPath)} pointing at the host app,`,
+    `         - add a "devAppPath" field to ${path.basename(opts.manifestPath)} pointing at the host app,`,
   )
   console.error(
-    `         • create a tsconfig.local.json with a "#registry/*" path mapping,`,
+    `         - create a tsconfig.local.json with a "#registry/*" path mapping,`,
   )
-  console.error(`         • or pass --registry <dir>.`)
+  console.error(`         - or pass --registry <dir>.`)
   process.exit(1)
 }
 
@@ -429,32 +421,15 @@ function readExistingRegistry(registryDir: string): {
       const absPath = path.resolve(registryDir, relPath) + ".ts"
       importMap.set(alias, { className, filePath: absPath })
     }
-    for (const m of content.matchAll(routerRe)) {
-      const key = (m[1] ?? m[2])!
-      const alias = m[3]!
-      const imp = importMap.get(alias)
-      if (!imp) continue
-      let pluginName: string | null = null
-      let dir = path.dirname(imp.filePath)
-      while (dir !== path.dirname(dir)) {
-        const candidate = path.join(dir, "zenbu.plugin.json")
-        if (fs.existsSync(candidate)) {
-          try {
-            const manifest = JSON.parse(fs.readFileSync(candidate, "utf8"))
-            pluginName = manifest.name
-          } catch {}
-          break
-        }
-        dir = path.dirname(dir)
-      }
-      if (!pluginName) continue
-      if (!services.has(pluginName)) services.set(pluginName, [])
-      services.get(pluginName)!.push({
-        className: imp.className,
-        key,
-        filePath: imp.filePath,
-      })
-    }
+    // We don't try to recover plugin ownership from the existing
+    // services.ts here — the new link flow always re-runs from the host
+    // `zenbu.config.ts`, which is the single source of truth. Anything in
+    // `existing.services` that isn't re-asserted by `linkResolvedPlugin`
+    // gets dropped on write. The map is kept around (vs. dropping the
+    // whole branch) so future incremental link strategies have a starting
+    // point.
+    void importMap
+    void routerRe
   }
 
   const dbPath = path.join(registryDir, "db-sections.ts")
@@ -494,37 +469,10 @@ function readExistingRegistry(registryDir: string): {
     }
   }
 
-  // Events: each plugin contributes `import type { Events as Events_<x> }`
-  // and joins the `PluginEvents = ...` intersection. Walk back from the
-  // import path to the owning plugin's manifest to recover its name —
-  // same trick as services.
-  const eventsRegistryPath = path.join(registryDir, "events.ts")
-  if (fs.existsSync(eventsRegistryPath)) {
-    const content = fs.readFileSync(eventsRegistryPath, "utf8")
-    const importRe = /import type \{ Events as (\w+) \} from "([^"]+)"/g
-    for (const m of content.matchAll(importRe)) {
-      const alias = m[1]!
-      const relPath = m[2]!
-      const eventsPath = path.resolve(registryDir, relPath) + ".ts"
-      let pluginName: string | null = null
-      let dir = path.dirname(eventsPath)
-      while (dir !== path.dirname(dir)) {
-        const candidate = path.join(dir, "zenbu.plugin.json")
-        if (fs.existsSync(candidate)) {
-          try {
-            const manifest = JSON.parse(fs.readFileSync(candidate, "utf8"))
-            pluginName = manifest.name
-          } catch {}
-          break
-        }
-        dir = path.dirname(dir)
-      }
-      if (!pluginName) continue
-      events.set(pluginName, { name: pluginName, eventsPath })
-      void alias
-    }
-  }
-
+  // Events ownership recovery would also have walked for zenbu.plugin.json.
+  // Same rationale as `services` above: the new flow re-asserts the full set
+  // from zenbu.config.ts, so we don't need to reverse-engineer the existing
+  // file's contents.
   return { services, schemas, preloads, events }
 }
 
@@ -549,10 +497,53 @@ function parseLinkArgs(argv: string[]): {
 
 type RegistryState = ReturnType<typeof readExistingRegistry>
 
-function linkOne(manifestPath: string, existing: RegistryState): void {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as LinkConfig
+/**
+ * Variant for path-based plugin sources (a `zenbu.plugin.ts` whose default
+ * export is a `definePlugin({...})`). Resolved upstream by `loadConfig` so
+ * we just consume the resolved record here.
+ */
+function linkResolvedPlugin(plugin: ResolvedPlugin, existing: RegistryState): void {
+  console.log(`Linking types "${plugin.name}" from ${plugin.dir}`)
+
+  const serviceGlobs = plugin.services.map((abs) =>
+    path.relative(plugin.dir, abs).split(path.sep).join("/"),
+  )
+  const serviceEntries = discoverServices(plugin.dir, serviceGlobs)
+  console.log(`  Found ${serviceEntries.length} service(s)`)
+
+  const schemaEntry: SchemaEntry | null = plugin.schemaPath
+    ? { name: plugin.name, schemaPath: plugin.schemaPath }
+    : null
+  if (schemaEntry) console.log(`  Schema: ${schemaEntry.schemaPath}`)
+
+  const preloadEntry: PreloadEntry | null = plugin.preloadPath
+    ? { name: plugin.name, preloadPath: plugin.preloadPath }
+    : null
+  if (preloadEntry) console.log(`  Preload: ${preloadEntry.preloadPath}`)
+
+  const eventsEntry: EventsEntry | null = plugin.eventsPath
+    ? { name: plugin.name, eventsPath: plugin.eventsPath }
+    : null
+  if (eventsEntry) console.log(`  Events: ${eventsEntry.eventsPath}`)
+
+  existing.services.set(plugin.name, serviceEntries)
+  if (schemaEntry) existing.schemas.set(plugin.name, schemaEntry)
+  if (preloadEntry) existing.preloads.set(plugin.name, preloadEntry)
+  else existing.preloads.delete(plugin.name)
+  if (eventsEntry) existing.events.set(plugin.name, eventsEntry)
+  else existing.events.delete(plugin.name)
+}
+
+/**
+ * Variant for the framework-internal `--types-config <path>` flow where the
+ * input is a small JSON file (e.g. `packages/core/zenbu-types.config.json`).
+ * Used by `pnpm link:types` inside core to bake its own services/registry
+ * types without going through a `zenbu.config.ts`.
+ */
+function linkTypesConfig(jsonPath: string, existing: RegistryState): void {
+  const manifest = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as LinkConfig
   const pluginName = manifest.name
-  const baseDir = path.dirname(manifestPath)
+  const baseDir = path.dirname(jsonPath)
   console.log(`Linking types "${pluginName}" from ${baseDir}`)
 
   const serviceEntries = discoverServices(baseDir, manifest.services ?? [])
@@ -575,8 +566,6 @@ function linkOne(manifestPath: string, existing: RegistryState): void {
 
   existing.services.set(pluginName, serviceEntries)
   if (schemaEntry) existing.schemas.set(pluginName, schemaEntry)
-  // If a plugin removed its `preload` field, drop it from the merged registry.
-  // Otherwise insert/replace with the current entry.
   if (preloadEntry) existing.preloads.set(pluginName, preloadEntry)
   else existing.preloads.delete(pluginName)
   if (eventsEntry) existing.events.set(pluginName, eventsEntry)
@@ -608,10 +597,9 @@ function linkOne(manifestPath: string, existing: RegistryState): void {
  * `paths` + `include`, which TS merges into the IDE's resolved program.
  */
 function writePluginTsconfigLocal(
-  pluginManifestPath: string,
+  pluginDir: string,
   registryDir: string,
 ): void {
-  const pluginDir = path.dirname(pluginManifestPath)
   const ownTsconfig = path.join(pluginDir, "tsconfig.json")
   if (!fs.existsSync(ownTsconfig)) {
     // No tsconfig → not a TypeScript project; skip silently.
@@ -620,8 +608,8 @@ function writePluginTsconfigLocal(
   // Skip the host app. The host owns the registry directory and wires
   // `#registry/*` directly in its primary `tsconfig.json`; a sibling
   // `tsconfig.local.json` would be a redundant second source of truth.
-  if (fs.existsSync(path.join(pluginDir, "config.json"))) {
-    return
+  for (const name of CONFIG_NAMES) {
+    if (fs.existsSync(path.join(pluginDir, name))) return
   }
   const target = path.join(pluginDir, "tsconfig.local.json")
   let registryRel = path.relative(pluginDir, registryDir)
@@ -655,70 +643,72 @@ function writePluginTsconfigLocal(
   console.log(`  Wrote ${target}`)
 }
 
-/**
- * When the manifest being linked is the host app's own manifest (sitting
- * next to its `config.json`), expand the work list to also include every
- * plugin path declared in `config.json#plugins`. For any other manifest
- * (a plugin sitting inside or outside the app), only that single manifest
- * is returned — the caller decides not to touch sibling plugins.
- */
-function expandAppManifests(manifestPath: string): string[] {
-  const manifestDir = path.dirname(manifestPath)
-  const appRoot = findAppRoot(manifestDir)
-  if (appRoot !== manifestDir) return [manifestPath]
-  const configPath = path.join(appRoot, "config.json")
-  let pluginEntries: string[] = []
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf8"))
-    if (Array.isArray(config?.plugins)) pluginEntries = config.plugins
-  } catch {}
-  const all = [manifestPath]
-  for (const entry of pluginEntries) {
-    const resolved = path.isAbsolute(entry) ? entry : path.resolve(appRoot, entry)
-    if (path.resolve(resolved) === path.resolve(manifestPath)) continue
-    if (!fs.existsSync(resolved)) {
-      console.warn(`  ⚠ skipping ${entry} (not found at ${resolved})`)
-      continue
-    }
-    all.push(resolved)
-  }
-  return all
-}
-
 export async function runLink(argv: string[]) {
   const { manifestArg, typesConfigArg, registryOverride } = parseLinkArgs(argv)
-  const typeConfigPath = typesConfigArg ? path.resolve(typesConfigArg) : null
-  const manifestPath = typeConfigPath
-    ? null
-    : manifestArg
-      ? path.resolve(manifestArg)
-      : findManifest(process.cwd())
-  if (!typeConfigPath && !manifestPath) {
+
+  // Framework-internal escape hatch: `--types-config <foo.json>` ingests a
+  // single small JSON manifest (e.g. core's `zenbu-types.config.json`) and
+  // emits registry types for it. Bypasses zenbu.config.ts entirely.
+  if (typesConfigArg) {
+    const typeConfigPath = path.resolve(typesConfigArg)
+    const rootManifest = JSON.parse(fs.readFileSync(typeConfigPath, "utf8")) as LinkConfig
+    const registryDir = resolveRegistryDir({
+      manifestPath: typeConfigPath,
+      manifest: rootManifest,
+      registryOverride,
+    })
+    console.log(`Registry: ${registryDir}`)
+    fs.mkdirSync(registryDir, { recursive: true })
+    const existing = readExistingRegistry(registryDir)
+    linkTypesConfig(typeConfigPath, existing)
+    writeRegistryFiles(registryDir, existing)
+    console.log("Done.")
+    return
+  }
+
+  // Normal flow: the host project's `zenbu.config.ts` declares the full
+  // plugin set. We expand all plugins (host + auxiliary) and link them
+  // collectively into the same registry directory.
+  const projectDir = manifestArg
+    ? path.resolve(manifestArg)
+    : findProjectDir(process.cwd())
+  if (!projectDir) {
     console.error(
-      "zen link: could not find zenbu.plugin.json in current directory or any parent.",
+      "zen link: could not find zenbu.config.ts in current directory or any parent.",
     )
     console.error("          For internal framework types, pass --types-config <path>.")
     process.exit(1)
   }
 
-  const rootConfigPath = typeConfigPath ?? manifestPath!
-  const rootManifest = JSON.parse(fs.readFileSync(rootConfigPath, "utf8"))
+  const { resolved } = await loadConfig(projectDir)
 
   const registryDir = resolveRegistryDir({
-    manifestPath: rootConfigPath,
-    manifest: rootManifest,
+    manifestPath: resolved.configPath,
+    manifest: {},
     registryOverride,
   })
   console.log(`Registry: ${registryDir}`)
 
-  const manifestPaths = typeConfigPath ? [typeConfigPath] : expandAppManifests(manifestPath!)
-
   fs.mkdirSync(registryDir, { recursive: true })
   const existing = readExistingRegistry(registryDir)
-  for (const mp of manifestPaths) {
-    linkOne(mp, existing)
+  for (const plugin of resolved.plugins) {
+    linkResolvedPlugin(plugin, existing)
   }
 
+  writeRegistryFiles(registryDir, existing)
+
+  // Bootstrap each plugin's per-install tsconfig.local.json so its source
+  // can `#registry/*`-import the same types we just wrote. The host app's
+  // own dir is skipped (it owns the registry and aliases `#registry/*`
+  // directly in its primary tsconfig).
+  for (const plugin of resolved.plugins) {
+    writePluginTsconfigLocal(plugin.dir, registryDir)
+  }
+
+  console.log("Done.")
+}
+
+function writeRegistryFiles(registryDir: string, existing: RegistryState): void {
   const writes: Array<[string, string]> = [
     ["services.ts", generateServicesFile(registryDir, existing.services)],
     ["db-sections.ts", generateDbSectionsFile(registryDir, existing.schemas)],
@@ -731,14 +721,4 @@ export async function runLink(argv: string[]) {
     fs.writeFileSync(target, body)
     console.log(`  Wrote ${target}`)
   }
-
-  // Bootstrap each plugin's per-install tsconfig.local.json so its source
-  // can `#registry/*`-import the same types we just wrote. The host app
-  // doesn't need this because it's the owner of the registry and aliases
-  // `#registry/*` directly in its primary tsconfig.
-  for (const mp of manifestPaths) {
-    writePluginTsconfigLocal(mp, registryDir)
-  }
-
-  console.log("Done.")
 }

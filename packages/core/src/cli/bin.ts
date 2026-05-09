@@ -22,19 +22,16 @@ zen — Zenbu CLI
 
 Usage:
   zen dev                                Run the local app in Electron with HMR
-  zen build:source                       Transform user TS into a portable seed
-                                         tree (default: .zenbu/build/seed)
-  zen build:electron [-- <eb args>]      Stage seed + bundled bun/pnpm + launcher,
+  zen build:source                       Transform user TS into the staged
+                                         source tree (default: .zenbu/build/source)
+  zen build:electron [-- <eb args>]      Stage launcher + bundled bun/pnpm,
                                          then invoke electron-builder against
                                          the project's electron-builder config.
                                          Pass-through args after \`--\` go to
                                          electron-builder (e.g. \`-- --publish always\`).
   zen publish:source [init|push]         Push staged source to the mirror repo
-  zen link                               Regenerate registry types
-
-Hooks:
-  --config <zenbu.build.ts>   Override the build config path
-  --no-source                 Skip running build:source (use stale seed)
+  zen link                               Regenerate registry types from
+                                         zenbu.config.ts
 `)
 }
 

@@ -21,6 +21,8 @@ export default defineConfig([
       vite: "src/vite.ts",
       "cli/bin": "src/cli/bin.ts",
       "cli/build": "src/cli/build.ts",
+      "cli/resolve-config": "src/cli/resolve-config.ts",
+      config: "src/config.ts",
     },
     format: "esm",
     dts: { eager: true },
