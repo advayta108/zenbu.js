@@ -1,22 +1,27 @@
 /**
  * Zenbu launcher shim.
  *
- * This file is bundled by tsdown (as a second entry alongside `cli/bin.mjs`)
- * and shipped inside `@zenbujs/core`'s `dist/` as `launcher.mjs`.
- * `zen build:electron` copies it into the .app bundle as `<app>/launcher.mjs`,
- * and the bundle's `package.json#main` points at it.
+ * Shipped inside `@zenbujs/core/dist/launcher.mjs` and copied into the .app
+ * bundle by `zen build:electron`. The bundle's `package.json#main` points
+ * here, so this is the FIRST user code Electron evaluates after main process
+ * boot.
  *
- * Its job — and ONLY its job — is to make `~/.zenbu/apps/<name>/` runnable,
- * then dynamic-`import()` the apps-dir's `@zenbujs/core/dist/setup-gate.mjs`.
+ * Job:
+ *   1. Clone or fetch the configured source mirror into `~/.zenbu/apps/<name>/`
+ *      (we no longer bundle a `seed/` snapshot — every launch picks up
+ *      whatever's on the mirror's branch HEAD).
+ *   2. Run `pnpm install` against the apps-dir using the bundled toolchain.
+ *   3. Dynamic-`import()` the apps-dir's `@zenbujs/core/dist/setup-gate.mjs`,
+ *      which becomes the one-and-only `@zenbujs/core` instance for the rest
+ *      of the process lifetime.
  *
- * It must NOT import `@zenbujs/core`. The whole point of the shim is to
- * preserve a single framework module identity — the apps-dir copy that pnpm
- * installs on first launch is the one true `@zenbujs/core`. If we imported
- * `@zenbujs/core` here, we'd have two instances and the runtime singleton,
- * `instanceof` checks, and dynohot HMR would all split-brain.
+ * It must NOT import `@zenbujs/core`. Doing so would create two distinct
+ * module identities (this bundled copy + the apps-dir copy) and split-brain
+ * the runtime singleton, dynohot HMR, and `instanceof` checks.
  *
- * Allowed deps: node built-ins + the `electron` main-process API (provided at
- * runtime by the running Electron, marked `external` in tsdown.config.ts).
+ * Allowed deps: node built-ins, the `electron` main-process API (provided
+ * at runtime), and `isomorphic-git` (bundled into this file by tsdown — see
+ * `packages/core/tsdown.config.ts` `neverBundle: ["electron"]`).
  */
 import { app } from "electron"
 import crypto from "node:crypto"
@@ -26,6 +31,8 @@ import fs from "node:fs"
 import fsp from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import * as git from "isomorphic-git"
+import http from "isomorphic-git/http/node"
 
 // =============================================================================
 //                          stdio + logging safety net
@@ -103,11 +110,6 @@ function appsDirFor(name: string): string {
   return path.join(os.homedir(), ".zenbu", "apps", name)
 }
 
-async function copySeed(seedDir: string, dest: string): Promise<void> {
-  await fsp.mkdir(path.dirname(dest), { recursive: true })
-  await fsp.cp(seedDir, dest, { recursive: true })
-}
-
 async function fileHash(hash: crypto.Hash, filePath: string): Promise<void> {
   hash.update(filePath)
   hash.update("\0")
@@ -150,7 +152,6 @@ function electronTargetVersion(appsDir: string): string {
     const version =
       pkg.devDependencies?.electron ??
       pkg.dependencies?.electron ??
-      // trash slop
       ""
     return version.replace(/^[^\d]*/, "") || "42.0.0"
   } catch {
@@ -188,15 +189,136 @@ async function runPnpmInstall(appsDir: string): Promise<void> {
   })
 }
 
-async function ensureAppsDir(seedDir: string, appsDir: string): Promise<void> {
-  if (existsSync(appsDir)) return
-  if (!existsSync(seedDir)) {
+interface MirrorRef {
+  url: string
+  branch: string
+}
+
+function resolveMirror(cfg: AppConfig): MirrorRef {
+  if (!cfg.mirrorUrl) {
     throw new Error(
-      `apps dir ${appsDir} is missing and no seed/ directory found in the .app at ${seedDir}.`,
+      "[launcher] no mirror configured. The .app's app-config.json must " +
+        "contain `mirrorUrl` (the GitHub repo cloned on first launch). " +
+        "Configure `mirror.target` in zenbu.build.ts and rebuild.",
     )
   }
-  console.log(`[launcher] seeding ${appsDir} from bundled seed`)
-  await copySeed(seedDir, appsDir)
+  return { url: cfg.mirrorUrl, branch: cfg.branch ?? "main" }
+}
+
+/**
+ * Look like a real git working tree? (Distinguish "we cloned this" from a
+ * partial copy left behind by an interrupted clone.)
+ */
+function isExistingClone(dir: string): boolean {
+  return existsSync(path.join(dir, ".git", "HEAD"))
+}
+
+/**
+ * True if the working tree has uncommitted modifications. We use this as a
+ * "respect the user's edits" guard before fast-forwarding from origin.
+ */
+async function hasLocalModifications(dir: string): Promise<boolean> {
+  try {
+    const matrix = await git.statusMatrix({ fs, dir })
+    // [filepath, head, workdir, stage] — when all three are 1, the file is
+    // tracked AND clean. Anything else means modified/added/deleted.
+    return matrix.some(
+      ([, head, workdir, stage]) => head !== 1 || workdir !== 1 || stage !== 1,
+    )
+  } catch {
+    return false
+  }
+}
+
+async function cloneMirror(dir: string, mirror: MirrorRef): Promise<void> {
+  console.log(`[launcher] cloning ${mirror.url}#${mirror.branch} -> ${dir}`)
+  await fsp.mkdir(dir, { recursive: true })
+  await git.clone({
+    fs,
+    http,
+    dir,
+    url: mirror.url,
+    ref: mirror.branch,
+    singleBranch: true,
+    depth: 1,
+  })
+  console.log(`[launcher] clone complete`)
+}
+
+/**
+ * Fast-forward `dir` to the remote tip when:
+ *   1. We have a working tree (otherwise we'd be cloning, not pulling).
+ *   2. The local HEAD differs from origin/<branch>.
+ *   3. The working tree is clean — never silently overwrite user edits.
+ *
+ * On clean trees with new commits, we `checkout --force` the remote sha.
+ * That's equivalent to `git reset --hard origin/<branch>` for a fast-forward
+ * scenario and avoids isomorphic-git's lack of a built-in pull operation.
+ */
+async function fetchAndUpdate(dir: string, mirror: MirrorRef): Promise<void> {
+  try {
+    await git.fetch({
+      fs,
+      http,
+      dir,
+      url: mirror.url,
+      ref: mirror.branch,
+      singleBranch: true,
+      depth: 1,
+      tags: false,
+    })
+  } catch (err) {
+    console.warn(`[launcher] fetch failed (${(err as Error).message}); using local state`)
+    return
+  }
+
+  let localSha: string
+  let remoteSha: string
+  try {
+    localSha = await git.resolveRef({ fs, dir, ref: "HEAD" })
+    remoteSha = await git.resolveRef({
+      fs,
+      dir,
+      ref: `refs/remotes/origin/${mirror.branch}`,
+    })
+  } catch (err) {
+    console.warn(`[launcher] could not resolve refs (${(err as Error).message}); using local state`)
+    return
+  }
+  if (localSha === remoteSha) {
+    console.log(`[launcher] up to date (${localSha.slice(0, 7)})`)
+    return
+  }
+
+  if (await hasLocalModifications(dir)) {
+    console.warn(
+      `[launcher] working tree at ${dir} has uncommitted modifications; ` +
+        `skipping fast-forward to ${remoteSha.slice(0, 7)}.`,
+    )
+    return
+  }
+
+  console.log(
+    `[launcher] fast-forwarding ${localSha.slice(0, 7)} -> ${remoteSha.slice(0, 7)}`,
+  )
+  await git.checkout({ fs, dir, ref: remoteSha, force: true })
+}
+
+async function ensureAppsDir(appsDir: string, mirror: MirrorRef): Promise<void> {
+  if (isExistingClone(appsDir)) {
+    await fetchAndUpdate(appsDir, mirror)
+    return
+  }
+  if (existsSync(appsDir)) {
+    const entries = await fsp.readdir(appsDir).catch(() => [] as string[])
+    if (entries.length > 0) {
+      throw new Error(
+        `[launcher] ${appsDir} exists and isn't a git working tree (has ${entries.length} entries). ` +
+          `Move or delete it, then relaunch.`,
+      )
+    }
+  }
+  await cloneMirror(appsDir, mirror)
 }
 
 async function ensureDepsInstalled(appsDir: string): Promise<void> {
@@ -228,7 +350,7 @@ async function handoff(appsDir: string): Promise<void> {
   )
   if (!existsSync(entry)) {
     throw new Error(
-      `[launcher] expected entry not found: ${entry}. The seeded app may be missing @zenbujs/core in its dependencies.`,
+      `[launcher] expected entry not found: ${entry}. The cloned source may be missing @zenbujs/core in its dependencies.`,
     )
   }
 
@@ -243,10 +365,10 @@ async function main(): Promise<void> {
   await app.whenReady()
 
   const cfg = readAppConfig()
+  const mirror = resolveMirror(cfg)
   const appsDir = appsDirFor(cfg.name)
-  const seedDir = path.join(APP_PATH, "seed")
 
-  await ensureAppsDir(seedDir, appsDir)
+  await ensureAppsDir(appsDir, mirror)
   await ensureDepsInstalled(appsDir)
   await handoff(appsDir)
 }

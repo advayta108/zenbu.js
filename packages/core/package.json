@@ -1,6 +1,6 @@
 {
   "name": "@zenbujs/core",
-  "version": "0.0.0",
+  "version": "0.0.3",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -75,8 +75,6 @@
   "files": [
     "dist",
     "migrations",
-    "scripts",
-    "setup",
     "package.json"
   ],
   "scripts": {
@@ -99,8 +97,8 @@
   "dependencies": {
     "@parcel/watcher": "^2.5.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "@zenbujs/hmr": "workspace:*",
     "dugite": "^3.2.1",
-    "dynohot": "workspace:*",
     "effect": "^3.21.1",
     "electron-context-menu": "^4.1.2",
     "isomorphic-git": "^1.37.6",

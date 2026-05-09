@@ -7,20 +7,11 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 
 import { findBuildConfig, loadBuildConfig } from "../lib/load-build-config"
-import { initSeedRepo } from "../lib/mirror-sync"
 import { provisionToolchain } from "../lib/toolchain"
-import type { ResolvedBuildConfig } from "../lib/build-config"
 
 interface BuildElectronFlags {
   config?: string
-  noSource: boolean
   passthrough: string[]
-}
-
-interface StagingMeta {
-  sourceSha: string
-  contentHash: string
-  builtAt: string
 }
 
 interface BundlePackageJson {
@@ -34,7 +25,7 @@ interface BundlePackageJson {
 
 interface AppConfigJson {
   name: string
-  mirrorUrl: string | null
+  mirrorUrl: string
   branch: string
   version: string
   host: string
@@ -83,7 +74,7 @@ function resolveProjectDir(): string {
  * as a zen flag (and unknown flags error out).
  */
 function parseFlags(argv: string[]): BuildElectronFlags {
-  const flags: BuildElectronFlags = { noSource: false, passthrough: [] }
+  const flags: BuildElectronFlags = { passthrough: [] }
   let sawSeparator = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
@@ -97,10 +88,9 @@ function parseFlags(argv: string[]): BuildElectronFlags {
     }
     if (arg === "--config" || arg === "-c") flags.config = argv[++i]
     else if (arg.startsWith("--config=")) flags.config = arg.slice("--config=".length)
-    else if (arg === "--no-source") flags.noSource = true
     else {
       console.error(`zen build:electron: unknown flag "${arg}"`)
-      console.error(`valid: zen build:electron [--config <zenbu.build.ts>] [--no-source] [-- <electron-builder args>]`)
+      console.error(`valid: zen build:electron [--config <zenbu.build.ts>] [-- <electron-builder args>]`)
       process.exit(1)
     }
   }
@@ -233,47 +223,15 @@ function readElectronBuilderConfig(projectDir: string): ElectronBuilderConfig {
   return readJson<ElectronBuilderConfig>(found.path)
 }
 
-async function ensureSource(
-  projectDir: string,
-  config: ResolvedBuildConfig,
-  noSource: boolean,
-): Promise<StagingMeta> {
-  const stagingDir = path.resolve(projectDir, config.out)
-  const shaPath = path.join(stagingDir, ".sha")
-
-  const currentSha = (() => {
-    try {
-      return execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: projectDir,
-        encoding: "utf8",
-      }).trim()
-    } catch {
-      return "uncommitted"
-    }
-  })()
-
-  if (fs.existsSync(shaPath)) {
-    const meta = readJson<StagingMeta>(shaPath)
-    if (meta.sourceSha === currentSha) return meta
-    if (noSource) {
-      console.warn(
-        `[build:electron] --no-source: using stale staging (built from ${meta.sourceSha.slice(0, 7)}, current HEAD ${currentSha.slice(0, 7)})`,
-      )
-      return meta
-    }
+function currentSourceSha(projectDir: string): string {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: projectDir,
+      encoding: "utf8",
+    }).trim()
+  } catch {
+    return "uncommitted"
   }
-
-  if (noSource) {
-    console.error(
-      "zen build:electron: --no-source given but no staging found. Run `zen build:source` first.",
-    )
-    process.exit(1)
-  }
-
-  console.log(`  → running zen build:source (seed is missing or stale)`)
-  const { runBuildSource } = await import("./build-source")
-  await runBuildSource([])
-  return readJson<StagingMeta>(shaPath)
 }
 
 async function spawnAsync(
@@ -302,9 +260,10 @@ async function spawnAsync(
  *                              entries would not resolve anyway
  *   - `extraResources`         additive — we APPEND the toolchain entry to
  *                              whatever the user already declared
- *   - `npmRebuild`             forced to false — the seed ships its own
- *                              lockfile and `pnpm install` runs at first
- *                              launch, no rebuild step needed at build time
+ *   - `npmRebuild`             forced to false — the launcher clones the
+ *                              source from the mirror at first launch and
+ *                              runs `pnpm install` then; nothing to rebuild
+ *                              at electron-builder time
  *
  * Everything else (`appId`, `productName`, `mac`, `win`, `linux`,
  * `publish`, `directories.output`, `directories.buildResources`, `asar`,
@@ -315,7 +274,7 @@ function mergeElectronBuilderConfig(
   overlay: {
     appDir: string
     output: string
-    seedFiles: string[]
+    bundleFiles: string[]
     extraResource: { from: string; to: string }
   },
 ): ElectronBuilderConfig {
@@ -325,7 +284,7 @@ function mergeElectronBuilderConfig(
     app: overlay.appDir,
     output: overlay.output,
   }
-  merged.files = overlay.seedFiles
+  merged.files = overlay.bundleFiles
   const userExtra = Array.isArray(userConfig.extraResources)
     ? (userConfig.extraResources as Array<{ from: string; to: string } | string>)
     : []
@@ -349,8 +308,19 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
     : findBuildConfig(projectDir)
   const config = await loadBuildConfig(configPath)
 
-  const meta = await ensureSource(projectDir, config, flags.noSource)
-  const seedDir = path.resolve(projectDir, config.out)
+  // The mirror is now strictly required: the launcher clones from it on
+  // first run instead of unpacking a bundled seed. Building without one
+  // would produce an .app that has no source to run.
+  const mirrorTarget = config.mirror?.target
+  if (!mirrorTarget) {
+    throw new Error(
+      "zen build:electron: `mirror.target` is required in zenbu.build.ts. " +
+        'Set mirror: { target: "<owner>/<repo>", branch: "main" } and run ' +
+        "`zen publish:source init` before building.",
+    )
+  }
+  const mirrorBranch = config.mirror?.branch ?? "main"
+  const mirrorUrl = expandMirrorUrl(mirrorTarget)
 
   // Stage the bundle outside the project tree. If we stage inside (e.g.
   // `.zenbu/build/electron/`), electron-builder walks UP looking for
@@ -367,44 +337,24 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
   const bundleDir = await fsp.mkdtemp(
     path.join(os.tmpdir(), `zenbu-electron-${appName}-`),
   )
-  const stagedSeed = path.join(bundleDir, "seed")
   const toolchainDir = path.join(bundleDir, "toolchain")
   const launcherOut = path.join(bundleDir, "launcher.mjs")
   const bundlePkgOut = path.join(bundleDir, "package.json")
   const appConfigOut = path.join(bundleDir, "app-config.json")
   const mergedConfigPath = path.join(bundleDir, "electron-builder.merged.json")
 
-  const mirrorTarget = config.mirror?.target ?? null
-  const mirrorBranch = config.mirror?.branch ?? "main"
-  const mirrorUrl = mirrorTarget ? expandMirrorUrl(mirrorTarget) : null
+  const sourceSha = currentSourceSha(projectDir)
 
   console.log(`\n  zen build:electron`)
   console.log(`    name:    ${appName}`)
   console.log(`    version: ${appVersion}`)
-  console.log(`    source:  ${meta.sourceSha === "uncommitted" ? "uncommitted" : meta.sourceSha.slice(0, 7)}`)
-  console.log(`    mirror:  ${mirrorTarget ?? "(none — set config.mirror.target to enable updates)"}`)
+  console.log(`    source:  ${sourceSha === "uncommitted" ? "uncommitted" : sourceSha.slice(0, 7)}`)
+  console.log(`    mirror:  ${mirrorTarget} (${mirrorBranch})`)
   console.log(`    bundle:  ${bundleDir}`)
 
   console.log("  → staging launcher.mjs")
   const launcherSrc = resolveLauncher(projectDir)
   await copyFile(launcherSrc, launcherOut)
-
-  console.log("  → staging seed/")
-  await fsp.cp(seedDir, stagedSeed, {
-    recursive: true,
-    filter: (src) => path.basename(src) !== ".sha",
-  })
-  if (mirrorUrl) {
-    await initSeedRepo({
-      dir: stagedSeed,
-      mirrorUrl,
-      branch: mirrorBranch,
-      sourceSha:
-        meta.sourceSha === "uncommitted"
-          ? "0000000000000000000000000000000000000000"
-          : meta.sourceSha,
-    })
-  }
 
   console.log("  → provisioning bundled toolchain (bun + pnpm)")
   await provisionToolchain(toolchainDir)
@@ -417,9 +367,7 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
     main: "launcher.mjs",
     type: "module",
     zenbu: { host },
-  }
-  if (mirrorUrl) {
-    bundlePkg.repository = { type: "git", url: mirrorUrl }
+    repository: { type: "git", url: mirrorUrl },
   }
   await fsp.writeFile(bundlePkgOut, JSON.stringify(bundlePkg, null, 2) + "\n")
 
@@ -446,11 +394,10 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
   const merged = mergeElectronBuilderConfig(userConfig, {
     appDir: bundleDir,
     output: resolvedOutput,
-    seedFiles: [
+    bundleFiles: [
       "package.json",
       "app-config.json",
       "launcher.mjs",
-      "seed/**/*",
       "!node_modules",
       "!**/node_modules",
       "!**/node_modules/**",
@@ -465,7 +412,7 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
   console.log("  → injected into electron-builder config:")
   console.log(`      directories.app    = ${bundleDir}`)
   console.log(`      directories.output = ${resolvedOutput}`)
-  console.log(`      files              = [zenbu seed]`)
+  console.log(`      files              = [launcher + app-config + bundle pkg]`)
   console.log(`      extraResources    += { from: <bundle>/toolchain, to: toolchain }`)
   console.log(`      asar               = ${merged.asar !== undefined ? merged.asar : "(unset)"}`)
   console.log(`      npmRebuild         = false`)

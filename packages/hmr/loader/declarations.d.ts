@@ -1,4 +1,4 @@
-import type { Hot, LoaderHot } from "dynohot";
+import type { Hot, LoaderHot } from "@zenbujs/hmr";
 
 declare global {
 	interface ImportMeta {

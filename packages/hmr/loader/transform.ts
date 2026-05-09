@@ -1,12 +1,12 @@
 import type { NodePath, Visitor } from "@babel/traverse";
-import type { BindingEntry } from "dynohot/runtime/binding";
+import type { BindingEntry } from "#dynohot/runtime/binding";
 import type { ImportAttributes } from "node:module";
 import * as assert from "node:assert/strict";
 import { parse, types as t } from "@babel/core";
 import { mappedPrimitiveComparator } from "@braidai/lang/comparator";
 import { Fn } from "@braidai/lang/functional";
 import convertSourceMap from "convert-source-map";
-import { BindingType } from "dynohot/runtime/binding";
+import { BindingType } from "#dynohot/runtime/binding";
 import { generate, makeRootPath, traverse } from "./babel-shim.js";
 
 const makeLocalGetter = (localName: string, exportName: string) =>

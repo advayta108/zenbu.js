@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/restrict-template-expressions */
 import * as assert from "node:assert/strict";
 import { test } from "node:test";
-import { UpdateStatus } from "dynohot/runtime/controller";
+import { UpdateStatus } from "#dynohot/runtime/controller";
 import { TestModule } from "./__fixtures__/module.js";
 
 await test("accept handlers should run top down", async () => {

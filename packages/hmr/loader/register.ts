@@ -12,7 +12,7 @@ export interface Options {
  * "node:module". Or just `--import dynohot` on the command line.
  */
 export function register(options: Options): void {
-	registerLoader("dynohot/loader", {
+	registerLoader("@zenbujs/hmr/loader", {
 		parentURL: import.meta.url,
 		data: {
 			...options,

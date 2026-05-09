@@ -77,7 +77,7 @@ function loadElectronApp(): ElectronApp {
 }
 
 async function closeRegisteredWatchers(): Promise<void> {
-  const pause = (await import("dynohot/pause")) as DynohotPauseModule;
+  const pause = (await import("@zenbujs/hmr/pause")) as DynohotPauseModule;
   await pause.closeAllWatchers?.();
 }
 
@@ -90,7 +90,7 @@ async function registerLoaders(tsconfig: string | false, projectRoot: string): P
   await import("@zenbu/advice/node");
 
   const requireFromCore = createRequire(import.meta.url);
-  const dynohotRegisterPath = requireFromCore.resolve("dynohot/register");
+  const dynohotRegisterPath = requireFromCore.resolve("@zenbujs/hmr/register");
   const dynohot = await import(pathToFileURL(dynohotRegisterPath).href);
   if (typeof dynohot.register === "function") {
     // Ignore both `node_modules/` and any `dist/` directory. The latter

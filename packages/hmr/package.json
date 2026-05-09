@@ -1,8 +1,11 @@
 {
-	"name": "dynohot",
-	"private": true,
+	"name": "@zenbujs/hmr",
+	"version": "0.0.1",
+	"description": "Hot module replacement for Zenbu — heavily modified fork of dynohot.",
 	"type": "module",
-	"version": "2.1.1",
+	"publishConfig": {
+		"access": "public"
+	},
 	"exports": {
 		".": "./dist/loader/dispatch.js",
 		"./loader": "./dist/loader/loader.js",
@@ -14,12 +17,17 @@
 		"./*": {
 			"import": "./dist/*.js",
 			"types": "./dist/*.d.ts"
-		}
+		},
+		"./package.json": "./package.json"
 	},
 	"imports": {
 		"#dynohot/*": "./dist/*.js",
 		"#port": "./dist/runtime/port.js"
 	},
+	"files": [
+		"dist",
+		"package.json"
+	],
 	"scripts": {
 		"lint": "eslint --max-warnings=0 --report-unused-disable-directives .",
 		"prepare": "rm -rf dist && tsc -b",
@@ -50,11 +58,11 @@
 		"eslint": "^9.20.1",
 		"typescript": "^5.7.3"
 	},
+	"keywords": ["zenbu", "hmr", "hot-reload", "esm", "loader"],
+	"license": "ISC",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/laverdet/dynohot.git"
-	},
-	"author": "https://github.com/laverdet",
-	"license": "ISC",
-	"homepage": "https://github.com/laverdet/dynohot#readme"
+		"url": "https://github.com/zenbu-labs/zenbu.js.git",
+		"directory": "packages/hmr"
+	}
 }

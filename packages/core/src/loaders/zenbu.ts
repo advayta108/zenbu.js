@@ -70,7 +70,7 @@ const { subscribe } = requireFromHere("@parcel/watcher") as {
 
 let registerWatcherClosable: (closable: WatcherClosable) => void = () => {};
 try {
-  const pause = await import("dynohot/pause");
+  const pause = await import("@zenbujs/hmr/pause");
   registerWatcherClosable =
     typeof pause.registerWatcherClosable === "function"
       ? pause.registerWatcherClosable

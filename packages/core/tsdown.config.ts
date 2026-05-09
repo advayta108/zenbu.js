@@ -34,7 +34,6 @@ export default defineConfig([
         "@zenbu/advice",
         "@zenbu/kyju",
         "@zenbu/zenrpc",
-        "dynohot",
       ],
     },
   },
@@ -46,6 +45,12 @@ export default defineConfig([
     platform: "node",
     target: "node20",
     deps: {
+      // Inline isomorphic-git (and its node-only http transport) into the
+      // launcher bundle. The .app ships a bundle package.json with NO
+      // declared deps, so anything not inlined here will fail to resolve
+      // at runtime. `electron` is the lone exception — Electron's main
+      // process provides it natively.
+      alwaysBundle: ["isomorphic-git", "isomorphic-git/http/node"],
       neverBundle: ["electron"],
     },
     clean: false,

@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import { test } from "node:test";
-import { UpdateStatus } from "dynohot/runtime/controller";
+import { UpdateStatus } from "#dynohot/runtime/controller";
 import { TestModule } from "./__fixtures__/module.js";
 
 // Caused by a missing call to `isInvalidated`
