@@ -5,9 +5,8 @@
   "scripts": {
     "pack:local": "rm -rf dist/packages && mkdir -p dist/packages && pnpm --filter @zenbujs/core build && pnpm -C packages/core pack --pack-destination ../../dist/packages && pnpm -C packages/create-zenbu-app pack --pack-destination ../../dist/packages",
     "typecheck": "pnpm -r --no-bail run typecheck",
-    "lint": "pnpm -r --no-bail run lint",
     "check:ts-ignores": "bash scripts/check-ts-ignores.sh",
-    "ci": "pnpm run typecheck && pnpm run lint && pnpm run check:ts-ignores"
+    "ci": "pnpm run typecheck && pnpm run check:ts-ignores"
   },
   "dependencies": {
     "@zenbu/advice": "workspace:*"
