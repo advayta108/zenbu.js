@@ -43,13 +43,13 @@ export {
 
 /**
  * Read-side accessors for tools that introspect what's currently registered
- * for a given view scope (devtools, debug overlays, etc.). These are pure
+ * for a given view type (devtools, debug overlays, etc.). These are pure
  * reads against the in-memory registries; they don't trigger reload.
  */
 export {
   getAdvice,
-  getAllAdviceScopes,
+  getAllAdviceTypes,
   getContentScripts,
   getAllContentScriptPaths,
-  getAllScopes,
+  getAllTypes,
 } from "./services/advice-config";

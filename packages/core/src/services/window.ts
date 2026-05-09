@@ -19,7 +19,7 @@ const log = createLogger("window");
 
 type MountedView = {
   windowId: string;
-  scope: string;
+  type: string;
   view: WebContentsView;
   disposeContextMenu: () => void;
 };
@@ -64,7 +64,7 @@ export class WindowService extends serviceWithDeps({
   }
 
   async openView(args: {
-    scope: string;
+    type: string;
     windowId?: string;
     query?: Record<string, string | number | boolean | null | undefined>;
     view?: {
@@ -72,8 +72,8 @@ export class WindowService extends serviceWithDeps({
       webPreferences?: WebPreferences;
     };
   }): Promise<{ windowId: string }> {
-    const entry = this.ctx.viewRegistry.get(args.scope);
-    if (!entry) throw new Error(`No registered view for scope "${args.scope}"`);
+    const entry = this.ctx.viewRegistry.get(args.type);
+    if (!entry) throw new Error(`No registered view for type "${args.type}"`);
 
     const windowId = args.windowId ?? MAIN_WINDOW_ID;
     let win = this.ctx.baseWindow.windows.get(windowId);
@@ -152,22 +152,22 @@ export class WindowService extends serviceWithDeps({
       wsPort: this.ctx.http.port,
       wsToken: this.ctx.http.authToken,
       windowId,
-      // The advice/content-script prelude reads `?scope=` to pick which
+      // The advice/content-script prelude reads `?type=` to pick which
       // registrations apply to this iframe (mirrors how Chrome extensions
       // match content scripts to URLs).
-      scope: args.scope,
+      type: args.type,
     })}`;
     await view.webContents.loadURL(url);
 
     this.mounted.set(windowId, {
       windowId,
-      scope: args.scope,
+      type: args.type,
       view,
       disposeContextMenu,
     });
     if (!win.isVisible()) win.show();
     win.focus();
-    log.verbose(`mounted "${args.scope}" in window "${windowId}"`);
+    log.verbose(`mounted "${args.type}" in window "${windowId}"`);
 
     return { windowId };
   }

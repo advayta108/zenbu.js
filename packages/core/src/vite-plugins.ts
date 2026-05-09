@@ -5,7 +5,7 @@ import { zenbuAdvicePlugin } from "@zenbu/advice/vite";
 import { getPlugins } from "./runtime";
 import {
   getAdvice,
-  getAllScopes,
+  getAllTypes,
   getContentScripts,
   getAllContentScriptPaths,
   type ViewAdviceEntry,
@@ -131,35 +131,35 @@ export function zenbuFrameworkResolve(): Plugin {
   };
 }
 
-function getScopeFromPath(urlPath: string): string | null {
+function getTypeFromPath(urlPath: string): string | null {
   const m = urlPath.match(/^\/views\/([^/]+)\//);
   return m ? m[1]! : null;
 }
 
 /**
- * Resolve the view scope for a request. The kernel passes `?scope=<name>`
+ * Resolve the view type for a request. The kernel passes `?type=<name>`
  * in the iframe URL when opening a view (see `WindowService.openView`); we
- * also support `/views/<scope>/...` paths for plugins that register their
+ * also support `/views/<type>/...` paths for plugins that register their
  * own multi-page Vite layouts.
  */
-function resolveScope(
+function resolveType(
   urlPath: string,
   originalUrl: string | undefined,
 ): string | null {
-  const fromPath = getScopeFromPath(urlPath);
+  const fromPath = getTypeFromPath(urlPath);
   if (fromPath) return fromPath;
   if (!originalUrl) return null;
   const queryIdx = originalUrl.indexOf("?");
   if (queryIdx < 0) return null;
   const params = new URLSearchParams(originalUrl.slice(queryIdx + 1));
-  return params.get("scope");
+  return params.get("type");
 }
 
-function parsePreludeId(id: string): { scope: string } {
+function parsePreludeId(id: string): { type: string } {
   const rest = id.slice(RESOLVED_PREFIX.length);
   const queryIdx = rest.indexOf("?");
-  if (queryIdx < 0) return { scope: rest };
-  return { scope: rest.slice(0, queryIdx) };
+  if (queryIdx < 0) return { type: rest };
+  return { type: rest.slice(0, queryIdx) };
 }
 
 function generateAdvicePreludeCode(entries: ViewAdviceEntry[]): string {
@@ -206,9 +206,9 @@ export function resolveAdviceRuntime(): Plugin {
 
 /**
  * Per-iframe prelude that registers all advice + content scripts for the
- * iframe's scope. The prelude is loaded via a `<script type="module">` tag
- * injected into the iframe's HTML; loading it before the app's own entry
- * lets advice register before the modules it patches evaluate.
+ * iframe's view type. The prelude is loaded via a `<script type="module">`
+ * tag injected into the iframe's HTML; loading it before the app's own
+ * entry lets advice register before the modules it patches evaluate.
  */
 export function advicePreludePlugin(): Plugin {
   return {
@@ -224,9 +224,9 @@ export function advicePreludePlugin(): Plugin {
 
     load(id) {
       if (!id.startsWith(RESOLVED_PREFIX)) return null;
-      const { scope } = parsePreludeId(id);
-      let code = generateAdvicePreludeCode(getAdvice(scope));
-      for (const scriptPath of getContentScripts(scope)) {
+      const { type } = parsePreludeId(id);
+      let code = generateAdvicePreludeCode(getAdvice(type));
+      for (const scriptPath of getContentScripts(type)) {
         code += `import ${JSON.stringify(scriptPath)}\n`;
       }
       return code || "// no advice or content scripts\n";
@@ -234,8 +234,8 @@ export function advicePreludePlugin(): Plugin {
 
     handleHotUpdate({ file, server }) {
       let matched = false;
-      for (const scope of getAllScopes()) {
-        for (const entry of getAdvice(scope)) {
+      for (const type of getAllTypes()) {
+        for (const entry of getAdvice(type)) {
           if (file === entry.modulePath) {
             matched = true;
             break;
@@ -274,15 +274,15 @@ export function advicePreludePlugin(): Plugin {
     },
 
     transformIndexHtml(html, ctx) {
-      const scope = resolveScope(ctx.path ?? "", ctx.originalUrl);
-      if (!scope) return html;
-      const hasAdvice = getAdvice(scope).length > 0;
-      const hasScripts = getContentScripts(scope).length > 0;
+      const type = resolveType(ctx.path ?? "", ctx.originalUrl);
+      if (!type) return html;
+      const hasAdvice = getAdvice(type).length > 0;
+      const hasScripts = getContentScripts(type).length > 0;
       if (!hasAdvice && !hasScripts) return html;
       return [
         {
           tag: "script",
-          attrs: { type: "module", src: `${PRELUDE_PREFIX}${scope}` },
+          attrs: { type: "module", src: `${PRELUDE_PREFIX}${type}` },
           injectTo: "head" as const,
         },
       ];

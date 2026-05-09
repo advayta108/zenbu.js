@@ -7,7 +7,7 @@ export class AppService extends serviceWithDeps({
   static key = "app"
 
   async evaluate() {
-    await this.ctx.window.openView({ scope: "app" })
+    await this.ctx.window.openView({ type: "app" })
   }
 }
 

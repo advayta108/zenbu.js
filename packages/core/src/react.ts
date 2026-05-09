@@ -17,6 +17,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import {
@@ -192,13 +194,13 @@ export function ZenbuProvider({
           }
 
           const viewMatch = window.location.pathname.match(/^\/views\/([^/]+)\//);
-          const viewScope = viewMatch ? viewMatch[1] : null;
+          const viewType = viewMatch ? viewMatch[1] : null;
           let unsubReload: (() => void) | null = null;
-          if (viewScope) {
+          if (viewType) {
             const adviceReload = (events as any)?.advice?.reload;
             if (adviceReload?.subscribe) {
-              unsubReload = adviceReload.subscribe((data: { scope?: string }) => {
-                if (data?.scope === viewScope) location.reload();
+              unsubReload = adviceReload.subscribe((data: { type?: string }) => {
+                if (data?.type === viewType) location.reload();
               });
             }
           }
@@ -327,3 +329,204 @@ export function useEvents(): EventProxy<RegisteredEvents> {
 }
 
 export type { CollectionRefValue };
+
+// ---- <View>: child-iframe primitive ----
+
+/**
+ * Mounts a registered view (separate Vite root, registered via
+ * `ViewRegistryService.register(type, …)`) inside an `<iframe>` and:
+ *
+ * 1. **Auto-inherits auth from the parent iframe's URL.** Reads `wsPort` /
+ *    `wsToken` from `window.location.search` and forwards them in the
+ *    child URL so the child's `<ZenbuProvider>` connects without the
+ *    consumer wiring anything.
+ * 2. **Mount-once src.** The iframe's `src` is set on first mount and
+ *    *never updated*. Toggling `visible` only flips `style.display` —
+ *    state inside the child (sockets, ghostty terminals, etc.) survives
+ *    visibility changes.
+ * 3. **Initial args via URL.** `args` is encoded as base64 JSON in
+ *    `?args=` on first paint so the child can render without waiting on
+ *    a postMessage handshake. Use `useViewArgs<T>()` inside the child
+ *    to read.
+ * 4. **Reactive args via postMessage.** When `args` changes after mount,
+ *    we send `{ kind: "zenbu:view-args", args }` to the iframe's
+ *    `contentWindow`. URL is *not* rewritten (iframe stays alive).
+ *
+ * Child sessions die on unmount. There is no cache: if the consumer
+ * unmounts the `<View>` element, any state inside it (e.g. PTY sockets)
+ * is gone. Caller is responsible for explicit teardown via RPC if
+ * needed.
+ */
+export type ViewProps = {
+  /** Registered view type — first arg to `ViewRegistryService.register`. */
+  type: string;
+  /** Initial args; serialized into the child URL as base64-JSON. */
+  args?: Record<string, unknown>;
+  /** When false, sets `style.display: none`. Iframe is NOT unmounted. */
+  visible?: boolean;
+  style?: CSSProperties;
+  className?: string;
+  onLoad?: () => void;
+  /** Rendered while the view registry has not yet reported a URL for this type. */
+  fallback?: ReactNode;
+};
+
+const VIEW_ARGS_MESSAGE_KIND = "zenbu:view-args";
+const VIEW_ARGS_PARAM_LIMIT = 1500;
+
+function encodeViewArgs(args: Record<string, unknown> | undefined): string | null {
+  if (!args) return null;
+  try {
+    return btoa(unescape(encodeURIComponent(JSON.stringify(args))));
+  } catch (err) {
+    console.warn("[zenbu/View] failed to encode args:", err);
+    return null;
+  }
+}
+
+function decodeViewArgs<T>(encoded: string | null): T {
+  if (!encoded) return {} as T;
+  try {
+    return JSON.parse(decodeURIComponent(escape(atob(encoded)))) as T;
+  } catch (err) {
+    console.warn("[zenbu/View] failed to decode args:", err);
+    return {} as T;
+  }
+}
+
+function buildViewUrl(
+  baseUrl: string,
+  type: string,
+  encodedArgs: string | null,
+): string {
+  const trimmed = baseUrl.replace(/\/$/, "");
+  const parentParams = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams();
+  const wsPort = parentParams.get("wsPort");
+  const wsToken = parentParams.get("wsToken");
+  if (wsPort) params.set("wsPort", wsPort);
+  if (wsToken) params.set("wsToken", wsToken);
+  params.set("type", type);
+  if (encodedArgs) params.set("args", encodedArgs);
+  return `${trimmed}/?${params.toString()}`;
+}
+
+function shallowJSONEqual(a: unknown, b: unknown): boolean {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+export function View({
+  type,
+  args,
+  visible = true,
+  style,
+  className,
+  onLoad,
+  fallback = null,
+}: ViewProps): ReactElement {
+  // The view registry is replicated to the renderer via the core db slice.
+  const url = useDb((root) =>
+    (
+      root as unknown as {
+        plugin: { core: { lastKnownViewRegistry: Array<{ type: string; url: string }> } };
+      }
+    ).plugin.core.lastKnownViewRegistry.find((v) => v.type === type)?.url ?? null,
+  );
+
+  // Snapshot the iframe URL on first commit and never recompute. Changes to
+  // `args` after mount go via postMessage — rewriting `src` would reload
+  // the iframe and trash any in-flight state.
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const initialUrlRef = useRef<string | null>(null);
+  const lastArgsRef = useRef<string | null>(null);
+  const loadedRef = useRef(false);
+
+  if (initialUrlRef.current === null && url) {
+    const encoded = encodeViewArgs(args);
+    if (encoded && encoded.length > VIEW_ARGS_PARAM_LIMIT) {
+      console.warn(
+        `[zenbu/View] args for "${type}" exceed ${VIEW_ARGS_PARAM_LIMIT} chars in URL — consider postMessage-only updates.`,
+      );
+    }
+    lastArgsRef.current = encoded;
+    initialUrlRef.current = buildViewUrl(url, type, encoded);
+  }
+
+  useEffect(() => {
+    if (!iframeRef.current) return;
+    const encoded = encodeViewArgs(args);
+    if (shallowJSONEqual(encoded, lastArgsRef.current)) return;
+    lastArgsRef.current = encoded;
+
+    const send = () => {
+      iframeRef.current?.contentWindow?.postMessage(
+        { kind: VIEW_ARGS_MESSAGE_KIND, args: args ?? {} },
+        "*",
+      );
+    };
+    if (loadedRef.current) {
+      send();
+    } else {
+      // Will fire from the iframe's onLoad below.
+      const iframe = iframeRef.current;
+      const onceLoaded = () => {
+        send();
+        iframe.removeEventListener("load", onceLoaded);
+      };
+      iframe.addEventListener("load", onceLoaded);
+      return () => iframe.removeEventListener("load", onceLoaded);
+    }
+  }, [args]);
+
+  if (!initialUrlRef.current) {
+    return createElement(
+      "span",
+      { "data-zenbu-view-pending": type },
+      fallback,
+    );
+  }
+
+  return createElement("iframe", {
+    ref: iframeRef,
+    src: initialUrlRef.current,
+    className,
+    style: { border: "none", ...style, display: visible ? style?.display ?? "block" : "none" },
+    onLoad: () => {
+      loadedRef.current = true;
+      onLoad?.();
+    },
+  });
+}
+
+/**
+ * Read the current view args inside a child iframe rendered by `<View>`.
+ * Initial value comes from `?args=` in the iframe's URL; updates arrive
+ * via `postMessage` and re-render this hook's caller.
+ */
+export function useViewArgs<T extends Record<string, unknown>>(): T {
+  const [args, setArgs] = useState<T>(() => {
+    const params = new URLSearchParams(
+      typeof window !== "undefined" ? window.location.search : "",
+    );
+    return decodeViewArgs<T>(params.get("args"));
+  });
+
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.source !== window.parent) return;
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+      if ((data as { kind?: string }).kind !== VIEW_ARGS_MESSAGE_KIND) return;
+      const next = (data as { args?: T }).args;
+      if (next && typeof next === "object") setArgs(next);
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
+  return args;
+}

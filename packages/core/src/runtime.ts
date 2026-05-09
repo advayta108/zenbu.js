@@ -2,6 +2,15 @@ export type CleanupReason = "reload" | "shutdown";
 type SetupCleanup = ((reason: CleanupReason) => void | Promise<void>) | void;
 type SetupFn = () => SetupCleanup;
 
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000;
+
+function readShutdownTimeoutMs(): number {
+  const raw = process.env.ZENBU_SHUTDOWN_TIMEOUT_MS;
+  if (!raw) return DEFAULT_SHUTDOWN_TIMEOUT_MS;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SHUTDOWN_TIMEOUT_MS;
+}
+
 interface HotContext {
   accept(): void;
   dispose(cb: (data: any) => void | Promise<void>): void;
@@ -370,7 +379,27 @@ export class ServiceRuntime {
     slot.error = null;
 
     if (instance) {
-      await instance.__cleanupAllSetups(options.reason ?? "shutdown");
+      const reason = options.reason ?? "shutdown";
+      // Bound each service's cleanup. A pty/socket/watcher whose drain
+      // never resolves must not wedge the entire shutdown — emit a loud
+      // log and proceed. Tune via ZENBU_SHUTDOWN_TIMEOUT_MS.
+      const timeoutMs = readShutdownTimeoutMs();
+      const cleanup = instance.__cleanupAllSetups(reason);
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          console.error(
+            `[hot] ${key} ${reason} cleanup timed out after ${timeoutMs}ms; forcing teardown`,
+          );
+          resolve();
+        }, timeoutMs);
+        timer.unref?.();
+      });
+      try {
+        await Promise.race([cleanup, timeout]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
 
     if (options.removeSlot) {

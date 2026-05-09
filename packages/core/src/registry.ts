@@ -2,7 +2,7 @@ import type { SchemaRoot as CoreSchemaRoot } from "./schema";
 
 export type CoreEvents = {
   advice: {
-    reload: { scope: string };
+    reload: { type: string };
   };
 };
 

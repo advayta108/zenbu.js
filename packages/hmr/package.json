@@ -1,7 +1,7 @@
 {
   "name": "@zenbujs/hmr",
-  "version": "0.0.1",
-  "description": "Hot module replacement for Zenbu — heavily modified fork of dynohot.",
+  "version": "0.0.2",
+  "description": "Hot module replacement for Zenbu \u2014 heavily modified fork of dynohot.",
   "type": "module",
   "publishConfig": {
     "access": "public"

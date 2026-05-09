@@ -76,7 +76,7 @@ export interface Plugin {
   preload?: string
   events?: string
   /**
-   * Plugin-author-defined SVG icons keyed by view scope. Read by
+   * Plugin-author-defined SVG icons keyed by view type. Read by
    * `view-registry` to decorate registered views. Optional.
    */
   icons?: Record<string, string>

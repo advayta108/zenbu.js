@@ -72,7 +72,7 @@ const adviceEntries = new Map<string, ViewAdviceEntry[]>()
 interface ContentScriptEntry { path: string }
 const contentScripts = new Map<string, ContentScriptEntry[]>()
 
-function invalidatePrelude(scope: string) {
+function invalidatePrelude(type: string) {
   try {
     const reloader = runtime.getSlot("reloader")?.instance as
       | { get(id: string): { viteServer?: any } | undefined }
@@ -81,8 +81,8 @@ function invalidatePrelude(scope: string) {
     const coreEntry = reloader.get(APP_RENDERER_RELOADER_ID)
     if (!coreEntry?.viteServer) return
     const graph = coreEntry.viteServer.moduleGraph
-    const invalidateScope = (s: string) => {
-      const prefix = RESOLVED_PREFIX + s
+    const invalidateOne = (t: string) => {
+      const prefix = RESOLVED_PREFIX + t
       const ids: string[] = []
       for (const id of graph.idToModuleMap.keys()) {
         if (typeof id !== "string") continue
@@ -93,25 +93,25 @@ function invalidatePrelude(scope: string) {
         if (mod) graph.invalidateModule(mod)
       }
     }
-    if (scope === "*") {
-      for (const s of getAllScopes()) invalidateScope(s)
+    if (type === "*") {
+      for (const t of getAllTypes()) invalidateOne(t)
     } else {
-      invalidateScope(scope)
+      invalidateOne(type)
     }
   } catch {}
 }
 
-function emitReload(scope: string) {
-  invalidatePrelude(scope)
+function emitReload(type: string) {
+  invalidatePrelude(type)
   try {
     const rpc = runtime.getSlot("rpc")?.instance as
-      | { emit: { advice: { reload(payload: { scope: string }): void } } }
+      | { emit: { advice: { reload(payload: { type: string }): void } } }
       | undefined
     if (!rpc) return
-    if (scope === "*") {
-      for (const s of getAllScopes()) rpc.emit.advice.reload({ scope: s })
+    if (type === "*") {
+      for (const t of getAllTypes()) rpc.emit.advice.reload({ type: t })
     } else {
-      rpc.emit.advice.reload({ scope })
+      rpc.emit.advice.reload({ type })
     }
   } catch {}
 }
@@ -129,7 +129,7 @@ export type AdviceSpec = Omit<ViewAdviceEntry, "modulePath"> & {
 }
 
 export function registerAdvice(
-  scope: string,
+  type: string,
   entry: AdviceSpec,
   meta?: ImportMeta,
 ): () => void {
@@ -137,33 +137,33 @@ export function registerAdvice(
     ...entry,
     modulePath: resolvePluginPath(entry.modulePath, meta),
   }
-  const list = adviceEntries.get(scope) ?? []
+  const list = adviceEntries.get(type) ?? []
   list.push(resolvedEntry)
-  adviceEntries.set(scope, list)
-  emitReload(scope)
+  adviceEntries.set(type, list)
+  emitReload(type)
 
   return () => {
-    const current = adviceEntries.get(scope)
+    const current = adviceEntries.get(type)
     if (!current) return
     const idx = current.indexOf(resolvedEntry)
     if (idx >= 0) current.splice(idx, 1)
-    if (current.length === 0) adviceEntries.delete(scope)
-    emitReload(scope)
+    if (current.length === 0) adviceEntries.delete(type)
+    emitReload(type)
   }
 }
 
-export function getAdvice(scope: string): ViewAdviceEntry[] {
-  return adviceEntries.get(scope) ?? []
+export function getAdvice(type: string): ViewAdviceEntry[] {
+  return adviceEntries.get(type) ?? []
 }
 
-export function getAllAdviceScopes(): string[] {
+export function getAllAdviceTypes(): string[] {
   return [...adviceEntries.keys()]
 }
 
 // --- Content Scripts ---
 
 /**
- * Register a content script for the given scope. `modulePath` is normally
+ * Register a content script for the given view type. `modulePath` is normally
  * a path relative to the plugin root (the folder with `zenbu.plugin.json`);
  * pass `import.meta` so we can resolve it. Absolute paths are accepted as
  * an escape hatch.
@@ -173,30 +173,30 @@ export function getAllAdviceScopes(): string[] {
  *   )
  */
 export function registerContentScript(
-  scope: string,
+  type: string,
   modulePath: string,
   meta?: ImportMeta,
 ): () => void {
   const resolvedPath = resolvePluginPath(modulePath, meta)
   const entry: ContentScriptEntry = { path: resolvedPath }
-  const list = contentScripts.get(scope) ?? []
+  const list = contentScripts.get(type) ?? []
   list.push(entry)
-  contentScripts.set(scope, list)
-  emitReload(scope === "*" ? "*" : scope)
+  contentScripts.set(type, list)
+  emitReload(type === "*" ? "*" : type)
 
   return () => {
-    const current = contentScripts.get(scope)
+    const current = contentScripts.get(type)
     if (!current) return
     const idx = current.indexOf(entry)
     if (idx >= 0) current.splice(idx, 1)
-    if (current.length === 0) contentScripts.delete(scope)
-    emitReload(scope === "*" ? "*" : scope)
+    if (current.length === 0) contentScripts.delete(type)
+    emitReload(type === "*" ? "*" : type)
   }
 }
 
-export function getContentScripts(scope: string): string[] {
-  const scoped = (contentScripts.get(scope) ?? []).map(e => e.path)
-  const global = scope !== "*" ? (contentScripts.get("*") ?? []).map(e => e.path) : []
+export function getContentScripts(type: string): string[] {
+  const scoped = (contentScripts.get(type) ?? []).map(e => e.path)
+  const global = type !== "*" ? (contentScripts.get("*") ?? []).map(e => e.path) : []
   return [...global, ...scoped]
 }
 
@@ -208,9 +208,9 @@ export function getAllContentScriptPaths(): string[] {
   return paths
 }
 
-export function getAllScopes(): string[] {
-  const scopes = new Set<string>()
-  for (const k of adviceEntries.keys()) scopes.add(k)
-  for (const k of contentScripts.keys()) if (k !== "*") scopes.add(k)
-  return [...scopes]
+export function getAllTypes(): string[] {
+  const types = new Set<string>()
+  for (const k of adviceEntries.keys()) types.add(k)
+  for (const k of contentScripts.keys()) if (k !== "*") types.add(k)
+  return [...types]
 }

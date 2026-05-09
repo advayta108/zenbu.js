@@ -7,7 +7,7 @@ import { createLogger } from "../shared/log";
 const log = createLogger("view-registry");
 
 interface ViewEntry {
-  scope: string;
+  type: string;
   url: string;
   port: number;
   ownsServer: boolean;
@@ -28,7 +28,7 @@ export class ViewRegistryService extends Service {
   private manifestIcons = new Map<string, string>();
 
   async register(
-    scope: string,
+    type: string,
     root: string,
     configFile?: string | false,
     meta?: {
@@ -38,35 +38,35 @@ export class ViewRegistryService extends Service {
       label?: string;
     },
   ): Promise<ViewEntry> {
-    log.verbose(`register("${scope}", root="${root}", config="${configFile}")`);
-    const existing = this.views.get(scope);
+    log.verbose(`register("${type}", root="${root}", config="${configFile}")`);
+    const existing = this.views.get(type);
     if (existing) {
-      log.verbose(`"${scope}" already exists at ${existing.url}`);
+      log.verbose(`"${type}" already exists at ${existing.url}`);
       return existing;
     }
 
-    log.verbose(`creating reloader for "${scope}"...`);
+    log.verbose(`creating reloader for "${type}"...`);
     const reloaderEntry = await this.ctx.reloader.create(
-      scope,
+      type,
       root,
       configFile,
     );
     log.verbose(`reloader created: ${reloaderEntry.url} (port ${reloaderEntry.port})`);
     const entry: ViewEntry = {
-      scope,
+      type,
       url: reloaderEntry.url,
       port: reloaderEntry.port,
       ownsServer: true,
       meta,
     };
-    this.views.set(scope, entry);
+    this.views.set(type, entry);
     await this.syncToDb();
-    log.verbose(`"${scope}" registered at ${entry.url}`);
+    log.verbose(`"${type}" registered at ${entry.url}`);
     return entry;
   }
 
   registerAlias(
-    scope: string,
+    type: string,
     reloaderId: string,
     pathPrefix: string,
     meta?: {
@@ -76,39 +76,39 @@ export class ViewRegistryService extends Service {
       label?: string;
     },
   ): ViewEntry {
-    const existing = this.views.get(scope);
+    const existing = this.views.get(type);
     if (existing) return existing;
 
     const reloaderEntry = this.ctx.reloader.get(reloaderId);
     if (!reloaderEntry)
       throw new Error(
-        `Reloader "${reloaderId}" not found for alias "${scope}"`,
+        `Reloader "${reloaderId}" not found for alias "${type}"`,
       );
 
     const entry: ViewEntry = {
-      scope,
+      type,
       url: `${reloaderEntry.url}${pathPrefix}`,
       port: reloaderEntry.port,
       ownsServer: false,
       meta,
     };
-    this.views.set(scope, entry);
+    this.views.set(type, entry);
     void this.syncToDb();
     return entry;
   }
 
-  async unregister(scope: string): Promise<void> {
-    const entry = this.views.get(scope);
+  async unregister(type: string): Promise<void> {
+    const entry = this.views.get(type);
     if (!entry) return;
     if (entry.ownsServer) {
-      await this.ctx.reloader.remove(scope);
+      await this.ctx.reloader.remove(type);
     }
-    this.views.delete(scope);
+    this.views.delete(type);
     await this.syncToDb();
   }
 
-  get(scope: string): ViewEntry | undefined {
-    return this.views.get(scope);
+  get(type: string): ViewEntry | undefined {
+    return this.views.get(type);
   }
 
   evaluate() {
@@ -119,9 +119,9 @@ export class ViewRegistryService extends Service {
 
     this.setup("view-registry-cleanup", () => {
       return async () => {
-        for (const [scope, entry] of this.views) {
+        for (const [type, entry] of this.views) {
           if (entry.ownsServer) {
-            await this.ctx.reloader.remove(scope);
+            await this.ctx.reloader.remove(type);
           }
         }
         this.views.clear();
@@ -134,8 +134,8 @@ export class ViewRegistryService extends Service {
     this.manifestIcons.clear();
     for (const plugin of getPlugins()) {
       if (!plugin.icons) continue;
-      for (const [scope, svg] of Object.entries(plugin.icons)) {
-        this.manifestIcons.set(scope, svg);
+      for (const [type, svg] of Object.entries(plugin.icons)) {
+        this.manifestIcons.set(type, svg);
       }
     }
   }
@@ -143,10 +143,10 @@ export class ViewRegistryService extends Service {
   private async syncToDb(): Promise<void> {
     const client = this.ctx.db.effectClient;
     const snapshot = [...this.views.values()].map((e) => ({
-      scope: e.scope,
+      type: e.type,
       url: e.url,
       port: e.port,
-      icon: this.manifestIcons.get(e.scope),
+      icon: this.manifestIcons.get(e.type),
       meta: e.meta,
     }));
     await Effect.runPromise(

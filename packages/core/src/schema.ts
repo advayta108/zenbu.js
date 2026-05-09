@@ -2,7 +2,7 @@ import zod from "zod";
 import { createSchema, f } from "@zenbu/kyju/schema";
 
 const viewRegistryEntrySchema = zod.object({
-  scope: zod.string(),
+  type: zod.string(),
   url: zod.string(),
   port: zod.number(),
   icon: zod.string().optional(),
