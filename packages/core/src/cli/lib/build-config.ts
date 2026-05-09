@@ -150,8 +150,17 @@ export interface ResolvedConfig {
   projectDir: string
   /** Absolute path to the database directory. */
   dbPath: string
-  /** Absolute path to the boot-window HTML. */
+  /**
+   * Absolute path to the renderer's entrypoint directory. Vite's `root`
+   * resolves here; `index.html` inside it is served through Vite.
+   */
   uiEntrypointPath: string
+  /**
+   * Absolute path to `splash.html` inside the entrypoint directory. Loaded
+   * raw (no Vite) into a transient BrowserView during the brief window
+   * between Electron `whenReady` and the renderer's first paint.
+   */
+  splashPath: string
   plugins: ResolvedPlugin[]
   /** Resolved build config; defaults filled in even when user omits. */
   build: ResolvedBuildConfig

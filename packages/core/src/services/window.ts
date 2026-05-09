@@ -4,6 +4,7 @@ import {
   dialog,
   shell,
   type OpenDialogOptions,
+  type WebPreferences,
 } from "electron";
 import electronContextMenu from "electron-context-menu";
 import { URLSearchParams } from "node:url";
@@ -66,6 +67,10 @@ export class WindowService extends serviceWithDeps({
     scope: string;
     windowId?: string;
     query?: Record<string, string | number | boolean | null | undefined>;
+    view?: {
+      backgroundColor?: string;
+      webPreferences?: WebPreferences;
+    };
   }): Promise<{ windowId: string }> {
     const entry = this.ctx.viewRegistry.get(args.scope);
     if (!entry) throw new Error(`No registered view for scope "${args.scope}"`);
@@ -93,9 +98,10 @@ export class WindowService extends serviceWithDeps({
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
+        ...args.view?.webPreferences,
       },
     });
-    view.setBackgroundColor("#F4F4F4");
+    view.setBackgroundColor(args.view?.backgroundColor ?? "#F4F4F4");
     win.contentView.addChildView(view);
 
     // Right-click → standard browser context menu with "Inspect Element" so

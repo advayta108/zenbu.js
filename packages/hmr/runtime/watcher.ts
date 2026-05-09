@@ -1,7 +1,8 @@
+import { statSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { subscribe, type AsyncSubscription } from "@parcel/watcher";
-import { isWatcherPathPaused, registerWatcherClosable } from "./pause.js";
+import { isWatcherPathPaused } from "./pause.js";
+import { safeSubscribe, type SafeSubscription } from "./safe-subscribe.js";
 import { debounceAsync } from "./utility.js";
 
 // Q: Why @parcel/watcher instead of node:fs.watch?
@@ -17,16 +18,13 @@ import { debounceAsync } from "./utility.js";
 
 interface DirectoryWatcher {
 	callbacksByFile: Map<string, CallbacksByFile>;
-	closable: Closable;
+	directoryCallbacks: CallbacksByFile;
+	subscription: SafeSubscription;
 }
 
 interface CallbacksByFile {
 	callbacks: Set<() => void>;
 	dispatch: () => Promise<void>;
-}
-
-interface Closable {
-	close(): void;
 }
 
 /** @internal */
@@ -38,72 +36,83 @@ export class FileWatcher {
 			return;
 		}
 		const path = fileURLToPath(url);
+		const watchesDirectory = isExistingDirectory(path);
 		const fileName = basename(path);
-		const directory = dirname(path);
+		const directory = watchesDirectory ? path : dirname(path);
 		// Initialize directory watcher
 		const directoryWatcher = this.watchers.get(directory) ?? (() => {
 			const callbacksByFile = new Map<string, CallbacksByFile>();
+			const directoryCallbacks = makeCallbacks(directory);
 			// `subscribe` is recursive; filter to direct children of
 			// `directory` so semantics match the previous fs.watch(dir).
-			let subscription: AsyncSubscription | null = null;
-			let closed = false;
-			void subscribe(directory, (err, events) => {
+			// `safeSubscribe` handles the close-before-subscribe-resolves
+			// race AND auto-registers for process-wide shutdown cleanup.
+			const subscription = safeSubscribe(directory, (err, events) => {
 				if (err) return;
 				for (const event of events) {
 					if (dirname(event.path) !== directory) continue;
+					if (event.type !== "update") void directoryCallbacks.dispatch();
 					const byFile = callbacksByFile.get(basename(event.path));
 					if (byFile) void byFile.dispatch();
 				}
-			}).then((sub) => {
-				if (closed) void sub.unsubscribe().catch(() => {});
-				else subscription = sub;
-			}).catch((err: unknown) => {
-				console.error(`[dynohot] watch failed for ${directory}:`, err);
 			});
-			const closable: Closable = {
-				close: () => {
-					closed = true;
-					if (subscription) return subscription.unsubscribe().catch(() => {});
-				},
-			};
-			// Track for process-wide shutdown — see `pause.ts`.
-			const deregister = registerWatcherClosable(closable);
-			const holder: DirectoryWatcher & { deregister: () => void } = {
+			const holder: DirectoryWatcher = {
 				callbacksByFile,
-				closable,
-				deregister,
+				directoryCallbacks,
+				subscription,
 			};
 			this.watchers.set(directory, holder);
 			return holder;
 		})();
-		// Initialize by-file callback holder
-		const byFile = directoryWatcher.callbacksByFile.get(fileName) ?? function() {
-			const callbacks = new Set<() => void>();
-			const dispatch = debounceAsync(async () => {
-				// If a caller has paused this path (e.g. during git
-				// pull + pnpm install), suppress callbacks until resume.
-				if (isWatcherPathPaused(path)) return;
-				for (const callback of callbacks) {
-					callback();
-				}
-			});
-			const byFile = { callbacks, dispatch };
-			directoryWatcher.callbacksByFile.set(fileName, byFile);
-			return byFile;
-		}();
+		const byFile = watchesDirectory
+			? directoryWatcher.directoryCallbacks
+			: getFileCallbacks(directoryWatcher, fileName, path);
 		byFile.callbacks.add(callback);
 		return () => {
 			byFile.callbacks.delete(callback);
-			if (byFile.callbacks.size === 0) {
+			if (!watchesDirectory && byFile.callbacks.size === 0) {
 				directoryWatcher.callbacksByFile.delete(fileName);
-				if (directoryWatcher.callbacksByFile.size === 0) {
-					this.watchers.delete(directory);
-					directoryWatcher.closable.close();
-					(directoryWatcher as DirectoryWatcher & {
-						deregister?: () => void;
-					}).deregister?.();
-				}
+			}
+			if (
+				directoryWatcher.callbacksByFile.size === 0 &&
+				directoryWatcher.directoryCallbacks.callbacks.size === 0
+			) {
+				this.watchers.delete(directory);
+				void directoryWatcher.subscription.close();
 			}
 		};
 	}
+}
+
+function getFileCallbacks(
+	directoryWatcher: DirectoryWatcher,
+	fileName: string,
+	path: string,
+): CallbacksByFile {
+	const existing = directoryWatcher.callbacksByFile.get(fileName);
+	if (existing) return existing;
+	const byFile = makeCallbacks(path);
+	directoryWatcher.callbacksByFile.set(fileName, byFile);
+	return byFile;
+}
+
+function isExistingDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function makeCallbacks(path: string): CallbacksByFile {
+	const callbacks = new Set<() => void>();
+	const dispatch = debounceAsync(async () => {
+		// If a caller has paused this path (e.g. during git
+		// pull + pnpm install), suppress callbacks until resume.
+		if (isWatcherPathPaused(path)) return;
+		for (const callback of callbacks) {
+			callback();
+		}
+	});
+	return { callbacks, dispatch };
 }

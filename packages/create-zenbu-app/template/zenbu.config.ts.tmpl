@@ -11,7 +11,7 @@ export default defineConfig({
   db: "./.zenbu/db",
 
   // Boot-window HTML. The single ui entrypoint for the whole app.
-  uiEntrypoint: "./src/renderer/index.html",
+  uiEntrypoint: "./src/renderer",
 
   // Plugins are pure main-process: services + optional schema/preload/events.
   // The "host plugin" is just the first entry by convention.
@@ -35,7 +35,6 @@ export default defineConfig({
       "tsconfig.json",
       "zenbu.config.ts",
       "vite.config.ts",
-      "loading.html",
     ],
     ignore: [
       "src/**/*.test.ts",

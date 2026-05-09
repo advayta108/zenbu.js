@@ -35,6 +35,7 @@ async function main(): Promise<void> {
       icons: p.icons,
     })),
     appEntrypoint: resolved.uiEntrypointPath,
+    splashPath: resolved.splashPath,
   }
   process.stdout.write(JSON.stringify({ payload, pluginSourceFiles }))
 }

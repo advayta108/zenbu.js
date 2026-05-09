@@ -640,8 +640,26 @@ export interface PluginRecord {
 
 interface PluginRegistry {
   plugins: Map<string, PluginRecord>;
-  /** Absolute path of the boot-window HTML, or null until registered. */
+  /** Absolute path of the renderer entrypoint directory, or null until registered. */
   appEntrypoint: string | null;
+  /** Absolute path of `splash.html` inside the entrypoint dir. */
+  splashPath: string | null;
+  /** Subscribers that fire on every replacePlugins / registerAppEntrypoint. */
+  subscribers: Set<(snapshot: ConfigSnapshot) => void>;
+}
+
+/**
+ * Live snapshot of the resolved Zenbu config. Returned by `getConfig()` and
+ * delivered to `subscribeConfig` callbacks. Re-emitted whenever the loader
+ * regenerates the plugin barrel — i.e. on every edit to `zenbu.config.ts`
+ * or any imported `zenbu.plugin.ts`.
+ */
+export interface ConfigSnapshot {
+  plugins: PluginRecord[];
+  /** Absolute path of the renderer entrypoint directory. */
+  appEntrypoint: string | null;
+  /** Absolute path of `splash.html` inside the entrypoint dir. */
+  splashPath: string | null;
 }
 
 function getPluginRegistry(): PluginRegistry {
@@ -652,9 +670,34 @@ function getPluginRegistry(): PluginRegistry {
     slot.__zenbu_plugin_registry__ = {
       plugins: new Map(),
       appEntrypoint: null,
+      splashPath: null,
+      subscribers: new Set(),
     };
+  } else if (!slot.__zenbu_plugin_registry__.subscribers) {
+    // HMR'd into an older shape; lazily fill the field.
+    slot.__zenbu_plugin_registry__.subscribers = new Set();
   }
   return slot.__zenbu_plugin_registry__;
+}
+
+function snapshotConfig(reg: PluginRegistry): ConfigSnapshot {
+  return {
+    plugins: [...reg.plugins.values()],
+    appEntrypoint: reg.appEntrypoint,
+    splashPath: reg.splashPath,
+  };
+}
+
+function notifySubscribers(reg: PluginRegistry): void {
+  if (reg.subscribers.size === 0) return;
+  const snapshot = snapshotConfig(reg);
+  for (const cb of reg.subscribers) {
+    try {
+      cb(snapshot);
+    } catch (err) {
+      console.error("[zenbu config subscriber] threw:", err);
+    }
+  }
 }
 
 /**
@@ -663,7 +706,9 @@ function getPluginRegistry(): PluginRegistry {
  * normally does not call this directly.
  */
 export function registerPlugin(record: PluginRecord): void {
-  getPluginRegistry().plugins.set(record.name, record);
+  const reg = getPluginRegistry();
+  reg.plugins.set(record.name, record);
+  notifySubscribers(reg);
 }
 
 /**
@@ -671,7 +716,9 @@ export function registerPlugin(record: PluginRecord): void {
  * barrel and needs to clear stale entries.
  */
 export function unregisterPlugin(name: string): void {
-  getPluginRegistry().plugins.delete(name);
+  const reg = getPluginRegistry();
+  if (!reg.plugins.delete(name)) return;
+  notifySubscribers(reg);
 }
 
 /**
@@ -682,6 +729,7 @@ export function replacePlugins(records: PluginRecord[]): void {
   const reg = getPluginRegistry();
   reg.plugins.clear();
   for (const record of records) reg.plugins.set(record.name, record);
+  notifySubscribers(reg);
 }
 
 export function getPlugins(): PluginRecord[] {
@@ -693,14 +741,58 @@ export function getPlugin(name: string): PluginRecord | undefined {
 }
 
 /**
- * Set the boot-window HTML path. Called once by the loader-emitted barrel.
- * Consumers (`view-registry`, `vite-plugins`) ask for it via
- * `getAppEntrypoint()`.
+ * Set the renderer entrypoint directory + the absolute path to splash.html
+ * inside it. Called once by the loader-emitted barrel. Consumers
+ * (`view-registry`, `vite-plugins`, `setup-gate`'s splash window) read
+ * via `getAppEntrypoint()` / `getSplashPath()`.
  */
-export function registerAppEntrypoint(htmlPath: string): void {
-  getPluginRegistry().appEntrypoint = htmlPath;
+export function registerAppEntrypoint(rendererDir: string, splashPath: string): void {
+  const reg = getPluginRegistry();
+  reg.appEntrypoint = rendererDir;
+  reg.splashPath = splashPath;
+  notifySubscribers(reg);
 }
 
 export function getAppEntrypoint(): string | null {
   return getPluginRegistry().appEntrypoint;
+}
+
+export function getSplashPath(): string | null {
+  return getPluginRegistry().splashPath;
+}
+
+/**
+ * Snapshot of the current resolved config — plugins + entrypoints. Cheap;
+ * just walks the in-memory registry. The returned object is a fresh copy,
+ * safe to retain or pass through serialization boundaries.
+ */
+export function getConfig(): ConfigSnapshot {
+  return snapshotConfig(getPluginRegistry());
+}
+
+/**
+ * Subscribe to config changes. The callback fires:
+ *   - immediately on subscription (with the current snapshot),
+ *   - after each `replacePlugins(...)` / `registerPlugin(...)` /
+ *     `registerAppEntrypoint(...)` call — i.e. every time the loader
+ *     regenerates the plugin barrel after a `zenbu.config.ts` edit.
+ *
+ * Callback exceptions are logged and swallowed so one buggy subscriber
+ * can't break others. The returned function unsubscribes.
+ */
+export function subscribeConfig(
+  callback: (snapshot: ConfigSnapshot) => void,
+): () => void {
+  const reg = getPluginRegistry();
+  reg.subscribers.add(callback);
+  // Fire once with the current snapshot so callers can initialize from a
+  // single place instead of `cb(getConfig()); subscribeConfig(cb)`.
+  try {
+    callback(snapshotConfig(reg));
+  } catch (err) {
+    console.error("[zenbu config subscriber] initial fire threw:", err);
+  }
+  return () => {
+    reg.subscribers.delete(callback);
+  };
 }

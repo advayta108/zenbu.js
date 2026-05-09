@@ -148,7 +148,7 @@ export async function loadConfig(projectDir: string): Promise<{
   }
   if (typeof config.uiEntrypoint !== "string" || config.uiEntrypoint.length === 0) {
     throw new Error(
-      `${configPath}: missing required \`uiEntrypoint\` field (path to the boot-window HTML file).`,
+      `${configPath}: missing required \`uiEntrypoint\` field (directory holding index.html + splash.html).`,
     )
   }
   if (!Array.isArray(config.plugins)) {
@@ -162,6 +162,21 @@ export async function loadConfig(projectDir: string): Promise<{
   const uiEntrypointPath = path.isAbsolute(config.uiEntrypoint)
     ? config.uiEntrypoint
     : path.resolve(configDir, config.uiEntrypoint)
+  const uiStat = (() => {
+    try { return fs.statSync(uiEntrypointPath) } catch { return null }
+  })()
+  if (!uiStat?.isDirectory()) {
+    throw new Error(
+      `${configPath}: uiEntrypoint must point at a directory; got ${config.uiEntrypoint}.`,
+    )
+  }
+  const splashPath = path.join(uiEntrypointPath, "splash.html")
+  if (!fs.existsSync(splashPath)) {
+    throw new Error(
+      `${configPath}: uiEntrypoint directory ${config.uiEntrypoint} is missing required \`splash.html\`. ` +
+        `The splash file is shown raw (no Vite) during the brief window between Electron startup and the app's first paint.`,
+    )
+  }
 
   const plugins: ResolvedPlugin[] = []
   const pluginSourceFiles: string[] = []
@@ -184,6 +199,7 @@ export async function loadConfig(projectDir: string): Promise<{
       projectDir: configDir,
       dbPath,
       uiEntrypointPath,
+      splashPath,
       plugins,
       build,
     },

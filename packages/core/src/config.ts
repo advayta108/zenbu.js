@@ -25,3 +25,17 @@ export {
 } from "./cli/lib/build-config"
 
 export { dropFiles, stripIfDisabled } from "./cli/lib/transforms"
+
+// Live-config API. Read the resolved config in main-process code, or
+// subscribe to changes for code that needs to react to plugin
+// add/remove / config edits.
+export {
+  getConfig,
+  subscribeConfig,
+  getPlugins,
+  getPlugin,
+  getAppEntrypoint,
+  getSplashPath,
+  type ConfigSnapshot,
+  type PluginRecord,
+} from "./runtime"

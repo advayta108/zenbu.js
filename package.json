@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "pack:local": "rm -rf dist/packages && mkdir -p dist/packages && pnpm --filter @zenbujs/core build && pnpm -C packages/core pack --pack-destination ../../dist/packages && pnpm -C packages/create-zenbu-app pack --pack-destination ../../dist/packages",
+    "repro:parcel-watcher-shutdown": "node scripts/repro-parcel-watcher-electron-shutdown.mjs",
+    "repro:zenbu-dev-quit": "node scripts/repro-zenbu-dev-quit.mjs",
     "typecheck": "pnpm -r --no-bail run typecheck",
     "check:ts-ignores": "bash scripts/check-ts-ignores.sh",
     "ci": "pnpm run typecheck && pnpm run check:ts-ignores"

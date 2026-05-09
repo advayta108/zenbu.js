@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 
 type LoaderContext = {
@@ -33,51 +32,7 @@ type InitializeData = {
   pluginSourceFiles?: string[];
 };
 
-type BarrelGlob = {
-  dir: string;
-  regex: RegExp;
-  snapshot: Set<string>;
-};
-
-type BarrelEntry = {
-  hot?: LoaderContext["hot"];
-  globs: BarrelGlob[];
-};
-
-type ParcelEvent = {
-  path: string;
-};
-
-type ParcelSubscription = {
-  unsubscribe: () => Promise<void>;
-};
-
-type WatcherClosable = {
-  close: () => Promise<void> | void;
-};
-
 const verbose = process.env.ZENBU_VERBOSE === "1";
-const requireFromHere = createRequire(import.meta.url);
-/**
- * lets us detect when new services are added and to make them hmr
- * 
- * under the hood hmr uses the same watcher, we should probably move this into hmr
- */
-const { subscribe } = requireFromHere("@parcel/watcher") as {
-  subscribe: (
-    dir: string,
-    callback: (err: Error | null, events: ParcelEvent[]) => void,
-  ) => Promise<ParcelSubscription>;
-};
-
-let registerWatcherClosable: (closable: WatcherClosable) => void = () => {};
-try {
-  const pause = await import("@zenbujs/hmr/pause");
-  registerWatcherClosable =
-    typeof pause.registerWatcherClosable === "function"
-      ? pause.registerWatcherClosable
-      : registerWatcherClosable;
-} catch {}
 
 const loaderName = "zenbu-loader";
 let tracePort: TracePort | null = null;
@@ -87,9 +42,6 @@ const stats = {
   loadCount: 0,
   loadMs: 0,
 };
-
-const barrels = new Map<string, BarrelEntry>();
-const dirWatchers = new Map<string, WatcherClosable>();
 
 let resolvedPayload: RegistryPayload | null = null;
 let resolvedPluginSourceFiles: string[] = [];
@@ -139,74 +91,6 @@ function expandGlob(pattern: string): string[] {
     .map((file) => path.resolve(dir, file));
 }
 
-function snapshotDir(dir: string, regex: RegExp): Set<string> {
-  if (!fs.existsSync(dir)) return new Set();
-  try {
-    return new Set(fs.readdirSync(dir).filter((file) => regex.test(file)));
-  } catch {
-    return new Set();
-  }
-}
-
-function handleDirEvent(dir: string, filename: string): void {
-  for (const entry of barrels.values()) {
-    for (const glob of entry.globs) {
-      if (glob.dir !== dir) continue;
-      if (!glob.regex.test(filename)) continue;
-      const nextSnapshot = snapshotDir(dir, glob.regex);
-      const changed =
-        nextSnapshot.size !== glob.snapshot.size ||
-        [...nextSnapshot].some((file) => !glob.snapshot.has(file));
-      if (!changed) continue;
-      glob.snapshot = nextSnapshot;
-      try {
-        entry.hot?.invalidate?.();
-        if (verbose) {
-          console.log(
-            `[zenbu-loader] invalidated barrel (${filename} added/removed in ${dir})`,
-          );
-        }
-      } catch (err) {
-        console.error("[zenbu-loader] invalidate failed:", err);
-      }
-      break;
-    }
-  }
-}
-
-function ensureDirWatcher(dir: string): void {
-  if (dirWatchers.has(dir)) return;
-  if (!fs.existsSync(dir)) return;
-
-  let subscription: ParcelSubscription | null = null;
-  let closed = false;
-
-  subscribe(dir, (err, events) => {
-    if (err) return;
-    for (const event of events) {
-      if (path.dirname(event.path) !== dir) continue;
-      handleDirEvent(dir, path.basename(event.path));
-    }
-  })
-    .then((sub) => {
-      if (closed) void sub.unsubscribe().catch(() => {});
-      else subscription = sub;
-    })
-    .catch((err: unknown) => {
-      console.error(`[zenbu-loader] subscribe failed for ${dir}:`, err);
-    });
-
-  const closable = {
-    close: () => {
-      closed = true;
-      if (subscription) return subscription.unsubscribe().catch(() => {});
-    },
-  };
-
-  registerWatcherClosable(closable);
-  dirWatchers.set(dir, closable);
-}
-
 function buildSource(imports: string[]): string {
   return imports
     .map((specifier) => `import ${JSON.stringify(specifier)}\n`)
@@ -231,6 +115,7 @@ interface ResolvedPluginRecord {
 interface RegistryPayload {
   plugins: ResolvedPluginRecord[];
   appEntrypoint: string;
+  splashPath: string;
 }
 
 /**
@@ -342,7 +227,7 @@ function buildRegistryModule(payload: RegistryPayload): string {
   const lines = [
     'import { replacePlugins, registerAppEntrypoint } from "@zenbujs/core/runtime"',
     `replacePlugins(${JSON.stringify(payload.plugins)})`,
-    `registerAppEntrypoint(${JSON.stringify(payload.appEntrypoint)})`,
+    `registerAppEntrypoint(${JSON.stringify(payload.appEntrypoint)}, ${JSON.stringify(payload.splashPath)})`,
     "import.meta.hot?.accept()",
   ];
   return lines.join("\n") + "\n";
@@ -351,17 +236,15 @@ function buildRegistryModule(payload: RegistryPayload): string {
 /**
  * Generate a per-plugin barrel: just service-file imports anchored at the
  * plugin's `dir`. Glob-form entries get expanded via `fs.readdirSync` and
- * a parcel-watcher subscription is opened so dynohot invalidates the
- * barrel when service files are added/removed under the watched directory.
+ * glob directories are registered with `context.hot.watch()` so dynohot
+ * reloads the generated barrel when service files are added/removed.
  */
 function buildPluginBarrel(plugin: ResolvedPluginRecord): {
   source: string;
   watchPaths: Set<string>;
-  globs: BarrelGlob[];
 } {
   const imports: string[] = [];
   const watchPaths = new Set<string>([plugin.dir]);
-  const globs: BarrelGlob[] = [];
 
   for (const entry of plugin.services) {
     const resolved = path.isAbsolute(entry)
@@ -369,9 +252,7 @@ function buildPluginBarrel(plugin: ResolvedPluginRecord): {
       : path.resolve(plugin.dir, entry);
     if (resolved.includes("*")) {
       const dir = path.dirname(resolved);
-      const regex = globRegex(path.basename(resolved));
       watchPaths.add(dir);
-      globs.push({ dir, regex, snapshot: snapshotDir(dir, regex) });
       for (const file of expandGlob(resolved)) {
         imports.push(pathToFileURL(file).href);
       }
@@ -383,7 +264,6 @@ function buildPluginBarrel(plugin: ResolvedPluginRecord): {
   return {
     source: `${buildSource(imports)}import.meta.hot?.accept()\n`,
     watchPaths,
-    globs,
   };
 }
 
@@ -567,23 +447,17 @@ function loadImpl(
         `[zenbu-loader] bad plugin payload: ${(err as Error).message}`,
       );
     }
-    const { source, watchPaths, globs } = buildPluginBarrel(plugin);
+    const { source, watchPaths } = buildPluginBarrel(plugin);
     if (context.hot?.watch) {
       for (const watchPath of watchPaths) {
         context.hot.watch(pathToFileURL(watchPath));
-      }
-    }
-    if (context.hot) {
-      barrels.set(url, { hot: context.hot, globs });
-      for (const glob of globs) {
-        ensureDirWatcher(glob.dir);
       }
     }
     if (verbose) {
       console.log(
         `[zenbu-loader] generated barrel for plugin ${plugin.name} (${
           source.split("\n").filter(Boolean).length
-        } imports, ${watchPaths.size} watches, ${globs.length} globs)`,
+        } imports, ${watchPaths.size} watches)`,
       );
     }
     return {

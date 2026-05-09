@@ -19,9 +19,10 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 /**
- * The app's renderer root is the directory containing the boot-window HTML
- * file (`uiEntrypoint` in `zenbu.config.ts`). Vite's `root` resolves to that
- * directory, and `index.html` is served from there.
+ * The app's renderer root is the `uiEntrypoint` directory in
+ * `zenbu.config.ts`. Vite's `root` resolves to it, and `index.html` inside
+ * it is served through Vite. `splash.html` (sibling) is loaded raw — see
+ * `setup-gate.spawnSplashWindow`.
  *
  * `vite.config.ts` is picked up from the project root if present (sibling
  * of `zenbu.config.ts`).
@@ -30,23 +31,19 @@ async function resolveRendererRoot(): Promise<{
   rendererRoot: string;
   configFile: string | false;
 }> {
-  const entrypoint = getAppEntrypoint();
-  if (!entrypoint) {
+  const rendererRoot = getAppEntrypoint();
+  if (!rendererRoot) {
     throw new Error(
       "[renderer-host] no `uiEntrypoint` registered. " +
         "Set `uiEntrypoint` in zenbu.config.ts before starting the app.",
     );
   }
-
-  const rendererRoot = path.dirname(entrypoint);
   if (!(await pathExists(rendererRoot))) {
     throw new Error(
-      `[renderer-host] uiEntrypoint references ${entrypoint} but ${rendererRoot} does not exist.`,
+      `[renderer-host] uiEntrypoint directory does not exist: ${rendererRoot}.`,
     );
   }
 
-  // `vite.config.ts` lives at the project root (next to zenbu.config.ts).
-  // Walk up from the renderer dir to find it.
   const configPath = process.env.ZENBU_CONFIG_PATH;
   const projectDir = configPath ? path.dirname(configPath) : rendererRoot;
   const viteConfig = path.join(projectDir, "vite.config.ts");
