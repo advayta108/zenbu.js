@@ -1,0 +1,178 @@
+---
+title: Defining a schema
+description: How to declare your plugin's database section using f, z, and defineSchema.
+---
+
+# Defining a schema
+
+Each plugin contributes one schema. By convention it lives at `src/main/schema.ts` and is named `schema`:
+
+```typescript
+// src/main/schema.ts
+import { defineSchema, f, z } from "@zenbujs/core/db"
+
+export const schema = defineSchema({
+  // Top-level fields are addressable as root.plugin["<plugin-name>"].<field>
+  count: f.number().default(0),
+  user: f.object({
+    name: z.string(),
+    email: z.string().email().optional(),
+  }),
+  history: f.array(z.string()).default([]),
+
+  // Kyju extensions
+  log: f.collection(z.object({ id: z.string(), at: z.number(), text: z.string() })),
+  thumbnail: f.blob({ debugName: "thumbnail" }),
+})
+```
+
+Then point your manifest at it:
+
+```json
+{
+  "name": "my-plugin",
+  "services": ["src/main/services/*.ts"],
+  "schema": "src/main/schema.ts"
+}
+```
+
+That's everything for a working schema. The rest of this page is the field-type catalog.
+
+## Top-level fields
+
+Every key on the object passed to `defineSchema(...)` becomes a field in your section. Each field is one of:
+
+- `f.<zodMethod>(...).default(value)` — a wrapper around any zod schema with a default value (the default is inserted by the migration generator).
+- `f.collection(zodSchema)` — a paginated kyju collection. See [Collections](/db/collections).
+- `f.blob()` — an opaque binary blob. See [Blobs](/db/blobs).
+- A bare `z.<...>(...)` — equivalent to `f.<...>(...)` without a default. The field will be `undefined` until written to.
+
+```typescript
+defineSchema({
+  withDefault: f.string().default(""),    // string, defaults to ""
+  noDefault:   f.string(),                // string | undefined
+  bareZod:     z.string(),                // string | undefined (same as noDefault)
+})
+```
+
+## Defaults
+
+Every `f` constructor has a `.default(value)` method. The value is what the migration generator emits when introducing this field for the first time:
+
+```typescript
+{
+  count: f.number().default(0),                    // -> insert 0
+  history: f.array(z.string()).default([]),        // -> insert []
+  user: f.object({ ... }).default({ name: "" }),   // -> insert the object
+}
+```
+
+If you don't set a default, the migration generator emits the field as **undefined**. That's almost always wrong for required fields — generate-time validation will warn you.
+
+## Nullables
+
+`.nullable()` on `f` produces a field that can hold `null`:
+
+```typescript
+{
+  parentId: f.string().nullable().default(null),
+}
+```
+
+The `.default(null)` is required because `null` is not the same as undefined (which is what an unset field is).
+
+## Nested objects
+
+Use `f.object({...})` or `z.object({...})`:
+
+```typescript
+{
+  preferences: f.object({
+    theme: z.enum(["light", "dark", "system"]),
+    fontSize: z.number(),
+  }).default({ theme: "system", fontSize: 14 }),
+}
+```
+
+Nested objects are read/written as a unit. If you `db.update(r => { r.preferences.theme = "dark" })`, only the `theme` field's change is broadcast.
+
+## Records / dictionaries
+
+```typescript
+{
+  windowsByScope: f.record(z.string(), z.object({ x: z.number(), y: z.number() })).default({}),
+}
+```
+
+Reads as `Record<string, { x: number; y: number }>`. Behaves like `Object` semantically — keys come and go.
+
+## Arrays
+
+```typescript
+{
+  log: f.array(z.string()).default([]),
+}
+```
+
+`f.array(...)` is fine for **bounded** arrays — anything that won't grow past a few hundred items. For unbounded data (like an event log or a paginated feed), use a [collection](/db/collections) instead.
+
+## Collections
+
+```typescript
+{
+  notes: f.collection(z.object({ id: z.string(), text: z.string() })),
+}
+```
+
+Collections are kyju's answer to "I have 50,000 rows". They're stored as paginated JSONL files on disk, fetched lazily by id, and accessed with `useCollection(...)` on the renderer. See [Collections](/db/collections).
+
+## Blobs
+
+```typescript
+{
+  thumbnail: f.blob({ debugName: "thumbnail" }),
+}
+```
+
+A blob is an opaque `Uint8Array`. The schema field stores the blob's id (a string); the actual bytes live in a separate file. See [Blobs](/db/blobs).
+
+## Checking the inferred type
+
+It's often useful to assert the static type:
+
+```typescript
+import type { InferSchema } from "@zenbujs/core/db"
+
+type Root = InferSchema<typeof schema>
+//   ^? { count: number; user: { name: string; email?: string }; history: string[]; ... }
+```
+
+This is the type of the per-plugin section root — what you see at `root.plugin["<plugin-name>"]` when reading the database.
+
+## What can change without a migration
+
+The migration generator only emits an op when the on-disk shape changes. So:
+
+- Adding a `.default()` to an existing field with no default: no migration (existing rows already have a value).
+- Reordering keys in `defineSchema(...)`: no migration.
+- Renaming a field: **migration required** (the generator emits an explicit rename op so the data is preserved).
+- Changing a type from `string` to `number`: **migration required, no auto-conversion** (the generator emits a "drop + add" pair; you may need to write a custom migration).
+
+Run `nr zen db generate --name <description>` after every schema change. The generator writes the file; you commit it.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="Collections" icon="layer-group" href="/db/collections">
+    The paginated, lazy-loaded extension to arrays.
+  </Card>
+  <Card title="Blobs" icon="file-image" href="/db/blobs">
+    Opaque binary fields, chunked transfer, and lifecycle.
+  </Card>
+  <Card title="Migrations" icon="arrow-right-arrow-left" href="/db/migrations">
+    How `nr zen db generate` works and what's in the generated files.
+  </Card>
+  <Card title="API reference" icon="book-open" href="/api/core/db">
+    Every public symbol from `@zenbujs/core/db`.
+  </Card>
+</CardGroup>

@@ -1,0 +1,121 @@
+---
+title: API design principles
+description: The rules we use when deciding what's in the public API and what's not.
+---
+
+# API design principles
+
+Every API decision in this framework is one of "yes, this is public," "no, this is internal," or "we haven't decided yet." The first stable release is a forcing function: anything we ship as public, we have to support.
+
+This page is the rule set we use. It's mostly aimed at maintainers and contributors, but it's worth reading for plugin authors too — knowing *why* something is shaped the way it is helps you predict how the rest will be shaped.
+
+## 1. Effect-free public surface
+
+**Promises and plain TypeScript only.** No `Effect.Effect`, no tagged unions for errors, no `Exit`/`Cause`. The framework uses Effect internally where it pulls weight; we don't push that complexity onto plugin authors.
+
+Why:
+
+- Plugin authors shouldn't have to learn Effect to ship a notes app.
+- Mixing Effect and Promises in one codebase creates drift over time.
+- The framework's internals can still benefit from Effect without exposing it.
+
+Mechanism:
+
+- Every Effect-returning function is wrapped at the public boundary into `Promise<...>` or a discriminated-union return type.
+- Effect-tagged errors become plain `Error`s with `err.cause` chains.
+- We may eventually publish a `@zenbujs/core/db/effect` (and similar) subpath as an opt-in for users who actively want Effect.
+
+## 2. One way to do each thing
+
+If a system has more than one way to express the same intent, we pick one. The other is removed (with a deprecation cycle).
+
+Examples of decisions made for v1:
+
+- `Service.with({...})` is the **only** documented way to declare deps. `static deps = {...}` still works but isn't recommended.
+- `defineSchema(...)` is the only schema constructor. The previous `createSchema` alias is being deprecated.
+- `useDisposable(key, fn)` is the only resource-cleanup primitive. The old `setup(key, fn)` is being renamed.
+- `defineBuildConfig({ adapter: liveSource(...) })` is the only way to choose distribution mode. The previous loose top-level `mirror:` and `bundle:` keys are deprecated.
+
+We track these in the [open questions](/reference/open-questions) until the rename ships.
+
+## 3. Type-safe by default; never typed at the call site
+
+If a public API accepts user-defined types, those types come from the [registry](/api/core/registry), not from generic parameters at the call site.
+
+Concretely:
+
+- `useDb()` doesn't take a `<Root>` generic. The root type comes from `ZenbuRegister["db"]`.
+- `useRpc()` doesn't take a router generic. Same reason.
+- `useEvents()` doesn't take an events generic.
+- `usePreload()` doesn't take a preload generic.
+
+The trade-off is that `zen link` has to run before types update. We accept that.
+
+## 4. No "hidden" public APIs
+
+If a symbol is exported from a package and developers can `import` it, **it's public** unless documented otherwise on the API reference page. We've been imprecise about this in the past; v1 fixes it.
+
+Two consequences:
+
+- Pages under `/api/core/*` list both **public** and **explicitly-not-public** exports. The not-public list is enforced — anything you import that's marked not-public is at your own risk.
+- Internal helpers move to `@zenbujs/core/internals/*` over time. This is announced before each move; the deprecation cycle gives you a release to migrate.
+
+## 5. Configuration via objects, not positional arguments
+
+Anything that takes more than one argument takes a single options object:
+
+```typescript
+// Yes:
+this.ctx.views.register({ id: "notes", root, viteConfig })
+inject({ view: "notes", module: "src/content/clock.tsx" }, import.meta)
+advise({ view: "notes", target: {...}, kind: "around", handler: {...} }, import.meta)
+
+// No:
+this.ctx.views.register("notes", root, viteConfig)
+inject("notes", "src/content/clock.tsx", import.meta)
+```
+
+Adding a new option to an existing API should never break callers. Object args allow that; positional args don't.
+
+The exception is single-argument APIs (e.g. `useDb(selector)`). We don't impose object-literal ceremony on those.
+
+## 6. Symmetry between target and handler / between server and client
+
+Where possible, similar concepts share a shape.
+
+- `advise({...})`'s `target` and `handler` both take `{ module, export }`.
+- `db.update(root => ...)` on the server and `useDb(root => ...)` on the client both take a function from `Root`.
+- `defineSchema(...)`, `defineBuildConfig(...)`, and (planned) `defineView(...)` are all identity functions with type validation.
+
+When a user learns one shape, they should be able to predict the others.
+
+## 7. Verbs in module space, nouns at the call site
+
+Module-level helpers are verbs (`advise`, `inject`, `defineSchema`, `connectDb`); the callable surface from a service or component is mostly nouns (`db`, `events`, `views`, `runtime`).
+
+This is an aesthetic preference but a deliberate one — it makes service code read like "the database has a method I can call" rather than "I am invoking a database operation."
+
+## 8. Don't leak frameworks at boundaries
+
+Public APIs don't refer to:
+
+- React types in the main-process surface (`Service`, `db.update`, etc. are all React-agnostic).
+- Electron types in the renderer surface (`useDb`, `useRpc`, etc. don't mention `WebContentsView`, `app`, `BaseWindow`).
+- Vite types in the runtime surface (services don't import from Vite).
+- Effect types anywhere on the public surface.
+
+This makes each boundary independently understandable. It also means we could (in principle) replace any of these implementations without breaking plugins. We probably won't, but the optionality is worth preserving.
+
+## 9. Errors are plain, messages are useful
+
+Public errors are plain `Error` instances with descriptive `message` strings. Cause chains are attached via the `cause` property.
+
+We don't ship typed error hierarchies or tagged-union error types in the public surface. If a method has multiple meaningful failure modes, expose them as different methods (`tryUpdate` vs `update`) or return a discriminated-union result type.
+
+## 10. We make the small change
+
+When two designs are roughly equivalent, we pick the one that's a smaller change from the current code. Even at the cost of slightly worse aesthetics.
+
+Why: framework refactors are paid for *by users* through deprecation churn. The savings have to be real.
+
+A consequence is that a few names you might find ugly (e.g. `setup-gate` rather than `bootstrap`) survive into v1. We're deliberate about which we change and which we don't.

@@ -1,0 +1,4 @@
+.next/
+.mintlify/
+node_modules/
+out/

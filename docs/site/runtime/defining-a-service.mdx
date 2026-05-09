@@ -1,0 +1,179 @@
+---
+title: Defining a service
+description: How to write a custom service, register it with the runtime, and depend on others.
+---
+
+# Defining a service
+
+A service is a class that extends [`Service`](/api/core/runtime#service) and is registered with the [`runtime`](/api/core/runtime#runtime) singleton. Here's the full shape:
+
+```typescript
+import { Service, runtime } from "@zenbujs/core/runtime"
+import { DbService, HttpService } from "@zenbujs/core/services"
+
+export class MyService extends Service.with({
+  db: DbService,
+  http: HttpService,
+}) {
+  static key = "my-service"
+
+  async start() {
+    // Initialization that runs once after all deps are ready.
+    // Throw or `await` here as you like — the runtime won't mark you ready
+    // until this resolves.
+    this.useDisposable("watcher", () => this.openWatcher())
+  }
+
+  // Any `async` method whose name doesn't start with `_`
+  // is automatically exposed as `rpc["my-service"].<name>(...)` from the renderer.
+  async doThing(arg: string) {
+    // ...
+  }
+
+  // Private to the main process. Not exposed to RPC.
+  private async openWatcher() {
+    // ...
+    return () => { /* cleanup */ }
+  }
+}
+
+runtime.register(MyService, import.meta)
+```
+
+That's the entire shape. Every concept below maps onto a piece of this snippet.
+
+## The class declaration
+
+`Service.with({...})` is a static helper that returns a base class with two superpowers:
+
+1. The map you pass in becomes `static deps`. The runtime uses this to compute the dependency graph and start order.
+2. `this.ctx` is auto-typed to match the map. `this.ctx.db` is a `DbService`, `this.ctx.http` is an `HttpService`. No `declare ctx: { ... }` boilerplate.
+
+If you have **no** dependencies, you can extend `Service` directly:
+
+```typescript
+export class StandaloneService extends Service {
+  static key = "standalone"
+  async start() {}
+}
+```
+
+## The `static key`
+
+Every service has a globally unique string key. Rules:
+
+- Two services in the same process **cannot share a key**. Registering a duplicate replaces the previous registration; the runtime tears down the old instance and starts the new one. This is the same code path HMR uses, which is intentional.
+- The key is what shows up in `rpc.<key>.<method>` on the renderer.
+- Convention: lowercase, kebab-case, plugin-prefixed when useful (`my-plugin:agents` instead of just `agents`).
+
+## `start()`
+
+`start()` is the lifecycle method the runtime calls after all of your deps are ready. Use it for initialization that needs the deps available — opening sockets, kicking off watchers, registering listeners on other services.
+
+You can return a Promise; the runtime awaits it before marking your service `ready`. Other services that depend on you wait for that.
+
+If you only need lightweight synchronous setup, you can skip `start()` entirely. Methods can use `this.ctx.<dep>` from the moment they're called, regardless of whether `start()` ran.
+
+<Note>
+**Why isn't this called `constructor` or `evaluate`?** It used to be `evaluate()` (an Emacs-Lisp homage); we renamed it to `start()` because that's the name JavaScript developers reach for and it makes the lifecycle more obvious. `constructor` is reserved for object construction, and the runtime needs to be able to inject `this.ctx` between construction and lifecycle, which means `start()` has to be a separate phase.
+</Note>
+
+## `useDisposable(key, fn)`
+
+Many services need to open a resource and close it later — a port, a watcher, a subscription. The framework gives you one primitive for this:
+
+```typescript
+async start() {
+  this.useDisposable("ws-listener", () => {
+    const handle = this.ctx.http.onConnected(socket => { /* ... */ })
+    return () => handle.close()   // teardown, called on reload + shutdown
+  })
+}
+```
+
+The function you pass runs immediately; the function it returns is the teardown. The `key` is for HMR: if the service hot-reloads and you call `useDisposable("ws-listener", ...)` again, the previous instance's teardown runs first. If you stop calling it after a reload, the teardown still runs.
+
+You can register as many disposables as you want. They're torn down in registration order on reload, reverse-registration order on shutdown.
+
+<Note>
+**Naming.** This was previously `setup()`, which collides with `setupGate()`, `setup.ts` plugin scripts, and a half-dozen other "setup"-flavored words in the system. We renamed it to `useDisposable()` to make the resource-management semantics explicit. If we ship a one-shot variant later (run once, no teardown) it'll be `useEffect()` — same shape as React's, deliberately.
+
+A migration shim that re-exports `setup()` as a deprecated alias will live for one minor release.
+</Note>
+
+## Async methods become RPC
+
+If a method is `async` (or returns a Promise) and its name doesn't start with `_`, it's automatically reachable from the renderer:
+
+```typescript
+// Service:
+async doThing(arg: string): Promise<{ ok: true }> { /* ... */ }
+
+// Renderer:
+const result = await rpc["my-service"].doThing("hello")
+// result is { ok: true }, fully typed.
+```
+
+That's the whole RPC story for service-defined procedures. See [RPC overview](/rpc/overview) for the model in more depth.
+
+To mark a method as **not RPC-callable**, prefix it with an underscore:
+
+```typescript
+async _internalHelper() {} // not exposed
+```
+
+Or make it `private` — the runtime introspects own-property descriptors, so `private` methods aren't exposed either.
+
+## Synchronous methods
+
+Sync methods are not currently exposed as RPC (the wire is async by definition). If you have a sync method other services depend on:
+
+```typescript
+get count(): number {
+  return this._count
+}
+```
+
+— that's fine. The dependent service can call `this.ctx.myService.count` directly, no awaits. Just don't expect the renderer to read it.
+
+## Registering with the runtime
+
+The last line of every service file:
+
+```typescript
+runtime.register(MyService, import.meta)
+```
+
+The `import.meta` is **load-bearing**. The runtime uses it as a hot-reload anchor: when the file's source changes, the runtime knows to swap the class in this slot rather than register an additional one. Without `import.meta`, hot reload still mostly works, but a save on this file would *add* a new registration instead of replacing the old one — which over time leaks duplicate registrations.
+
+## A complete example
+
+```typescript
+// src/main/services/clock.ts
+import { Service, runtime } from "@zenbujs/core/runtime"
+import { DbService, Events } from "@zenbujs/core/services"
+
+export class ClockService extends Service.with({
+  db: DbService,
+  events: Events,
+}) {
+  static key = "clock"
+
+  async start() {
+    this.useDisposable("tick", () => {
+      const id = setInterval(() => {
+        this.ctx.events.clock.tick({ at: Date.now() })
+      }, 1000)
+      return () => clearInterval(id)
+    })
+  }
+
+  async getCurrentTime(): Promise<{ at: number }> {
+    return { at: Date.now() }
+  }
+}
+
+runtime.register(ClockService, import.meta)
+```
+
+That's a fully-functional, hot-reloadable, RPC-callable, event-emitting service in 18 lines.

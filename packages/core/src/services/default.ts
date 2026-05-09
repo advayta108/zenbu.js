@@ -15,11 +15,5 @@ export async function defaultServices(): Promise<void> {
   await import("./rpc");
   await import("./view-registry");
   await import("./window");
-  await import("./installer");
-  await import("./registry");
   await import("./advice-config");
-  await import("./local-file-protocol");
-  await import("./runtime-control");
-  await import("./debug");
-  await import("./file-scanner");
 }

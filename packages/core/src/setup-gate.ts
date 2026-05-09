@@ -15,9 +15,16 @@ type PackageJson = {
   };
 };
 
+type ElectronEvent = { preventDefault(): void };
 type ElectronApp = {
   getAppPath(): string;
   whenReady(): Promise<void>;
+  on(event: "before-quit", listener: (event: ElectronEvent) => void): void;
+  exit(code?: number): void;
+};
+
+type DynohotPauseModule = {
+  closeAllWatchers?: () => void | Promise<void>;
 };
 
 const verbose = process.env.ZENBU_VERBOSE === "1";
@@ -67,6 +74,11 @@ function loadElectronApp(): ElectronApp {
     );
   }
   return electron.app;
+}
+
+async function closeRegisteredWatchers(): Promise<void> {
+  const pause = (await import("dynohot/pause")) as DynohotPauseModule;
+  await pause.closeAllWatchers?.();
 }
 
 async function registerLoaders(tsconfig: string | false, projectRoot: string): Promise<void> {
@@ -134,6 +146,38 @@ export async function setupGate(): Promise<void> {
   await registerLoaders(tsconfig, projectRoot);
   const { defaultServices } = await import("./services/default");
   await defaultServices();
+
+  // Drain services and native watchers before Electron starts tearing down
+  // Node. This covers Cmd+Q and terminal Ctrl+C, which does not fire
+  // `before-quit`.
+  let shuttingDown = false;
+  const shutdown = async (exitCode = 0): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try {
+      const rt = (
+        globalThis as {
+          __zenbu_service_runtime__?: { shutdown(): Promise<void> };
+        }
+      ).__zenbu_service_runtime__;
+      await rt?.shutdown();
+    } catch (err) {
+      console.error("[setup-gate] shutdown failed:", err);
+    }
+    try {
+      await closeRegisteredWatchers();
+    } catch (err) {
+      console.error("[setup-gate] closeAllWatchers failed:", err);
+    }
+    app.exit(exitCode);
+  };
+  app.on("before-quit", (event) => {
+    if (shuttingDown) return;
+    event.preventDefault();
+    void shutdown(0);
+  });
+  process.on("SIGINT", () => void shutdown(0));
+  process.on("SIGTERM", () => void shutdown(0));
 
   const url = `zenbu:plugins?config=${encodeURIComponent(configPath)}`;
   const mod = await import(url, { with: { hot: "import" } });

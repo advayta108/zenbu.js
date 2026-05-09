@@ -1,0 +1,158 @@
+---
+title: RPC overview
+description: How services automatically expose typed remote procedures to renderers, with no router boilerplate.
+---
+
+# RPC overview
+
+Zenbu's RPC layer has one design rule: **a service's public async methods are its RPC endpoints, period.** No `@expose` decorators, no separate router file, no schema duplication. The signature on the service is the signature on the wire.
+
+```typescript
+// src/main/services/notes.ts
+export class NotesService extends Service.with({ db: DbService }) {
+  static key = "notes"
+
+  async list(): Promise<Note[]> {
+    return this.ctx.db.read().plugin["notes-plugin"].notes.items
+  }
+
+  async add(text: string): Promise<{ id: string }> {
+    const id = nanoid()
+    await this.ctx.db.update(r => r.plugin["notes-plugin"].notes.concat([{ id, text }]))
+    return { id }
+  }
+}
+```
+
+```tsx
+// src/renderer/AddNote.tsx
+import { useRpc } from "@zenbujs/core/react"
+
+function AddNote() {
+  const rpc = useRpc()
+  return <button onClick={() => rpc.notes.add("hello")}>Add</button>
+}
+```
+
+`rpc.notes.add(...)` is fully typed: argument types, return types, even thrown error shapes. No code generation step — TypeScript sees through to the source service via the [registry](/rpc/typed-registry).
+
+## What gets exposed
+
+A method on a service is exposed to RPC if **all four** of these are true:
+
+1. It's defined on the class (own-property of the prototype, not inherited from `Service`).
+2. Its name does not start with `_`.
+3. It's not marked `private`.
+4. It's a function (i.e., not a getter/setter — those aren't RPC-callable).
+
+In practice: any normal method you'd write is exposed; mark the ones you want hidden with a leading `_` or `private`.
+
+## What the framework does
+
+When the runtime starts (or any service registers/unregisters), `RpcService` walks the registered services and builds a router:
+
+```
+{
+  "notes": {
+    "list": fn,
+    "add": fn,
+  },
+  "counter-app": {
+    "increment": fn,
+    "reset": fn,
+  },
+  // ...
+}
+```
+
+The router is the single thing the websocket protocol exposes to renderers. Renderers sees:
+
+- A typed proxy to the router (`useRpc()`).
+- A typed proxy to the events tree (`useEvents()`).
+- A live replica of the database (`useDb()`).
+
+All three multiplex over the same websocket.
+
+## Sync vs async methods
+
+Async methods are RPC-callable; sync methods are not:
+
+```typescript
+class FooService extends Service {
+  static key = "foo"
+
+  // Exposed as rpc.foo.compute(...). Returns Promise<number>.
+  async compute(): Promise<number> { return 42 }
+
+  // NOT exposed. Only callable from inside the main process.
+  syncCompute(): number { return 42 }
+}
+```
+
+If you want a method that's available to other services synchronously *and* via RPC, write it twice (once sync, once async wrapper):
+
+```typescript
+get count(): number { return this._count }
+
+async getCount(): Promise<number> { return this._count }
+```
+
+This is rare; usually one is sufficient.
+
+## Argument and return types
+
+Arguments and return values are serialized with the framework's JSON serializer. Supported types:
+
+- All JSON-native types (string, number, boolean, null, array, object).
+- `undefined` (collapsed to "missing field").
+- `Date` (round-trips correctly).
+- `Uint8Array` (transferred as base64).
+- Plain objects with the above as keys/values.
+
+Not supported:
+
+- Functions (cannot be serialized).
+- Classes / instances (you lose the prototype).
+- `Map`, `Set` (use plain objects/arrays).
+- `bigint` (planned; not yet).
+
+If you need to return something fancy, return a plain object with the relevant fields and re-construct on the client.
+
+## Errors
+
+A method that throws causes the renderer's promise to reject with an `Error` whose `message` matches the server-side message:
+
+```typescript
+// Service:
+async deleteNote(id: string) {
+  const exists = this.ctx.db.read().plugin["notes-plugin"].notes.has(id)
+  if (!exists) throw new Error(`Note ${id} does not exist`)
+  // ...
+}
+
+// Renderer:
+try {
+  await rpc.notes.deleteNote("nope")
+} catch (err) {
+  err.message  // "Note nope does not exist"
+}
+```
+
+Stack traces and `cause` chains are not currently transferred (security-by-default; you can opt in via the [`debug` service](/api/core/runtime#built-in-services) if you need them in dev).
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="Calling procedures" icon="play" href="/rpc/calling-procedures">
+    Patterns for calling RPC from React, from other plugins, and from CLI tools.
+  </Card>
+  <Card title="Events" icon="tower-broadcast" href="/rpc/events">
+    Server-to-client streams: defining, emitting, subscribing.
+  </Card>
+  <Card title="Typed registry" icon="link" href="/rpc/typed-registry">
+    How `zen link` makes `useRpc()` typed end-to-end.
+  </Card>
+  <Card title="API reference" icon="book-open" href="/api/core/rpc">
+    The strict public surface of `@zenbujs/core/rpc`.
+  </Card>
+</CardGroup>

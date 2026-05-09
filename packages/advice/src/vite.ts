@@ -1,6 +1,6 @@
 import type { Plugin, TransformResult } from "vite"
 import { transformSync } from "@babel/core"
-import zenbuAdviceTransform from "./transform/index.ts"
+import zenbuAdviceTransform from "./transform/index"
 
 export interface ZenbuAdvicePluginOptions {
   root?: string

@@ -137,7 +137,7 @@ describe("migration plugin (operations-based)", () => {
 
     const nextSchema = createSchema({
       title: f.string().default(""),
-      items: f.collection<{ id: string }>(),
+      items: f.collection(zod.object({ id: zod.string() })),
     });
 
     const migrations: KyjuMigration[] = [
@@ -195,7 +195,7 @@ describe("migration plugin (operations-based)", () => {
 
     const initialSchema = createSchema({
       title: f.string().default("hi"),
-      logs: f.collection<{ msg: string }>(),
+      logs: f.collection(zod.object({ msg: zod.string() })),
     });
 
     await createDb({
@@ -234,6 +234,14 @@ describe("migration plugin (operations-based)", () => {
     const dbPath = tmpDbPath();
     cleanupPath = dbPath;
 
+    // `add` is idempotent: it only seeds a key when it's missing. The
+    // schema's `count.default(0)` runs via `buildSchemaRoot` and puts
+    // count=0 on disk; the migration's `add count default 42` is a
+    // no-op because `count` already exists. The `default: 42` here is
+    // contrived — `zen db generate` always emits the schema's own
+    // default into the migration, so the schema-bootstrap value and
+    // the migration value agree in real flows. This test only locks
+    // in the "second open is a no-op" guarantee.
     const schema = createSchema({
       title: f.string().default(""),
       count: f.number().default(0),
@@ -253,7 +261,7 @@ describe("migration plugin (operations-based)", () => {
     const { replica } = await openDb(dbPath, schema, migrations);
     const client = createClient<InferSchema<typeof schema>>(replica);
 
-    expect(client.count.read()).toBe(42);
+    expect(client.count.read()).toBe(0);
   });
 
   it("complex defaults (objects, arrays) applied correctly", async () => {
@@ -653,12 +661,18 @@ describe("applyOperations (unit)", () => {
     expect(result.count).toBe(42);
   });
 
-  it("add overwrites existing key (migration default takes precedence over schema init)", () => {
-    const data = { mode: "schema-default" };
+  it("add is idempotent: existing key is preserved (schema-init survives migration replay)", () => {
+    // Why this matters: schema-bootstrap and the v0→v1 migration both
+    // target the same key during a section's very first boot after a
+    // user runs `zen db generate`. If `add` were destructive, the
+    // migration replay would silently reset whatever data the user
+    // accumulated under the schema-bootstrap defaults. `alter` is the
+    // explicit op for "force this key to a new value".
+    const data = { mode: "user-data" };
     const result = applyOperations(data, [
       { op: "add", key: "mode", kind: "data", hasDefault: true, default: "migration-default" },
     ]);
-    expect(result.mode).toBe("migration-default");
+    expect(result.mode).toBe("user-data");
   });
 
   it("add sets value for missing key", () => {

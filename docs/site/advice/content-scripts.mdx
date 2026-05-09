@@ -1,0 +1,104 @@
+---
+title: Content scripts
+description: Injecting code into another plugin's view at runtime.
+---
+
+# Content scripts
+
+A content script is a TypeScript/TSX module that the framework injects into a target view's runtime. The injected code runs alongside the view's own code with full access to the DOM, React tree, and Zenbu hooks (`useDb`, `useRpc`, etc.).
+
+If you've written a Chrome extension content script — same idea. The difference is that Zenbu doesn't sandbox content scripts; they share the React tree with the host.
+
+## Registering
+
+```typescript
+import { Service, runtime } from "@zenbujs/core/runtime"
+import { inject } from "@zenbujs/core/advice"
+
+export class ClockOverlayService extends Service {
+  static key = "clock-overlay"
+
+  async start() {
+    this.useDisposable("clock", () =>
+      inject({
+        view: "notes",                            // target view scope
+        module: "src/content/clock.tsx",          // path relative to plugin root
+      }, import.meta),
+    )
+  }
+}
+
+runtime.register(ClockOverlayService, import.meta)
+```
+
+The `import.meta` argument lets the framework resolve the relative path against your plugin's root (the directory containing your `zenbu.plugin.json`). Pass an absolute path to skip that.
+
+## Writing the content script
+
+The content script is just a regular TS/TSX file:
+
+```tsx
+// src/content/clock.tsx
+import { createRoot } from "react-dom/client"
+import { useEffect, useState } from "react"
+
+function Clock() {
+  const [now, setNow] = useState(new Date())
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  return <div style={{ position: "fixed", top: 8, right: 8 }}>{now.toLocaleTimeString()}</div>
+}
+
+const host = document.createElement("div")
+document.body.appendChild(host)
+createRoot(host).render(<Clock />)
+```
+
+Notes:
+
+- The script runs **after** the host view's main bundle has loaded.
+- It has access to `window`, `document`, and any global the host set up.
+- It can `import` other modules (Vite handles resolution per-view).
+- It can `import` from `@zenbujs/core/react` (`useDb`, `useRpc`, etc.) — but be inside a `<ZenbuProvider>` to use the hooks. The host view's tree already provides one; if you're rendering into a portal, you may need to wrap explicitly.
+
+## Targeting all views
+
+Pass `view: "*"` to inject into every registered view:
+
+```typescript
+inject({ view: "*", module: "src/content/global-overlay.tsx" }, import.meta)
+```
+
+Use sparingly — global overlays show up everywhere, including system panels, debug views, etc.
+
+## Multiple content scripts
+
+You can register as many as you want; the framework runs them in registration order. To remove one, call its returned unregister:
+
+```typescript
+const remove = inject({ view: "notes", module: "src/content/a.tsx" }, import.meta)
+// later:
+remove()
+```
+
+When wrapped in `useDisposable`, the framework handles teardown automatically.
+
+## Hot reload
+
+When your content script's source changes, Vite HMR applies inside the targeted view. When the **registration set** changes (you added or removed an `inject(...)` call), the framework reloads the affected views entirely (full page reload, not React refresh) — the prelude module that aggregates all content scripts needs to re-evaluate.
+
+Both behaviors are usually invisible: save and watch.
+
+## Invariants
+
+- A content script is loaded **once per view, per scope match**. If two plugins both inject into `notes`, both scripts run, in registration order.
+- Content scripts run in the view's process. They can't directly call other views' code.
+- Anything a content script puts into the view's DOM is the content script's responsibility to clean up. The framework can't know what you appended.
+
+## Anti-patterns
+
+- **Don't inject heavy logic.** A content script that runs a 500-line analysis on every render makes the host view sluggish. Move heavy work to a main-process service and read the result via `useDb`.
+- **Don't manipulate the host's React tree directly.** Use a portal or a sibling container. Reaching into the host's components via DOM mutation works briefly and breaks on the next host re-render.
+- **Don't assume the host's framework.** If the host is React, fine — but a non-React host won't have hooks. Test against the actual host, or restrict to scopes you know are React-based.

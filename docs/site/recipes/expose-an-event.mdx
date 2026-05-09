@@ -1,0 +1,85 @@
+---
+title: Expose an event
+description: Adding a typed event topic and emitting it from a service.
+---
+
+# Expose an event
+
+Three steps: declare the type, point the manifest at it, emit from a service.
+
+## 1. Declare the event type
+
+```typescript
+// src/main/events.ts
+export type Events = {
+  noteAdded: { id: string; text: string; at: number }
+}
+```
+
+If you want nested namespacing inside this plugin's namespace:
+
+```typescript
+export type Events = {
+  notes: {
+    added: { id: string; text: string }
+    deleted: { id: string }
+  }
+}
+```
+
+Subscribers see this as `events["my-plugin"].notes.added.subscribe(cb)`.
+
+## 2. Point the manifest at it
+
+```json
+{
+  "name": "my-plugin",
+  "events": "src/main/events.ts",
+  "services": ["src/main/services/*.ts"]
+}
+```
+
+Save and the framework picks it up. (The dev server re-runs `zen link` automatically; `useEvents()` types update on the next renderer reload.)
+
+## 3. Emit from a service
+
+```typescript
+import { Service, runtime } from "@zenbujs/core/runtime"
+import { DbService, Events } from "@zenbujs/core/services"
+
+export class NotesService extends Service.with({ db: DbService, events: Events }) {
+  static key = "notes"
+
+  async add(text: string) {
+    const id = nanoid()
+    await this.ctx.db.update(r => r.plugin["my-plugin"].notes.concat([{ id, text }]))
+    this.ctx.events["my-plugin"].noteAdded({ id, text, at: Date.now() })
+    return { id }
+  }
+}
+```
+
+## 4. Subscribe from the renderer
+
+```tsx
+import { useEffect } from "react"
+import { useEvents } from "@zenbujs/core/react"
+
+function NoteToast() {
+  const events = useEvents()
+  useEffect(
+    () =>
+      events["my-plugin"].noteAdded.subscribe(({ id, text }) => {
+        showToast(`Added: ${text}`)
+      }),
+    [events],
+  )
+  return null
+}
+```
+
+The unsubscribe function returned by `subscribe` is the cleanup; pair it with `useEffect`'s return.
+
+## When *not* to use an event
+
+Events are for one-shot signals. If the data has lifetime longer than "right now," put it in the database and read with `useDb`. See [Events overview](/rpc/events) for the full rationale.

@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "pnpm --filter @zenbu/kernel start",
     "pack:local": "rm -rf dist/packages && mkdir -p dist/packages && pnpm --filter @zenbujs/core build && pnpm -C packages/core pack --pack-destination ../../dist/packages && pnpm --filter @zenbujs/cli build && pnpm -C packages/zen pack --pack-destination ../../dist/packages",
     "typecheck": "pnpm -r --no-bail run typecheck",
     "lint": "pnpm -r --no-bail run lint",

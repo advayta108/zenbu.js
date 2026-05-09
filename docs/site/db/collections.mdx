@@ -1,0 +1,117 @@
+---
+title: Collections
+description: Paginated, lazy-loaded arrays for datasets too large to keep in the root cache.
+---
+
+# Collections
+
+A **collection** is the right choice when you have more than a few hundred items, or when items can be loaded lazily by id. Use cases: a chat log, an inbox, a list of files in a directory, an event timeline.
+
+Collections live next to your section's JSON files but are stored as **paginated JSONL** — one record per line, broken across files of N records each. The framework loads pages on demand.
+
+## Declaring a collection
+
+```typescript
+import { defineSchema, f, z } from "@zenbujs/core/db"
+
+export const schema = defineSchema({
+  notes: f.collection(z.object({
+    id: z.string(),
+    text: z.string(),
+    createdAt: z.number(),
+  })),
+})
+```
+
+The schema field doesn't store the items themselves — it stores a typed reference to the collection (`{ collectionId: string; debugName: string }`). The items live on disk under `<dbPath>/collections/<collectionId>/`.
+
+## Adding items
+
+Use `db.update(...)` and call `concat` on the collection field:
+
+```typescript
+const id = nanoid()
+await this.ctx.db.update(root => {
+  root.plugin["notes-plugin"].notes.concat([
+    { id, text: "first note", createdAt: Date.now() },
+  ])
+})
+```
+
+`concat` appends one or more items as a single page-write. The id you provide is yours — Kyju doesn't generate ids automatically (use [`nanoid`](https://github.com/ai/nanoid) or your favorite generator).
+
+## Reading on the server
+
+```typescript
+const notes = await this.ctx.db.collection(root.plugin["notes-plugin"].notes).all()
+```
+
+`db.collection(ref)` opens a server-side reader for the collection. It exposes:
+
+- `.all(): Promise<Item[]>` — read every item (use only when you know the size is small).
+- `.page(offset, limit): Promise<Item[]>` — read a slice.
+- `.get(id): Promise<Item | null>` — read one item by id.
+- `.delete(id): Promise<void>` — remove an item.
+- `.replace(id, item): Promise<void>` — overwrite an item.
+
+## Reading on the client
+
+```typescript
+import { useDb, useCollection } from "@zenbujs/core/react"
+
+function NoteList() {
+  const ref = useDb(root => root.plugin["notes-plugin"].notes)
+  const { items, concat } = useCollection(ref)
+  return (
+    <ul>
+      {items.map(n => <li key={n.id}>{n.text}</li>)}
+    </ul>
+  )
+}
+```
+
+`useCollection(ref)` returns:
+
+- `items: Item[]` — the currently-loaded items.
+- `collection: CollectionNode | null` — the underlying client collection (advanced; loaded pages, etc.).
+- `concat(items: Item[]): void` — optimistic append; sends a write to the server and updates locally.
+
+The hook starts from the most recent page and walks backward as you scroll. Pagination triggers — "load more on scroll near top" — are your responsibility for now; we may add a `loadOlder()` helper in a future minor.
+
+## Deleting and updating
+
+There is intentionally **no** "update item by index" — items are addressed by their id only:
+
+```typescript
+await this.ctx.db.collection(root.plugin["notes-plugin"].notes).delete("note_3")
+
+await this.ctx.db.collection(root.plugin["notes-plugin"].notes).replace("note_4", {
+  id: "note_4",
+  text: "edited",
+  createdAt: Date.now(),
+})
+```
+
+This keeps the on-disk page format append-only, which avoids whole-page rewrites for the common case.
+
+## Why not just use `f.array(...)`?
+
+`f.array(...)` keeps every element in the section's root JSON. That JSON is the unit of read/write/replicate, so a 10MB array means 10MB to send across the wire on every change. Collections fix this by:
+
+- Splitting into JSONL pages (default 1000 items per page),
+- Loading pages on demand,
+- Broadcasting only the affected page on a write,
+- Replicating just the *index* (collection id) on the renderer's root, plus any pages that view actively reads.
+
+Rule of thumb: if you can't fit the entire dataset in a single React `<ul>` without virtualization, you want a collection.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="Blobs" icon="file-image" href="/db/blobs">
+    The other "don't put it in the root" data type — opaque binary.
+  </Card>
+  <Card title="API reference" icon="book-open" href="/api/core/db#collections">
+    Every method on `db.collection(...)` and `useCollection(...)`.
+  </Card>
+</CardGroup>

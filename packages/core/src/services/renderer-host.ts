@@ -3,7 +3,6 @@ import path from "node:path";
 import { Service, runtime } from "../runtime";
 import { ReloaderService } from "./reloader";
 import { ViewRegistryService } from "./view-registry";
-import { mark } from "../shared/tracer";
 import { createLogger } from "../shared/log";
 
 const log = createLogger("renderer-host");
@@ -107,8 +106,10 @@ export class RendererHostService extends Service {
 
   async evaluate() {
     const { rendererRoot, configFile } = await resolveRendererRoot();
-    const entry = await this.trace("renderer-reloader-create", () =>
-      this.ctx.reloader.create(APP_RENDERER_RELOADER_ID, rendererRoot, configFile),
+    const entry = await this.ctx.reloader.create(
+      APP_RENDERER_RELOADER_ID,
+      rendererRoot,
+      configFile,
     );
     this.url = entry.url;
     this.port = entry.port;
@@ -117,7 +118,6 @@ export class RendererHostService extends Service {
       label: "App",
     });
 
-    mark("renderer-ready", { url: this.url });
     log.verbose(`ready at ${this.url}`);
   }
 }

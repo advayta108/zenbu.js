@@ -1,0 +1,206 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Zenbu.js",
+  "description": "A JavaScript framework for building extensible, live-editable desktop apps.",
+  "colors": {
+    "primary": "#1F6FEB",
+    "light": "#79B8FF",
+    "dark": "#0B5EC9"
+  },
+  "favicon": "/logo.svg",
+  "logo": {
+    "light": "/logo.svg",
+    "dark": "/logo.svg"
+  },
+  "navbar": {
+    "links": [
+      { "label": "GitHub", "href": "https://github.com/zenbu-org/zenbu" },
+      { "label": "Discord", "href": "https://discord.gg/t3jzHHfc6z" }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get started",
+      "href": "/quickstart"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/zenbu-org/zenbu",
+      "discord": "https://discord.gg/t3jzHHfc6z"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Get started",
+            "icon": "play",
+            "pages": [
+              "introduction",
+              "why-zenbu",
+              "quickstart",
+              "mental-model"
+            ]
+          },
+          {
+            "group": "Plugins",
+            "icon": "puzzle-piece",
+            "pages": [
+              "plugins/overview",
+              "plugins/manifest",
+              "plugins/creating-a-plugin",
+              "plugins/installing-and-managing",
+              "plugins/inter-plugin-deps"
+            ]
+          },
+          {
+            "group": "Runtime & services",
+            "icon": "circle-nodes",
+            "pages": [
+              "runtime/overview",
+              "runtime/defining-a-service",
+              "runtime/dependencies",
+              "runtime/lifecycle",
+              "runtime/hot-reload",
+              "runtime/runtime-control"
+            ]
+          },
+          {
+            "group": "Database",
+            "icon": "database",
+            "pages": [
+              "db/overview",
+              "db/defining-a-schema",
+              "db/collections",
+              "db/blobs",
+              "db/migrations",
+              "db/using-on-server",
+              "db/using-on-client"
+            ]
+          },
+          {
+            "group": "RPC & events",
+            "icon": "satellite-dish",
+            "pages": [
+              "rpc/overview",
+              "rpc/calling-procedures",
+              "rpc/events",
+              "rpc/typed-registry"
+            ]
+          },
+          {
+            "group": "Preloads",
+            "icon": "bolt",
+            "pages": [
+              "preloads/overview",
+              "preloads/defining-a-preload",
+              "preloads/using-preloads"
+            ]
+          },
+          {
+            "group": "Views",
+            "icon": "window-restore",
+            "pages": [
+              "views/overview",
+              "views/defining-a-view",
+              "views/panel-options",
+              "views/opening-and-managing"
+            ]
+          },
+          {
+            "group": "Advice (AOP)",
+            "icon": "wand-magic-sparkles",
+            "pages": [
+              "advice/overview",
+              "advice/content-scripts",
+              "advice/function-advice",
+              "advice/ordering-and-removal"
+            ]
+          },
+          {
+            "group": "Build & distribution",
+            "icon": "box-archive",
+            "pages": [
+              "build/overview",
+              "build/define-build-config",
+              "build/transforms",
+              "build/live-source-adapter",
+              "build/frozen-source-adapter",
+              "build/publishing"
+            ]
+          },
+          {
+            "group": "Boot & app config",
+            "icon": "rocket",
+            "pages": [
+              "boot/overview",
+              "boot/app-config",
+              "boot/setup-gate",
+              "boot/customizing-boot"
+            ]
+          },
+          {
+            "group": "Recipes",
+            "icon": "book",
+            "pages": [
+              "recipes/add-rpc-procedure",
+              "recipes/add-schema-field",
+              "recipes/expose-an-event",
+              "recipes/share-state-between-plugins",
+              "recipes/wrap-someone-elses-function",
+              "recipes/migrate-from-effect"
+            ]
+          },
+          {
+            "group": "Reference",
+            "icon": "book-open",
+            "pages": [
+              "reference/api-design-principles",
+              "reference/open-questions",
+              "reference/glossary"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API reference",
+        "groups": [
+          {
+            "group": "@zenbujs/core",
+            "pages": [
+              "api/core/runtime",
+              "api/core/db",
+              "api/core/rpc",
+              "api/core/events",
+              "api/core/preloads",
+              "api/core/advice",
+              "api/core/views",
+              "api/core/react",
+              "api/core/registry",
+              "api/core/setup-gate"
+            ]
+          },
+          {
+            "group": "@zenbujs/cli",
+            "pages": [
+              "api/cli/zen",
+              "api/cli/build",
+              "api/cli/launcher"
+            ]
+          },
+          {
+            "group": "Plugin manifest",
+            "pages": [
+              "api/manifest/zenbu-plugin-json",
+              "api/manifest/config-json",
+              "api/manifest/zenbu-build-ts"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,148 @@
+---
+title: setup-gate
+description: The framework's main-process entrypoint, what it does, and how to override pieces of it.
+---
+
+# `setup-gate.mjs`
+
+`setup-gate.mjs` is what `package.json#main` points at in a Zenbu app (when using `liveSource()`). It's the framework's main-process entrypoint and runs every step described in the [boot overview](/boot/overview).
+
+For the vast majority of plugin authors, you never invoke it manually and never override anything inside it. This page documents the contract for the cases when you do.
+
+## The entrypoint
+
+```typescript
+// Equivalent of @zenbujs/core/dist/setup-gate.mjs (simplified)
+import { setupGate } from "@zenbujs/core/setup-gate"
+await setupGate()
+```
+
+`setupGate()` is exported from `@zenbujs/core/setup-gate` so power users can call it themselves with custom pre-work:
+
+```typescript
+// custom-main.mjs
+import { setupGate } from "@zenbujs/core/setup-gate"
+import { mySplashScreen } from "./splash"
+
+await mySplashScreen()
+await setupGate()
+```
+
+Then point `package.json#main` at `custom-main.mjs`.
+
+## What `setupGate()` does
+
+```typescript
+async function setupGate() {
+  const app = loadElectron()
+  await app.whenReady()
+  bootstrapEnv()
+
+  const projectRoot = resolveProjectRoot()
+  const configPath = resolveConfigPath(projectRoot)
+  process.chdir(projectRoot)
+  process.env.ZENBU_CONFIG_PATH = configPath
+
+  await registerLoaders(tsconfig, projectRoot)
+  await loadDefaultServices()
+  await importPluginBarrel(configPath)
+
+  registerShutdownHandlers(app)
+  await runtime.whenIdle()
+}
+```
+
+Each step:
+
+1. **`loadElectron`** — `require("electron")`, get the `app` object. Exits with a clear error if not running inside Electron.
+2. **`whenReady()`** — wait for Electron's ready event before doing anything that touches windows or APIs.
+3. **`bootstrapEnv()`** — populate `process.env` with framework paths.
+4. **`resolveProjectRoot`** — read `--project=` CLI flag or fall back to `~/.zenbu/apps/<name>/`.
+5. **`resolveConfigPath`** — find `config.json` in the project root.
+6. **`registerLoaders`** — install the Zenbu loader, tsx, advice transform, and dynohot.
+7. **`loadDefaultServices`** — `import("@zenbujs/core/services/default")` to register the framework's built-in services.
+8. **`importPluginBarrel`** — `import("zenbu:plugins?config=...")`, which the loader expands into all plugin services.
+9. **`registerShutdownHandlers`** — wire `before-quit`, `SIGINT`, `SIGTERM` to a shutdown sequence that flushes the DB and tears down services.
+10. **`runtime.whenIdle()`** — wait for the runtime's reconcile loop to settle so we don't return until services are stable.
+
+## Customization points
+
+### Custom env before `bootstrapEnv`
+
+If you need env vars set before the framework reads them, set them before calling `setupGate()`:
+
+```typescript
+process.env.MY_FEATURE_FLAG = "1"
+await setupGate()
+```
+
+### Custom project root
+
+Pass `--project=/path/to/project` on the command line. Useful for development, where you want to run a built `.app` against a working tree:
+
+```bash
+open MyApp.app --args --project=/Users/me/dev/my-app
+```
+
+### Custom default services
+
+`setupGate()` always loads the built-in default services. To skip a built-in service, register a no-op replacement under the same key *before* the default loader runs:
+
+```typescript
+import { runtime } from "@zenbujs/core/runtime"
+import { Service } from "@zenbujs/core/runtime"
+
+class NoOpInstaller extends Service {
+  static key = "installer"   // shadows the default
+}
+runtime.register(NoOpInstaller, import.meta)
+
+await setupGate()
+```
+
+This is a power-user move; usually the simpler answer is "don't depend on the service you don't want." Only do this if a built-in service is misbehaving in your environment.
+
+### Splash screens
+
+If you want a window to appear before service boot completes:
+
+```typescript
+import { app, BrowserWindow } from "electron"
+import { setupGate } from "@zenbujs/core/setup-gate"
+
+app.whenReady().then(() => {
+  const splash = new BrowserWindow({ width: 400, height: 300, frame: false })
+  splash.loadFile("loading.html")
+})
+
+await setupGate()
+
+// Find and close the splash once your real window is up.
+```
+
+The framework doesn't ship a built-in splash mechanism because the right answer depends heavily on the app — keep it lightweight, do whatever you want.
+
+## Shutdown
+
+`setupGate()` registers handlers for:
+
+- `app.on("before-quit", ...)` — Electron's quit signal.
+- `process.on("SIGINT", ...)` — Ctrl+C in a dev terminal.
+- `process.on("SIGTERM", ...)` — `kill <pid>`.
+
+All three trigger:
+
+1. `runtime.shutdown()` — tear down services in reverse-topological order.
+2. `app.exit(0)` — actually quit the process.
+
+If a teardown throws, the framework logs and keeps going. Shutdown is best-effort — it should never block.
+
+## Frozen mode
+
+When `frozenSource()` is the active adapter, `package.json#main` points at `frozen-gate.mjs` instead of `setup-gate.mjs`. The frozen gate is a smaller version that:
+
+- Skips the loader chain (everything is precompiled).
+- Skips the toolchain checks.
+- Imports a precompiled `dist/main.js` directly.
+
+The plugin-author surface is identical between modes — your services don't know which gate booted them.

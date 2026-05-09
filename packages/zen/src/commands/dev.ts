@@ -29,7 +29,7 @@ function resolveMonorepoPath(explicit?: string): string {
   }
 
   if (!fs.existsSync(path.join(resolved, "packages", "init"))) {
-    console.error(`zen dev link: ${resolved} doesn't look like a zenbu monorepo (missing packages/init-old)`)
+    console.error(`zen dev link: ${resolved} doesn't look like a zenbu monorepo (missing packages/init)`)
     process.exit(1)
   }
 

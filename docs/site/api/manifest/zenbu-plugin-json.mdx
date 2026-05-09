@@ -1,0 +1,81 @@
+---
+title: "zenbu.plugin.json"
+description: The strict schema for the plugin manifest.
+---
+
+# `zenbu.plugin.json`
+
+Schema reference. For the conceptual walkthrough see [Plugin manifest](/plugins/manifest).
+
+```jsonc
+{
+  "name": string,                  // required, [a-z][a-z0-9-]*, globally unique
+  "uiEntrypoint": string?,         // path to renderer source root
+  "services": string[]?,           // globs / paths / nested manifests
+  "schema": string?,               // path to schema TS file
+  "events": string?,               // path to events TS file
+  "preload": string?,              // path to preload TS file
+  "icons": Record<string,string>?, // scope → SVG string
+  "setup": {                       // one-time host setup
+    "script": string,              // path to setup.ts
+    "version": number              // bumped to re-run on existing installs
+  }?,
+  "migrations": string?            // default "db/migrations"
+}
+```
+
+## JSON Schema
+
+```json
+{
+  "$id": "https://zenbu.dev/schemas/zenbu.plugin.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "uiEntrypoint": { "type": "string" },
+    "services": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "schema": { "type": "string" },
+    "events": { "type": "string" },
+    "preload": { "type": "string" },
+    "icons": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "setup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["script", "version"],
+      "properties": {
+        "script": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "migrations": { "type": "string" }
+  }
+}
+```
+
+## Notes
+
+- All file paths are **relative to the manifest's directory**.
+- `services` paths support globs (`*`), direct files, and nested `*.json` manifest references.
+- `icons` keys must be view scope ids registered by services (or the plugin's `name` if `uiEntrypoint` is the default view).
+- `migrations` defaults to `db/migrations` if omitted.
+- Comments (JSONC syntax) are tolerated by the framework; the JSON Schema above doesn't account for them, but the manifest readers do.
+
+## Reserved fields
+
+The framework reserves the following manifest fields for future use. Don't put your own data under them:
+
+- `permissions`
+- `dependencies` (manifest-level — use `package.json` for npm deps)
+- `engines`
+- `categories`

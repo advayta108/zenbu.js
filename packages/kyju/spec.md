@@ -5,7 +5,7 @@ A protocol for replicating state between a database and its replicas. Replicas m
 ## Data Model
 
 - **Root** — A JSON object serving as the top-level shared state.
-- **Collection** — A referenced, ordered, append-only dataset composed of pages.
+- **Collection** — A referenced, ordered, append-only dataset. Stored as paged files on the server; exposed to replicas as a windowed item range.
 - **Blob** — A referenced opaque value.
 
 Collections and blobs are referenced from the root. Accessing a deleted collection or blob is an error (analogous to a null pointer dereference). A collection or blob must not be deleted while references to it exist.
@@ -34,7 +34,7 @@ Communication is structured as events. Each event has a `kind` that determines i
 |---|---|---|---|
 | `connect` | replica -> server | Yes | Initiates a session. |
 | `disconnect` | replica -> server | Yes | Tears down a session. |
-| `subscribe-collection` | replica -> server | Yes | Subscribes to a collection's data. |
+| `subscribe-collection` | replica -> server | Yes | Subscribes to a collection's data (all items). |
 | `unsubscribe-collection` | replica -> server | Yes | Unsubscribes from a collection's data. |
 | `write` | replica -> server | Yes | Mutates state. Applied locally then sent to server. |
 | `replicated-write` | server -> replica | No | Server-broadcast mutation. Applied locally by receiving replicas. |
@@ -47,7 +47,9 @@ The server only receives `connect`, `disconnect`, `subscribe-collection`, `unsub
 
 ### Collection Broadcast Rules
 
-Collection write operations (`collection.create`, `collection.concat`, `collection.delete`) and collection metadata updates (`collection.page.metadataUpdate`) are only broadcast to sessions that have an active subscription for the target `collectionId`. A replica must subscribe to a collection before it will receive any collection-related broadcasts.
+Collection write operations (`collection.create`, `collection.concat`, `collection.delete`) are only broadcast to sessions that have an active subscription for the target `collectionId`. A replica must subscribe to a collection before it will receive any collection-related broadcasts.
+
+When broadcasting `collection.concat`, the server attaches `authority.startIndex` and `authority.totalCount` so replicas can reconcile their local state.
 
 ## Messages
 
@@ -120,14 +122,14 @@ A replica must subscribe to a collection before receiving any collection-related
 Event kind: `subscribe-collection`
 
 ```
-{ type: "subscribe-collection", collectionId: string, sessionId: string, requestId: string, pageIds?: string[] }
+{ type: "subscribe-collection", collectionId: string, sessionId: string, requestId: string }
 ```
 
-Ack: `Ack<{ pages: Array<Page> }, "NotFoundError">`
+Ack: `Ack<{ items: Json[], totalCount: number }, "NotFoundError">`
 
-If `pageIds` is omitted, the last page is returned. If `pageIds` is provided, those pages are returned.
+The server returns all items in the collection plus the current `totalCount`. The replica loads the full dataset into memory.
 
-The server must acquire the collection lock before adding the subscription and reading pages. This guarantees that a concurrent `collection.concat` either completes before the subscribe (so the returned pages include the new data) or waits until after (so the concat broadcast reaches the newly subscribed session).
+The server must acquire the collection lock before adding the subscription and reading items. This guarantees that a concurrent `collection.concat` either completes before the subscribe (so the returned items include the new data) or waits until after (so the concat broadcast reaches the newly subscribed session).
 
 ### Unsubscribe Collection
 
@@ -170,10 +172,14 @@ Ack: `Ack`
 **Concat**
 
 ```
-{ type: "collection.concat", collectionId: string, data: Json[], authority?: { startIndex: number } }
+{ type: "collection.concat", collectionId: string, data: Json[], authority?: { startIndex: number, totalCount: number } }
 ```
 
-Appends one or more items to the collection. When broadcast as a `replicated-write`, the server attaches `authority.startIndex` — the global index of the first appended item — so receiving replicas can place items in the correct order.
+Appends one or more items to the collection. When broadcast as a `replicated-write`, the server attaches:
+- `authority.startIndex` — the global index of the first appended item.
+- `authority.totalCount` — the total item count after the append.
+
+Receiving replicas use `totalCount` to update their local count. If the appended items fall within the replica's current window, they are merged into the replica's item array. If not, only `totalCount` is bumped (the replica's items stay unchanged; the UI can show "N new items" or similar).
 
 Ack: `Ack<{}, "NotFoundError">`
 
@@ -219,24 +225,15 @@ Carried by `read` events (replica -> server). The database responds only to the 
 
 ### Collection
 
-**Read pages**
+**Fetch range**
 
 ```
-{ type: "collection.read", collectionId: string, range?: { start: number, end: number } }
+{ type: "collection.fetch-range", collectionId: string, range: { start: number, end: number } }
 ```
 
-If `range` is omitted, all pages are returned. `start` and `end` are zero-based page indices (inclusive).
+Ack: `Ack<{ items: Json[], totalCount: number }, "NotFoundError">`
 
-Ack: `Ack<{ pages: Array<Page> }, "NotFoundError">`
-
-```
-type Page = { id: string, collectionId: string, size: number, count: number, data: Json[] }
-```
-
-- `id` — page identifier
-- `size` — page capacity
-- `count` — number of items in the page
-- `data` — the items
+One-shot read by global item index. Returns items in `[start, end)` plus the current `totalCount`. Does not require or affect a subscription. Does not move the window for subscribed replicas.
 
 ### Blob
 
@@ -251,12 +248,6 @@ Ack: `Ack<{ data: Uint8Array }, "NotFoundError">`
 ## Database Updates
 
 Carried by `db-update` events (server -> replica). These are server-initiated and not acked by the replica.
-
-**Page metadata update**
-
-```
-{ type: "collection.page.metadataUpdate", pageId: string, fileSize: number }
-```
 
 **Blob metadata update**
 
@@ -277,6 +268,24 @@ Instructs all connected replicas to tear down their current session and establis
 3. Replace all local state with the fresh root and empty collections/blobs from the connect ack.
 
 The server broadcasts `reconnect` when an external process has modified database state in a way that requires replicas to re-sync.
+
+## Replica State
+
+Each replica maintains the following state for subscribed collections:
+
+```
+type CollectionState = {
+  id: string
+  totalCount: number
+  items: Json[]
+}
+```
+
+- `id` — the collection ID.
+- `totalCount` — total number of items in the collection.
+- `items` — all items in the collection.
+
+The replica holds the full dataset in memory. Pages are a storage concern internal to the database and are not exposed to replicas.
 
 ## Plugins
 
@@ -314,13 +323,12 @@ sequenceDiagram
     DB->>B: replicated-write root.set {path:["title"], value:"hello"} [replicaId:"rB"]
 
     A->>DB: subscribe-collection {collectionId:"logs", req:"a3"}
-    DB-->>A: db-update ack {req:"a3", pages:[...]} [replicaId:"rA"]
+    DB-->>A: db-update ack {req:"a3", items:[...], totalCount:5} [replicaId:"rA"]
 
     B->>DB: write collection.concat {collectionId:"logs", data:[{msg:"hi"}]}
     DB-->>B: db-update ack {req:"b2"} [replicaId:"rB"]
-    DB->>A: replicated-write collection.concat {collectionId:"logs", data:[{msg:"hi"}], authority:{startIndex:0}} [replicaId:"rA"]
+    DB->>A: replicated-write collection.concat {collectionId:"logs", data:[{msg:"hi"}], authority:{startIndex:5, totalCount:6}} [replicaId:"rA"]
     Note over B: B is not subscribed — no broadcast to B
-    DB->>A: db-update collection.page.metadataUpdate {pageId:"p1", fileSize:42} [replicaId:"rA"]
 
     A->>DB: unsubscribe-collection {collectionId:"logs", req:"a4"}
     DB-->>A: db-update ack {req:"a4"} [replicaId:"rA"]

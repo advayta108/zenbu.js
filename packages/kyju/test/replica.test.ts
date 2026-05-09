@@ -263,7 +263,7 @@ describe("collection subscription", () => {
     expect(stateA.collections.length).toBe(0);
   });
 
-  it("collection.read merges pages into existing collection without losing subscribed pages", async () => {
+  it("fetch-range returns items without affecting subscription window", async () => {
     const ctx = await setupMultiClient(1);
     cleanup = ctx.cleanup;
 
@@ -279,29 +279,23 @@ describe("collection subscription", () => {
     const stateBefore = getConnectedState(ctx.replicas[0]);
     const colBefore = stateBefore.collections.find((c) => c.id === collectionId);
     expect(colBefore).toBeDefined();
-    const pageCountBefore = colBefore!.pages.length;
     expect(colBefore!.totalCount).toBe(2);
+    expect(colBefore!.items.length).toBe(2);
 
+    // fetch-range is a one-shot read that doesn't touch the window
     await ctx.replicas[0].postMessage({
       kind: "read",
-      op: { type: "collection.read", collectionId, range: { start: 0, end: 0 } },
+      op: { type: "collection.fetch-range", collectionId, range: { start: 0, end: 1 } },
     });
 
     const stateAfter = getConnectedState(ctx.replicas[0]);
     const colAfter = stateAfter.collections.find((c) => c.id === collectionId);
     expect(colAfter).toBeDefined();
-    expect(colAfter!.pages.length).toBeGreaterThanOrEqual(pageCountBefore);
     expect(colAfter!.totalCount).toBe(2);
-
-    const hotPages = colAfter!.pages.filter((p) => p.data.kind === "hot");
-    const totalItems = hotPages.reduce(
-      (sum, p) => sum + (p.data.kind === "hot" ? p.data.items.length : 0),
-      0,
-    );
-    expect(totalItems).toBe(2);
+    expect(colAfter!.items.length).toBe(2);
   });
 
-  it("collection.read does not lose streaming data from subscribed pages", async () => {
+  it("subscribe returns all items with totalCount in simple mode", async () => {
     const ctx = await setupMultiClient(2);
     cleanup = ctx.cleanup;
 
@@ -314,25 +308,12 @@ describe("collection subscription", () => {
     await ctx.replicas[0].postMessage({ kind: "subscribe-collection", collectionId });
     await ctx.replicas[1].postMessage({ kind: "subscribe-collection", collectionId });
 
-    const stateBeforeRead = getConnectedState(ctx.replicas[0]);
-    const colBeforeRead = stateBeforeRead.collections.find((c) => c.id === collectionId);
-    expect(colBeforeRead!.totalCount).toBe(1);
-
-    await ctx.replicas[0].postMessage({
-      kind: "read",
-      op: { type: "collection.read", collectionId, range: { start: 0, end: 0 } },
-    });
-
-    const stateAfterRead = getConnectedState(ctx.replicas[0]);
-    const colAfterRead = stateAfterRead.collections.find((c) => c.id === collectionId);
-    expect(colAfterRead).toBeDefined();
-    expect(colAfterRead!.totalCount).toBe(1);
-
-    const hotItems = colAfterRead!.pages
-      .filter((p) => p.data.kind === "hot")
-      .flatMap((p) => (p.data.kind === "hot" ? p.data.items : []));
-    expect(hotItems.length).toBe(1);
-    expect((hotItems[0] as any).text).toBe("initial");
+    const stateA = getConnectedState(ctx.replicas[0]);
+    const colA = stateA.collections.find((c) => c.id === collectionId);
+    expect(colA).toBeDefined();
+    expect(colA!.totalCount).toBe(1);
+    expect(colA!.items.length).toBe(1);
+    expect((colA!.items[0] as any).text).toBe("initial");
   });
 
   it("collection.concat callback fires on replicated write", async () => {

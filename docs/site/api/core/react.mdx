@@ -1,0 +1,92 @@
+---
+title: "@zenbujs/core/react"
+description: The strict public surface of the renderer-side hooks.
+---
+
+# `@zenbujs/core/react`
+
+```typescript
+import {
+  ZenbuProvider,
+  useDb,
+  useRpc,
+  useEvents,
+  usePreload,
+  useCollection,
+  useBlob,
+} from "@zenbujs/core/react"
+```
+
+Eight exports. All hooks must be inside a `<ZenbuProvider>` (which the framework wraps your renderer entrypoint with automatically).
+
+## `<ZenbuProvider>`
+
+```tsx
+type ZenbuProviderProps = {
+  wsUrl?: string
+  fallback?: ReactNode
+  errorFallback?: (error: string) => ReactNode
+  children: ReactNode
+}
+
+function ZenbuProvider(props: ZenbuProviderProps): JSX.Element
+```
+
+Sets up the websocket, RPC client, replica DB, and event bus. Defaults `wsUrl` to `ws://127.0.0.1:<port>?token=<token>`, where `port` and `token` come from `?wsPort=` and `?wsToken=` in `window.location.search` — both are set by the framework when it opens a view.
+
+`fallback` is rendered while the websocket is connecting. `errorFallback` is rendered when reconnection attempts are exhausted.
+
+## `useDb()` / `useDb(selector, isEqual?)`
+
+See [Database — using on the client](/db/using-on-client#usedb-selector).
+
+## `useRpc()`
+
+```typescript
+function useRpc(): RouterProxy<ServiceRouter>
+```
+
+Typed proxy over registered services. Each method returns a Promise. See [RPC — calling procedures](/rpc/calling-procedures).
+
+## `useEvents()`
+
+```typescript
+function useEvents(): EventProxy<RegisteredEvents>
+```
+
+Typed proxy over registered event topics. Each leaf has `.subscribe(cb): () => void`. See [Events](/rpc/events).
+
+## `usePreload()` / `usePreload(selector)`
+
+```typescript
+function usePreload(): Preloads
+function usePreload<T>(selector: (p: Preloads) => T): T
+```
+
+Read preload values. See [Preloads — using preloads](/preloads/using-preloads).
+
+## `useCollection(ref)`
+
+```typescript
+function useCollection<T>(ref: CollectionRef<T> | null | undefined): {
+  items: T[]
+  collection: CollectionNode<T> | null
+  concat(items: T[]): void
+}
+```
+
+See [Collections](/db/collections).
+
+## `useBlob(blobId)`
+
+```typescript
+function useBlob(blobId: string | null | undefined): Uint8Array | null
+```
+
+See [Blobs](/db/blobs).
+
+## What's *not* public
+
+- `ConnectionState`, `Connection` — internal types of `<ZenbuProvider>`. The shape may change.
+- `connectReplica`, `connectRpc` — internal transport. **Not public** for renderer consumers.
+- The internal context (`ConnectionContext`) — not exported. If you need a custom provider, file a feature request describing your use case.

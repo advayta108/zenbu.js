@@ -3,16 +3,10 @@
 import type { CoreServiceRouter } from "@zenbujs/core/registry"
 import type { BaseWindowService } from "../src/services/base-window"
 import type { DbService } from "../src/services/db"
-import type { DebugService } from "../src/services/debug"
-import type { FileScannerService } from "../src/services/file-scanner"
 import type { HttpService } from "../src/services/http"
-import type { InstallerService } from "../src/services/installer"
-import type { LocalFileProtocolService } from "../src/services/local-file-protocol"
-import type { RegistryService } from "../src/services/registry"
 import type { ReloaderService } from "../src/services/reloader"
 import type { RendererHostService } from "../src/services/renderer-host"
 import type { RpcService } from "../src/services/rpc"
-import type { RuntimeControlService } from "../src/services/runtime-control"
 import type { ServerService } from "../src/services/server"
 import type { ViewRegistryService } from "../src/services/view-registry"
 import type { WindowService } from "../src/services/window"
@@ -37,16 +31,10 @@ type ExtractRpcMethods<T> = {
 export type PluginServiceRouter = {
   "base-window": ExtractRpcMethods<BaseWindowService>;
   db: ExtractRpcMethods<DbService>;
-  debug: ExtractRpcMethods<DebugService>;
-  "file-scanner": ExtractRpcMethods<FileScannerService>;
   http: ExtractRpcMethods<HttpService>;
-  installer: ExtractRpcMethods<InstallerService>;
-  "local-file-protocol": ExtractRpcMethods<LocalFileProtocolService>;
-  registry: ExtractRpcMethods<RegistryService>;
   reloader: ExtractRpcMethods<ReloaderService>;
   "renderer-host": ExtractRpcMethods<RendererHostService>;
   rpc: ExtractRpcMethods<RpcService>;
-  runtime: ExtractRpcMethods<RuntimeControlService>;
   server: ExtractRpcMethods<ServerService>;
   "view-registry": ExtractRpcMethods<ViewRegistryService>;
   window: ExtractRpcMethods<WindowService>;

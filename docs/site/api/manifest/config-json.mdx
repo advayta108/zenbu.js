@@ -1,0 +1,40 @@
+---
+title: "config.json"
+description: The strict schema for the per-app config file.
+---
+
+# `config.json`
+
+Schema reference. For the conceptual walkthrough see [App config](/boot/app-config).
+
+```jsonc
+{
+  "db": string,                   // required, path (relative or absolute)
+  "plugins": string[]             // required, absolute paths to manifests
+}
+```
+
+## JSON Schema
+
+```json
+{
+  "$id": "https://zenbu.dev/schemas/config.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["db", "plugins"],
+  "properties": {
+    "db": { "type": "string", "minLength": 1 },
+    "plugins": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
+```
+
+## Notes
+
+- `db` resolves relative to the directory containing `config.json` if it's a relative path.
+- `plugins` entries must be **absolute paths**. Relative paths are rejected at boot.
+- Comments (JSONC syntax) and trailing commas are tolerated.
+- A line in `plugins` that's commented out (`// "..."`) is a disabled plugin; the framework preserves these on edit.

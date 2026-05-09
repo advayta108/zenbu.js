@@ -1,0 +1,67 @@
+---
+title: Using preloads
+description: Reading preload values from services and from React components.
+---
+
+# Using preloads
+
+Once a plugin declares a preload, its result is available everywhere the runtime is — typed.
+
+## From a service
+
+Depend on the built-in `Preloads` service:
+
+```typescript
+import { Service, runtime } from "@zenbujs/core/runtime"
+import { Preloads } from "@zenbujs/core/services"
+
+export class MyService extends Service.with({ preloads: Preloads }) {
+  static key = "my-service"
+
+  async start() {
+    const env = this.ctx.preloads["my-plugin"]
+    //          ^? { homeDir: string; platform: NodeJS.Platform; ... }
+    console.log("home dir:", env.homeDir)
+  }
+}
+```
+
+The `preloads` proxy is keyed by plugin name. Reads are synchronous — by the time `start()` runs, every preload has resolved.
+
+## From a renderer
+
+```tsx
+import { usePreload } from "@zenbujs/core/react"
+
+function HostInfo() {
+  const env = usePreload(p => p["my-plugin"])
+  return <p>Running on {env.platform}, home: {env.homeDir}</p>
+}
+```
+
+`usePreload(selector)` mirrors `useDb(selector)` — pass a function that picks out the slice you need. Same shallow-equality memoization, same selector semantics.
+
+If you want the entire preloads tree:
+
+```tsx
+const all = usePreload()
+```
+
+(Useful for debug panels.)
+
+## Cross-plugin preloads
+
+If your plugin reads another plugin's preload, that other plugin must be installed:
+
+```typescript
+const otherEnv = this.ctx.preloads["other-plugin"]
+//               ^? T | undefined  (T from the other plugin's preload, undefined if missing)
+```
+
+Optional access is the norm: the framework treats unregistered plugins' preloads as missing rather than throwing, so the code path that consumes `other-plugin`'s preload should null-check.
+
+## Anti-patterns
+
+- **Don't mutate a preload value.** They're frozen. Mutations throw in dev, silently no-op in prod.
+- **Don't store derived state in a preload.** If the derivation depends on data that can change, recompute it in a service.
+- **Don't put secrets in a preload.** Preloads are visible to every renderer. If you need a server-only secret, keep it in a service and expose only what's safe.

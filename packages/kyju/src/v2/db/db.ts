@@ -3,6 +3,8 @@ import * as Ref from "effect/Ref";
 import * as FileSystem from "@effect/platform/FileSystem";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { nanoid } from "nanoid";
+import nodeFs from "node:fs";
+import nodeOs from "node:os";
 import nodePath from "node:path";
 import type { DbSendEvent, KyjuJSON, ServerEvent } from "../shared";
 import {
@@ -66,9 +68,145 @@ export type Db<TShape extends SchemaShape = SchemaShape> = {
    * durability of any writes that completed during this process's lifetime.
    */
   flush: () => Promise<void>;
+  /**
+   * Flush + release the cross-process lock at `<dbPath>/.lock`. Idempotent;
+   * safe to call from a `process.on("exit")` handler. After `close()`
+   * resolves, another process can open the same `dbPath` without conflict.
+   */
+  close: () => Promise<void>;
   client: ClientProxy<TShape>;
   effectClient: EffectClientProxy<TShape>;
 };
+
+/**
+ * Cross-process exclusion. We hold one writer per `dbPath`; if a second
+ * process tries to open the same path while the first is alive, kyju
+ * throws so the developer kills/quits the first instead of silently
+ * losing data to a flush race. Kept deliberately simple — synchronous fs
+ * because this runs once at boot and once at close, never on a hot path.
+ */
+type LockPayload = {
+  pid: number;
+  hostname: string;
+  startedAt: string;
+  /**
+   * Random per-Db-instance token. Multiple Db instances in the same
+   * process are allowed (re-entry) but only the one that wrote the
+   * current `nonce` is permitted to release the lock — otherwise an
+   * abandoned old Db's `close()` (or exit handler) would yank the file
+   * out from under a newer instance that still depends on it.
+   */
+  nonce: string;
+};
+
+class DbLockedError extends Error {
+  constructor(dbPath: string, holder: LockPayload) {
+    super(
+      `Database at ${dbPath} is locked by pid ${holder.pid} on host ${holder.hostname} (started ${holder.startedAt}).\n` +
+        `kyju refuses to open a second concurrent writer to avoid clobbering its flushes.\n` +
+        `Quit the running process and try again, or remove ${nodePath.join(dbPath, ".lock")} if you're sure no process is using this DB.`,
+    );
+    this.name = "DbLockedError";
+  }
+}
+
+function lockPath(dbPath: string): string {
+  return nodePath.join(dbPath, ".lock");
+}
+
+function isPidAlive(pid: number): boolean {
+  // Sending signal 0 doesn't actually deliver — it just probes for
+  // existence. EPERM also implies the PID is alive (we just don't have
+  // permission to signal it), which still means we shouldn't take over
+  // the lock. ESRCH is the only "definitely dead" answer.
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function readLock(dbPath: string): Promise<LockPayload | null> {
+  try {
+    const raw = await nodeFs.promises.readFile(lockPath(dbPath), "utf8");
+    return JSON.parse(raw) as LockPayload;
+  } catch {
+    return null;
+  }
+}
+
+async function acquireLock(dbPath: string): Promise<string> {
+  await nodeFs.promises.mkdir(dbPath, { recursive: true });
+  const existing = await readLock(dbPath);
+  if (existing) {
+    const sameHost = existing.hostname === nodeOs.hostname();
+    const sameProcess = sameHost && existing.pid === process.pid;
+    // Same-process re-entry is transparent. Real callers that hit this:
+    //   - DbService.evaluate() running again because sectionsHash changed
+    //     (it doesn't explicitly close the prior `this.db` reference).
+    //   - Test suites that simulate "restart" by opening the same path
+    //     twice within one node process.
+    // The in-memory rootCache enforces single-writer-per-process anyway,
+    // so the lock's job is purely cross-process exclusion.
+    if (!sameProcess) {
+      // Different host: can't probe the PID, conservatively treat as alive.
+      // Different PID on same host: probe; only reclaim when ESRCH proves
+      // the holder is dead.
+      if (!sameHost || isPidAlive(existing.pid)) {
+        throw new DbLockedError(dbPath, existing);
+      }
+      // Stale (dead PID on this host) — fall through and overwrite.
+    }
+  }
+  const nonce = nanoid();
+  const payload: LockPayload = {
+    pid: process.pid,
+    hostname: nodeOs.hostname(),
+    startedAt: new Date().toISOString(),
+    nonce,
+  };
+  await nodeFs.promises.writeFile(lockPath(dbPath), JSON.stringify(payload));
+  return nonce;
+}
+
+async function releaseLock(dbPath: string, ourNonce: string): Promise<void> {
+  // Only remove the lock if WE wrote it. Two Db instances may exist in
+  // the same process at the same time (during a hot-reload re-init);
+  // both write the same pid+hostname but different nonces. Without the
+  // nonce check, the older instance's `close()` would unlink the lock
+  // file the newer instance is still relying on.
+  const current = await readLock(dbPath);
+  if (!current || current.nonce !== ourNonce) return;
+  try {
+    await nodeFs.promises.unlink(lockPath(dbPath));
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * Sync release for the `process.on("exit")` path. Async callbacks don't
+ * run during process exit (the event loop is already torn down), so
+ * we have no choice but to use sync fs here. Mirrors `releaseLock`'s
+ * nonce check exactly.
+ */
+function releaseLockOnExit(dbPath: string, ourNonce: string): void {
+  let current: LockPayload | null = null;
+  try {
+    current = JSON.parse(
+      nodeFs.readFileSync(lockPath(dbPath), "utf8"),
+    ) as LockPayload;
+  } catch {
+    return;
+  }
+  if (!current || current.nonce !== ourNonce) return;
+  try {
+    nodeFs.unlinkSync(lockPath(dbPath));
+  } catch {
+    // best-effort
+  }
+}
 
 const DEFAULT_CONFIG: Omit<
   DbConfig,
@@ -218,6 +356,14 @@ const createDbEffect = <TShape extends SchemaShape>(
       checkReferences: userConfig.checkReferences ?? false,
     };
 
+    // Acquire the writer lock before doing anything else. If a sibling
+    // process owns this dbPath, throw immediately — every subsequent
+    // step would be a flush race that silently loses one of the writers.
+    const lockNonce = yield* Effect.tryPromise({
+      try: () => acquireLock(config.dbPath),
+      catch: (e) => e as Error,
+    });
+
     // Ensure the dedicated tmp staging directory exists before anything else
     // can try to write. Every `writeJsonFile` stages through `config.tmpDir`
     // and then renames to its destination; the rename is only atomic when
@@ -342,12 +488,39 @@ const createDbEffect = <TShape extends SchemaShape>(
     const client = createClient<TShape>(localReplica);
     const effectClient = createEffectClient<TShape>(localReplica);
 
+    // Best-effort lock release on hard process exit (Ctrl+C, kill -TERM,
+    // unhandled exception). Won't run on `kill -9` — that's why the next
+    // boot also tolerates a stale lock whose PID is dead. The exit hook
+    // is sync-only because the event loop is already torn down by the
+    // time it fires; everything else uses async fs.
+    let closed = false;
+    const onProcessExit = () => {
+      if (closed) return;
+      closed = true;
+      releaseLockOnExit(config.dbPath, lockNonce);
+    };
+    process.once("exit", onProcessExit);
+
+    const close = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      try {
+        await Effect.runPromise(rootCache.flush());
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[kyju:db.close] final flush failed:", err);
+      }
+      process.off("exit", onProcessExit);
+      await releaseLock(config.dbPath, lockNonce);
+    };
+
     return {
       postMessage: (event: ServerEvent): Promise<void> =>
         Effect.runPromise(postMessageEffect(event)),
       reconnectClients: (): Promise<void> =>
         Effect.runPromise(reconnectClientsEffect),
       flush: (): Promise<void> => Effect.runPromise(rootCache.flush()),
+      close,
       client,
       effectClient,
     };

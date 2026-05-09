@@ -105,9 +105,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
     "@types/ws": "^8.18.0",
     "@zenbu/advice": "workspace:*",
-    "@zenbu/git": "workspace:*",
     "@zenbu/kyju": "workspace:*",
     "@zenbu/lint": "workspace:*",
     "@zenbu/zenrpc": "workspace:*",

@@ -83,19 +83,39 @@ export function applyOperations(
   for (const op of ops) {
     switch (op.op) {
       case "add": {
+        // Make `add` idempotent: only seed the key when it's actually
+        // missing. The schema-bootstrap path (`buildSchemaRoot`) and the
+        // migration path can both target the same key — schema-bootstrap
+        // populates a fresh section's defaults, then a later
+        // `zen db generate` produces a v0→v1 migration whose `add` op
+        // names that same key. If `add` blindly overwrote, the second
+        // boot after `zen db generate` would clobber any user data the
+        // section accumulated under the bootstrap defaults.
+        //
+        // The semantics that fall out: `add` declares "this key now
+        // exists with this default", not "reset this key to default".
+        // For genuinely-new fields the migration still fills them in
+        // (key absent → defaulted). For replays / overlapping with
+        // bootstrap, user data is preserved.
         if (op.kind === "collection") {
-          result[op.key] = {
-            collectionId: nanoid(),
-            debugName: op.debugName ?? op.key,
-          };
+          if (!(op.key in result)) {
+            result[op.key] = {
+              collectionId: nanoid(),
+              debugName: op.debugName ?? op.key,
+            };
+          }
         } else if (op.kind === "blob") {
-          result[op.key] = {
-            blobId: nanoid(),
-            debugName: op.debugName ?? op.key,
-          };
+          if (!(op.key in result)) {
+            result[op.key] = {
+              blobId: nanoid(),
+              debugName: op.debugName ?? op.key,
+            };
+          }
         } else if (op.hasDefault) {
-          result[op.key] = op.default;
-        } else {
+          if (!(op.key in result)) {
+            result[op.key] = op.default;
+          }
+        } else if (!(op.key in result)) {
           result[op.key] = undefined;
         }
         break;

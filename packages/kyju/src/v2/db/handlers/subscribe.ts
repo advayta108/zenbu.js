@@ -1,14 +1,10 @@
 import * as Effect from "effect/Effect";
-import nodePath from "node:path";
 import type { ServerEvent } from "../../shared";
 import {
-  type CollectionIndex,
-  type PageIndex,
   createCollection,
   makeAck,
-  makeErrorAck,
   paths,
-  readJsonlFile,
+  readCollectionItemRange,
   sendAck,
 } from "../helpers";
 import { type DbHandlerContext, validateSession } from "../helpers";
@@ -36,100 +32,20 @@ export const handleSubscribe = (ctx: DbHandlerContext, event: SubscribeEvent) =>
 
         session.subscriptions.add(event.collectionId);
 
-        if (event.pageIds) {
-          const pageResults = yield* Effect.all(
-            event.pageIds.map((pageId) =>
-              Effect.gen(function* () {
-                const dataPath = paths.pageData({
-                  config: ctx.config,
-                  collectionId: event.collectionId,
-                  pageId,
-                });
-                const data = yield* readJsonlFile({ fs: ctx.fs, path: dataPath });
-                const pageStats = yield* ctx.fs.stat(dataPath);
-                return {
-                  id: pageId,
-                  collectionId: event.collectionId,
-                  size: Number(pageStats.size),
-                  count: data.length,
-                  data,
-                };
-              }),
-            ),
-            { concurrency: "unbounded" },
-          );
+        const { items, totalCount } = yield* readCollectionItemRange({
+          fs: ctx.fs,
+          config: ctx.config,
+          collectionId: event.collectionId,
+        });
 
-          sendAck({
-            session,
-            ack: makeAck({
-              requestId: event.requestId,
-              sessionId: event.sessionId,
-              data: { pages: pageResults },
-            }),
-          });
-        } else {
-          const pagesDir = nodePath.join(
-            collectionDir,
-            ctx.config.pagesDirName,
-          );
-          const pageDirs = yield* ctx.fs.readDirectory(pagesDir);
-
-          const pageIndexes = yield* Effect.all(
-            pageDirs.map((pageId) =>
-              Effect.gen(function* () {
-                const pIdx = JSON.parse(
-                  yield* ctx.fs.readFileString(
-                    paths.pageIndex({
-                      config: ctx.config,
-                      collectionId: event.collectionId,
-                      pageId,
-                    }),
-                  ),
-                ) as PageIndex;
-                return { id: pageId, order: pIdx.order };
-              }),
-            ),
-            { concurrency: "unbounded" },
-          );
-
-          const sorted = pageIndexes.sort(
-            (left, right) => left.order - right.order,
-          );
-
-          const pageResults = yield* Effect.all(
-            sorted.map((entry) =>
-              Effect.gen(function* () {
-                const dataPath = paths.pageData({
-                  config: ctx.config,
-                  collectionId: event.collectionId,
-                  pageId: entry.id,
-                });
-                const data = yield* readJsonlFile({
-                  fs: ctx.fs,
-                  path: dataPath,
-                });
-                const pageStats = yield* ctx.fs.stat(dataPath);
-                return {
-                  id: entry.id,
-                  collectionId: event.collectionId,
-                  size: Number(pageStats.size),
-                  count: data.length,
-                  data,
-                };
-              }),
-            ),
-            { concurrency: "unbounded" },
-          );
-
-          sendAck({
-            session,
-            ack: makeAck({
-              requestId: event.requestId,
-              sessionId: event.sessionId,
-              data: { pages: pageResults },
-            }),
-          });
-        }
+        sendAck({
+          session,
+          ack: makeAck({
+            requestId: event.requestId,
+            sessionId: event.sessionId,
+            data: { items, totalCount },
+          }),
+        });
       }),
     );
   });

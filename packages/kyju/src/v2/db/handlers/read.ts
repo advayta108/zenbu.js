@@ -1,21 +1,15 @@
 import * as Effect from "effect/Effect";
-import nodePath from "node:path";
 import type { ServerEvent } from "../../shared";
 import {
   makeAck,
   makeErrorAck,
   paths,
-  readJsonlFile,
+  readCollectionItemRange,
   sendAck,
 } from "../helpers";
 import { type DbHandlerContext, validateSession } from "../helpers";
 
 type ReadEvent = Extract<ServerEvent, { kind: "read" }>;
-
-type PageIndex = {
-  pageId: string;
-  order: number;
-};
 
 export const handleRead = (ctx: DbHandlerContext, event: ReadEvent) =>
   Effect.gen(function* () {
@@ -23,7 +17,7 @@ export const handleRead = (ctx: DbHandlerContext, event: ReadEvent) =>
     const readOp = event.op;
 
     switch (readOp.type) {
-      case "collection.read": {
+      case "collection.fetch-range": {
         yield* ctx.collectionMutex.withPermits(1)(
           Effect.gen(function* () {
             const collectionDir = paths.collection({
@@ -44,68 +38,20 @@ export const handleRead = (ctx: DbHandlerContext, event: ReadEvent) =>
               return;
             }
 
-            const pagesDir = nodePath.join(
-              collectionDir,
-              ctx.config.pagesDirName,
-            );
-            const pageDirs = yield* ctx.fs.readDirectory(pagesDir);
-
-            const pageIndexes = yield* Effect.all(
-              pageDirs.map((pageId) =>
-                Effect.gen(function* () {
-                  const pIdx = JSON.parse(
-                    yield* ctx.fs.readFileString(
-                      paths.pageIndex({
-                        config: ctx.config,
-                        collectionId: readOp.collectionId,
-                        pageId,
-                      }),
-                    ),
-                  ) as PageIndex;
-                  return { id: pageId, order: pIdx.order };
-                }),
-              ),
-              { concurrency: "unbounded" },
-            );
-
-            const sorted = pageIndexes.sort(
-              (left, right) => left.order - right.order,
-            );
-            const selected = readOp.range
-              ? sorted.slice(readOp.range.start, readOp.range.end + 1)
-              : sorted;
-
-            const pageResults = yield* Effect.all(
-              selected.map((entry) =>
-                Effect.gen(function* () {
-                  const dataPath = paths.pageData({
-                    config: ctx.config,
-                    collectionId: readOp.collectionId,
-                    pageId: entry.id,
-                  });
-                  const data = yield* readJsonlFile({
-                    fs: ctx.fs,
-                    path: dataPath,
-                  });
-                  const pageStats = yield* ctx.fs.stat(dataPath);
-                  return {
-                    id: entry.id,
-                    collectionId: readOp.collectionId,
-                    size: Number(pageStats.size),
-                    count: data.length,
-                    data,
-                  };
-                }),
-              ),
-              { concurrency: "unbounded" },
-            );
+            const { items, totalCount } = yield* readCollectionItemRange({
+              fs: ctx.fs,
+              config: ctx.config,
+              collectionId: readOp.collectionId,
+              start: readOp.range.start,
+              end: readOp.range.end,
+            });
 
             sendAck({
               session,
               ack: makeAck({
                 requestId: event.requestId,
                 sessionId: event.sessionId,
-                data: { pages: pageResults },
+                data: { items, totalCount },
               }),
             });
           }),

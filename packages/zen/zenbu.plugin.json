@@ -1,5 +1,0 @@
-{
-  "name": "zen-cli",
-  "schema": "./shared/schema.ts",
-  "migrations": "./kyju/index.ts"
-}

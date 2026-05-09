@@ -1,7 +1,0 @@
-{
-  "id": "vibe-code",
-  "name": "Vibe Code",
-  "description": "Browser preview sidebar, dev server, live reload as you build",
-  "tags": ["browser view", "dev server", "live reload"],
-  "thumbnail": "thumbnail.png"
-}

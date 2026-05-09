@@ -1,0 +1,112 @@
+---
+title: Why Zenbu?
+description: The problems Zenbu.js was built to solve, and the trade-offs we chose along the way.
+---
+
+# Why Zenbu?
+
+Most desktop apps need the same five capabilities, and most desktop frameworks make you build at least three of them yourself. Zenbu.js gives you all five in one shape.
+
+## 1. A good Electron app, without writing the Electron app
+
+Electron is a runtime, not a framework. By the time you ship your first app you've made — and lived with the consequences of — at least these decisions:
+
+- IPC: do you write a typed `contextBridge` layer? Hand-roll JSON-RPC? Pull in tRPC and serialize Electron events through it?
+- State: where does state live? Server only? Mirror it to the renderer? How do you keep them in sync? What about restarts?
+- Hot reload: do you hand-write a reloader? Restart the whole process? Swap in `electron-vite`?
+- Build: which of `electron-builder`, `electron-forge`, `electron-packager`, `nx-electron`, plus a Vite plugin pack, plus an asar config?
+- Persistence: SQLite + a migration tool? `lowdb`? An ORM? How do you read it from the renderer?
+
+Zenbu picks one good answer for each of these and connects them. You write services, schemas, and React components; the rest is the framework's problem.
+
+> If you already love hand-wiring this stack, Zenbu probably isn't for you. If you've ever shipped two Electron apps and rebuilt the same five things between them, this framework is the version of those five things you wrote in your head.
+
+## 2. Plugin architecture by default, not as a feature
+
+Most apps grow a plugin system in v3, after the architecture has hardened around its initial scope. The plugin API ends up as a leaky port of the internal one, with surprising restrictions.
+
+Zenbu inverts this: **your application is itself a plugin.** It's a directory with a `zenbu.plugin.json` manifest that registers services, schemas, RPC, events, and views. A user-installed plugin is the same shape — same APIs, same lifecycle, same type-safety. There is no "host vs plugin" privilege boundary.
+
+Concretely:
+
+- Plugins can depend on each other's services by class reference (or string key).
+- Plugin database sections live under `root.plugin.<plugin-name>` so two plugins can never collide.
+- Plugin-defined events are auto-namespaced; subscribers see them as `events.<plugin-name>.<event-name>`.
+- Plugin-defined RPC procedures are accessed as `rpc.<service-key>.<method>`.
+- Plugins can [advise](/advice/overview) functions in *other* plugins — wrap, replace, or add a before/after hook — without forking them.
+
+If you've ever wanted Emacs's "any package can advise any function" composability, but with TypeScript and React, this is that.
+
+## 3. Live source, not magical OTA updates
+
+Auto-updating Electron apps is a solved problem, but the solutions are uniformly opaque. Squirrel.Mac, electron-updater, App Store Connect — they replace one bundle with another bundle, and the user has no idea what changed unless you wrote a release note.
+
+Zenbu instead ships the **TypeScript source** alongside the binary. The first time the app boots on a user's machine, it clones a *release repo* into `~/.zenbu/apps/<your-app>/` and runs the source directly through a TypeScript-aware Electron launcher. Updates are `git pull`s.
+
+This is a big claim, so some honesty about what it buys you:
+
+- **Diffability.** Users (and you) can read the diff before it's applied. That changes what "trust" means: instead of trusting the publisher's bundle, the user is trusting a chain of git commits.
+- **Patchability.** A user can fix a bug locally without rebuilding the binary. The framework picks up the change on next launch (or even live, via HMR, if the app is running).
+- **Forkability.** "Make it your own" stops being a marketing slogan. Cloning the release repo *is* forking.
+- **Honest updates.** Reverting a bad update is `git revert`, not "wait for the publisher to push v1.4.3".
+
+What you give up:
+
+- **Source visibility.** Everything in the release repo is, by definition, source-available. We mitigate this with a TS-to-TS [build pipeline](/build/overview) that strips comments, drops feature-flagged code, and excludes test/dev folders before publishing.
+- **Smaller install size.** The release repo + node_modules is bigger than a packaged asar. We mitigate this by bundling `pnpm` and `bun` so dependencies install once on the user's machine.
+- **An extra failure mode.** Network down, repo down, push gone wrong — the live-source path adds shapes for those. We let you opt out per-project by switching the [live-source adapter](/build/live-source-adapter) to the [frozen-source adapter](/build/frozen-source-adapter), which produces a normal Electron app with no external dependencies.
+
+## 4. One programming model across processes
+
+In a typical Electron app, the main process and the renderer process feel like different languages. Different bundlers, different stack traces, different debug tools, different state stores.
+
+Zenbu collapses that. A service registered on the main process is automatically a typed RPC endpoint in the renderer. A schema defined once is the type of `useDb()` everywhere. The renderer process holds an in-memory **replica** of the database that updates optimistically and syncs over a websocket — so reads are local and instant, writes appear immediately, and no permission model gets in the way (since it's all your app, on your user's machine).
+
+Multi-renderer apps work the same way. Each [view](/views/overview) is a sandboxed iframe (often in its own process) but shares the same RPC, the same DB replica, and the same event bus.
+
+## 5. Same APIs as a server-side framework, with the desktop benefits
+
+Zenbu services look almost exactly like server-side dependency-injected services in the Spring/Effect/Nest world:
+
+```typescript
+export class CounterService extends Service.with({
+  db: DbService,
+  events: Events,
+}) {
+  static key = "counter"
+
+  async increment() {
+    await this.ctx.db.update(r => { r.plugin.counter.count += 1 })
+    this.ctx.events.counter.incremented({ at: Date.now() })
+  }
+}
+```
+
+But because there's no network between you and your data, no auth boundary to think about, and no separate "client" — you can stay in this style and still build an interactive UI.
+
+## How this compares
+
+We've tried to be honest about the niche.
+
+| | **Zenbu.js** | **Tauri** | **Electron + Forge** | **Next.js + Electron** |
+| --- | --- | --- | --- | --- |
+| Ships TypeScript to users | ✓ (live mode) | – | – | – |
+| Plugin system out of the box | ✓ first-class | – (Tauri plugins are author-side only) | – | – |
+| End-to-end typed RPC + DB + events | ✓ | partial (typed commands) | – | partial |
+| HMR for main-process code | ✓ | – | – | – |
+| Production binary size | medium-large | small | medium-large | medium-large |
+| Single codebase for host and renderers | ✓ | ✓ | ✓ | ✓ |
+| Function-level advice / runtime patching | ✓ | – | – | – |
+| Mature, low-risk | not yet | yes | yes | yes |
+
+If you want **smallest footprint** and you don't need the live-source / plugin / advice layers, Tauri is excellent and we'd recommend it.
+
+If you want **maximum maturity** and you're happy to wire IPC, state, and updates yourself, vanilla Electron + Forge is fine.
+
+Zenbu is the right choice when you want **a system that composes** — multiple people / multiple plugins / multiple companies layered onto the same desktop app — and you want it without the integration tax.
+
+## A note on what's *not* in the public API
+
+You may notice this site never mentions [Effect-TS](https://effect.website). We use Effect internally in some places (notably the database engine), but we deliberately don't expose it on the public API surface. **Zenbu's public API is plain Promises, plain types, and plain TypeScript.** This decision is documented in [API design principles](/reference/api-design-principles).
+
+If you're an Effect power user and want to drop down to the Effect-flavored internals, see the [migration recipe](/recipes/migrate-from-effect) for the (small, deliberately-friction'd) escape hatch.

@@ -1,0 +1,119 @@
+---
+title: Migrations
+description: How schema changes propagate to existing on-disk data, and how to write your own migrations when needed.
+---
+
+# Migrations
+
+Every schema change becomes a **migration file** committed to your repo. Migrations are append-only and ordered; the runtime tracks which ones have been applied per-section, applies pending ones on boot, and never replays one twice.
+
+## Generating a migration
+
+After editing your schema, run:
+
+```bash
+nr zen db generate --name add_user_email
+```
+
+This:
+
+1. Finds your plugin's `zenbu.plugin.json` and resolves the `schema` field.
+2. Loads the previous schema's resulting shape (from the most-recent migration).
+3. Diffs it against your current schema.
+4. Writes `db/migrations/<plugin-name>/<n>_add_user_email.ts`.
+
+Commit the file. It's part of your source.
+
+## Generated file shape
+
+```typescript
+// db/migrations/my-plugin/0002_add_user_email.ts
+import type { KyjuMigration } from "@zenbujs/core/db"
+
+export const migration: KyjuMigration = {
+  name: "add_user_email",
+  ops: [
+    { op: "add", path: ["user", "email"], value: undefined },
+  ],
+}
+
+export default migration
+```
+
+`ops` is a list of declarative diff operations. The supported operations are:
+
+| Operation | Description |
+| --- | --- |
+| `add` | Insert a new field with a default. |
+| `remove` | Delete a field, dropping its data. |
+| `rename` | Move a field to a new path; data is preserved. |
+| `setDefault` | Change a field's default value (affects new inserts only). |
+| `dataMigrate` | Custom function applied to each existing row (for schema-incompatible transforms). |
+
+For simple cases the generator picks the right op automatically. For destructive or ambiguous changes (rename vs remove + add), the generator asks.
+
+## Writing a custom migration
+
+Sometimes a schema change requires data transformation the generator can't infer — e.g. splitting a `name: string` field into `firstName` + `lastName`. Write a `dataMigrate` op:
+
+```typescript
+import type { KyjuMigration } from "@zenbujs/core/db"
+
+export const migration: KyjuMigration = {
+  name: "split_name",
+  ops: [
+    { op: "add", path: ["firstName"], value: "" },
+    { op: "add", path: ["lastName"], value: "" },
+    {
+      op: "dataMigrate",
+      handler: (root: any) => {
+        const [first, ...rest] = (root.name ?? "").split(" ")
+        root.firstName = first ?? ""
+        root.lastName = rest.join(" ")
+      },
+    },
+    { op: "remove", path: ["name"] },
+  ],
+}
+```
+
+`handler` is called once with the root object. Mutate in place; the runtime persists the result.
+
+## Per-section vs core migrations
+
+Each plugin owns its own migrations directory. The framework's own `core` section has its migrations under `packages/core/migrations/`; you don't write those.
+
+## When migrations run
+
+On boot:
+
+1. The framework inventories every section (core + plugins).
+2. For each section, it reads the latest applied-migration index from `<dbPath>/<section>/.applied.json`.
+3. Pending migrations are run in order.
+4. The applied index is updated.
+
+This happens **before** any service that depends on `DbService` starts, so by the time `start()` runs in your service, the database is at the latest schema.
+
+## What if a migration fails mid-run?
+
+The framework writes the applied index *after* each migration succeeds. A crash mid-migration leaves the section in an inconsistent state, but the applied index is still pointing at the last successful migration — so the next boot retries the failing migration from the beginning.
+
+Two consequences:
+
+- **Migrations should be idempotent.** Don't assume the field you're adding doesn't exist; check first if your migration is non-trivial.
+- **Don't read external state during a migration.** The result must be deterministic given just the current root.
+
+## What if I deploy a downgrade?
+
+You can't directly. Migrations are forward-only. If you need to undo a change, write a new migration that reverses the previous one and ship that. The number-prefix on migration files is monotonically increasing per section.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="API reference: migrations" icon="book-open" href="/api/core/db#migrations">
+    The full `KyjuMigration` and `MigrationOp` types.
+  </Card>
+  <Card title="CLI: zen db" icon="terminal" href="/api/cli/zen#zen-db">
+    `zen db generate`, `zen db list`, `zen db reset` — the migration commands.
+  </Card>
+</CardGroup>

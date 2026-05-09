@@ -56,7 +56,7 @@ describe("collection.create", () => {
     const collectionId = root.messages.collectionId;
     expect(collectionId).toBeDefined();
 
-    await ctx.client.messages.read();
+    await ctx.replica.postMessage({ kind: "subscribe-collection", collectionId });
     const state = getConnectedState(ctx.replica);
     const col = state.collections.find((c) => c.id === collectionId);
     expect(col).toBeDefined();
@@ -74,8 +74,8 @@ describe("collection.create", () => {
     });
 
     await ctx.replica.postMessage({
-      kind: "read",
-      op: { type: "collection.read", collectionId },
+      kind: "subscribe-collection",
+      collectionId,
     });
 
     const state = getConnectedState(ctx.replica);
@@ -90,30 +90,27 @@ describe("collection.concat", () => {
     const ctx = await setup();
     cleanup = ctx.cleanup;
 
+    const root = ctx.client.readRoot() as any;
+    const collectionId = root.messages.collectionId;
+    await ctx.replica.postMessage({ kind: "subscribe-collection", collectionId });
+
     await ctx.client.messages.concat([
       { text: "hello", author: "alice" },
       { text: "world", author: "bob" },
     ]);
 
-    await ctx.client.messages.read();
     const state = getConnectedState(ctx.replica);
-    const root = ctx.client.readRoot() as any;
     const col = state.collections.find(
-      (c) => c.id === root.messages.collectionId,
+      (c) => c.id === collectionId,
     );
     expect(col!.totalCount).toBe(2);
-
-    const items =
-      col!.pages.flatMap((p) =>
-        p.data.kind === "hot" ? p.data.items : [],
-      );
-    expect(items).toEqual([
+    expect(col!.items).toEqual([
       { text: "hello", author: "alice" },
       { text: "world", author: "bob" },
     ]);
   });
 
-  it("creates a new page when maxPageSize exceeded", async () => {
+  it("creates new pages on disk when maxPageSize exceeded", async () => {
     const ctx = await setup({ maxPageSize: 50 });
     cleanup = ctx.cleanup;
 
@@ -125,13 +122,11 @@ describe("collection.concat", () => {
       { text: "overflow", author: "bot" },
     ]);
 
-    await ctx.client.messages.read();
-    const state = getConnectedState(ctx.replica);
     const root = ctx.client.readRoot() as any;
-    const col = state.collections.find(
-      (c) => c.id === root.messages.collectionId,
-    );
-    expect(col!.pages.length).toBeGreaterThanOrEqual(2);
+    const collectionId = root.messages.collectionId;
+    const pagesDir = path.join(ctx.dbPath, "collections", collectionId, "pages");
+    const pageDirs = fs.readdirSync(pagesDir);
+    expect(pageDirs.length).toBeGreaterThanOrEqual(2);
   });
 });
 

@@ -52,15 +52,17 @@ describe("client", () => {
     const ctx = await setup();
     cleanup = ctx.cleanup;
 
+    const root = ctx.client.readRoot() as any;
+    const collectionId = root.messages.collectionId;
+    await ctx.replica.postMessage({ kind: "subscribe-collection", collectionId });
+
     await ctx.client.messages.concat([
       { text: "msg1", author: "alice" },
     ]);
 
-    await ctx.client.messages.read();
     const state = getConnectedState(ctx.replica);
-    const root = ctx.client.readRoot() as any;
     const col = state.collections.find(
-      (c) => c.id === root.messages.collectionId,
+      (c) => c.id === collectionId,
     );
     expect(col!.totalCount).toBe(1);
   });
@@ -462,12 +464,10 @@ describe("client subscribeData", () => {
     unsub();
   });
 
-  it("subscribeData returns all pages after reconnect (not just last page)", async () => {
-    // Use a tiny maxPageSize to force multiple pages
+  it("subscribeData returns all items after reconnect (across multiple storage pages)", async () => {
     const ctx = await setup({ maxPageSize: 50 });
     cleanup = ctx.cleanup;
 
-    // Write enough data to create multiple pages
     await ctx.client.messages.concat([
       { text: "page-one-msg-a", author: "alice" },
       { text: "page-one-msg-b", author: "bob" },
@@ -476,18 +476,12 @@ describe("client subscribeData", () => {
       { text: "page-two-msg", author: "charlie" },
     ]);
 
-    // Verify we have multiple pages via a read
-    await ctx.client.messages.read();
-    const stateBefore = getConnectedState(ctx.replica);
-    const collectionId = (ctx.client.readRoot() as any).messages.collectionId;
-    const colBefore = stateBefore.collections.find((c) => c.id === collectionId);
-    expect(colBefore!.pages.length).toBeGreaterThanOrEqual(2);
-
     // Simulate app reload: disconnect and reconnect
     await ctx.replica.postMessage({ kind: "disconnect" });
     await ctx.replica.postMessage({ kind: "connect", version: 0 });
 
-    // Subscribe after reconnect — should get ALL pages
+    // Subscribe after reconnect — should get ALL items regardless of
+    // how many storage pages they span (windowing is transparent here).
     const received: any[] = [];
     const unsub = ctx.client.messages.subscribeData((data) => {
       received.push(data);
@@ -495,7 +489,6 @@ describe("client subscribeData", () => {
 
     await delay(50);
 
-    // Collect all items from the initial subscribe callback
     const allItems = received.flatMap((r) => r.newItems);
     const texts = allItems.map((item: any) => item.text);
 

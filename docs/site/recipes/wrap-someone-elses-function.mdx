@@ -1,0 +1,102 @@
+---
+title: Wrap another plugin's function
+description: Use advice to add behavior to a function in someone else's plugin without forking it.
+---
+
+# Wrap another plugin's function
+
+Advice is the right tool when you want to **add behavior** to a function in another plugin's view without modifying the other plugin's source. It works for renderers only.
+
+## Use case
+
+Suppose another plugin has a `Counter` component:
+
+```tsx
+// in plugins/notes-plugin/src/renderer/App.tsx
+export function Counter({ count }: { count: number }) {
+  return <span>{count}</span>
+}
+```
+
+You want to wrap it with a colored badge that shows when the count is over 10.
+
+## 1. Write the wrapper
+
+```tsx
+// src/content/wrap-counter.tsx
+import type { ReactElement } from "react"
+
+export function WrapCounter(
+  props: { count: number },
+  next: (...args: any[]) => ReactElement,
+) {
+  const original = next(props)
+  if (props.count > 10) {
+    return <span style={{ background: "red", padding: 4 }}>{original}</span>
+  }
+  return original
+}
+```
+
+`next` is the function the chain would call without your advice — it returns the original component's output.
+
+## 2. Register the advice
+
+```typescript
+// src/main/services/wrapper.ts
+import { Service, runtime } from "@zenbujs/core/runtime"
+import { advise } from "@zenbujs/core/advice"
+
+export class WrapperService extends Service {
+  static key = "counter-wrapper"
+
+  async start() {
+    this.useDisposable("counter-advice", () =>
+      advise({
+        view: "notes",                                          // target view scope
+        target: { module: "App.tsx", export: "Counter" },       // target function
+        kind: "around",
+        handler: { module: "src/content/wrap-counter.tsx", export: "WrapCounter" },
+      }, import.meta),
+    )
+  }
+}
+
+runtime.register(WrapperService, import.meta)
+```
+
+## 3. Save and watch
+
+The framework invalidates the `notes` view's prelude module and reloads the view. Your wrapper now runs around every render of `Counter`.
+
+## Variants
+
+### Replace the function entirely
+
+```typescript
+advise({
+  view: "notes",
+  target: { module: "App.tsx", export: "Counter" },
+  kind: "replace",
+  handler: { module: "src/content/replacement.tsx", export: "Replacement" },
+}, import.meta)
+```
+
+### Just observe (don't modify)
+
+```typescript
+advise({
+  view: "notes",
+  target: { module: "App.tsx", export: "Counter" },
+  kind: "after",
+  handler: { module: "src/content/observe.tsx", export: "Observe" },
+}, import.meta)
+```
+
+The handler receives `(props, returnValue)` and its return value is ignored.
+
+## Things to know
+
+- Targeting matches by **module + export name**. If the targeted plugin renames the export, your advice silently stops applying.
+- Multiple plugins can advise the same target. They compose — see [Ordering and removal](/advice/ordering-and-removal).
+- Advice is renderer-only. To wrap a main-process service method, write a wrapper service that depends on the original.

@@ -1,17 +1,10 @@
 #!/usr/bin/env node
 // zen CLI — bundled by tsdown. Subcommands are imported lazily so one command
-// does not pull the full legacy command surface into process startup.
+// does not pull the full surface into process startup.
 
 const SUBCOMMANDS = new Set([
-  "kyju",
   "link",
-  "doctor",
-  "config",
-  "setup",
-  "init",
   "install",
-  "exec",
-  "profile",
   "db",
   "runtime",
   "setup-app",
@@ -32,19 +25,13 @@ zen — Zenbu CLI
 
 Usage:
   zen [path] [--blocking] [--verbose]            Run app at path with local Electron
-  zen launch [--blocking] [--runtime <ver>]      Legacy standalone launch
-  zen runtime [install|list|remove] [version]    Legacy Electron runtime cache
-  zen setup-app [--name "App"] [--runtime <ver>] Legacy native .app bundle
+  zen launch [--blocking] [--runtime <ver>]      Run app with cached Electron runtime
+  zen runtime [install|list|remove] [version]    Manage cached Electron runtimes
+  zen setup-app [--name "App"] [--runtime <ver>] Build a /Applications/<name>.app from runtime cache
   zen link                                       Regenerate registry types
-  zen doctor                                     Re-run kernel setup.ts
-  zen setup [--dir <path>]                       Run a plugin's setup.ts
-  zen config <get|set> <key> [value]             Read/write CLI config
   zen db [list|add|default|remove|generate] [...] Manage DB paths or generate migrations
-  zen init <plugin-name> [--dir <path>]          Scaffold a new plugin
   zen install [path] [--force]                   Install app deps with managed pnpm
-  zen exec -e '<ts>' | zen exec <file.ts>        Run TS with rpc/events pre-opened
-  zen profile [--duration <ms>] [--out <path>]   CPU profile the kernel main process
-  zen profile heap [--out <path>]                Heap snapshot of the kernel main process
+  zen dev <link|unlink> [monorepo-path]          Symlink/restore zenbu/ submodule for live monorepo edits
 
   zen build:source                               Transform user TS to .zenbu/source/ (no network)
   zen build:desktop                              Bundle launcher + seed -> dist/<name>.app
@@ -70,58 +57,16 @@ async function main() {
   }
   const rest = argv.slice(1)
   switch (first) {
-    case "kyju":
-      {
-        const { runKyju } = await import("./commands/kyju")
-      await runKyju(rest)
-      }
-      return
     case "link":
       {
         const { runLink } = await import("./commands/link")
       await runLink(rest)
       }
       return
-    case "doctor":
-      {
-        const { runDoctor } = await import("./commands/doctor")
-      await runDoctor(rest)
-      }
-      return
-    case "config":
-      {
-        const { runConfig } = await import("./commands/config")
-      await runConfig(rest)
-      }
-      return
-    case "setup":
-      {
-        const { runSetup } = await import("./commands/setup")
-      await runSetup(rest)
-      }
-      return
-    case "init":
-      {
-        const { runInit } = await import("./commands/init")
-      await runInit(rest)
-      }
-      return
     case "install":
       {
         const { runInstall } = await import("./commands/install")
       await runInstall(rest)
-      }
-      return
-    case "exec":
-      {
-        const { runExec } = await import("./commands/exec")
-      await runExec(rest)
-      }
-      return
-    case "profile":
-      {
-        const { runProfile } = await import("./commands/profile")
-      await runProfile(rest)
       }
       return
     case "db":

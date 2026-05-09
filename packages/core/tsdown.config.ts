@@ -29,7 +29,6 @@ export default defineConfig({
   deps: {
     alwaysBundle: [
       "@zenbu/advice",
-      "@zenbu/git",
       "@zenbu/kyju",
       "@zenbu/zenrpc",
       "dynohot",

@@ -402,6 +402,68 @@ export const readJsonlFile = ({ fs, path: filePath }: { fs: FileSystem.FileSyste
       .map((line) => JSON.parse(line) as KyjuJSON);
   });
 
+/**
+ * Read items from a collection by global index range [start, end).
+ * Walks the page index to find which page files contain the requested
+ * items, reads only those pages, and returns the sliced items plus
+ * totalCount. Pages are a storage concern — callers get a flat item
+ * array.
+ */
+export const readCollectionItemRange = ({
+  fs,
+  config,
+  collectionId,
+  start,
+  end,
+}: {
+  fs: FileSystem.FileSystem;
+  config: DbConfig;
+  collectionId: string;
+  start?: number;
+  end?: number;
+}) =>
+  Effect.gen(function* () {
+    const collectionDir = paths.collection({ config, collectionId });
+    const pagesDir = nodePath.join(collectionDir, config.pagesDirName);
+    const pageDirs = yield* fs.readDirectory(pagesDir);
+
+    const pageIndexes = yield* Effect.all(
+      pageDirs.map((pageId) =>
+        Effect.gen(function* () {
+          const pIdx = JSON.parse(
+            yield* fs.readFileString(
+              paths.pageIndex({ config, collectionId, pageId }),
+            ),
+          ) as PageIndex;
+          return { id: pageId, order: pIdx.order };
+        }),
+      ),
+      { concurrency: "unbounded" },
+    );
+
+    const sorted = pageIndexes.sort((a, b) => a.order - b.order);
+
+    // Read all pages to build the full item list, then slice.
+    // For large collections this could be optimized to skip pages
+    // entirely outside the range, but correctness first.
+    const allItems: KyjuJSON[] = [];
+    for (const entry of sorted) {
+      const dataPath = paths.pageData({ config, collectionId, pageId: entry.id });
+      const pageItems = yield* readJsonlFile({ fs, path: dataPath });
+      allItems.push(...pageItems);
+    }
+
+    const totalCount = allItems.length;
+    const resolvedStart = start ?? 0;
+    const resolvedEnd = end ?? totalCount;
+    const items = allItems.slice(
+      Math.max(0, resolvedStart),
+      Math.min(totalCount, resolvedEnd),
+    );
+
+    return { items, totalCount };
+  });
+
 export type DbHandlerContext = {
   fs: FileSystem.FileSystem;
   config: DbConfig;

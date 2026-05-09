@@ -1,7 +1,0 @@
-{
-  "id": "game",
-  "name": "Game",
-  "description": "Canvas preview, asset generator, sprite and animation tools",
-  "tags": ["canvas", "asset gen", "sprites"],
-  "thumbnail": "thumbnail.png"
-}

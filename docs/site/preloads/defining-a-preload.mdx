@@ -1,0 +1,127 @@
+---
+title: Defining a preload
+description: Writing a preload module, error handling, and what context your preload runs in.
+---
+
+# Defining a preload
+
+A preload is a TypeScript file whose default export is an async function. The framework runs it once during boot, before any service starts.
+
+## The contract
+
+```typescript
+// src/main/preload.ts
+export default async function preload(): Promise<Preload> {
+  // ...returns frozen, shared, typed data
+}
+
+type Preload = { /* whatever you return */ }
+```
+
+You can also use a plain object literal export:
+
+```typescript
+export default {
+  staticThing: 42,
+}
+```
+
+Functions are far more common — preloads are useful precisely *because* you need to do work — but if your preload is a constant, the object form is fine.
+
+## What's available
+
+Inside a preload you have:
+
+- **Node.js APIs.** Full `node:*` standard library.
+- **`process.env`.** Already populated by [`bootstrapEnv()`](/api/core/setup-gate) before preloads run.
+- **`os`, `path`, `fs`.** Anything Node ships.
+
+You **don't** have:
+
+- Other preloads (the framework can't sequence preload-to-preload dependencies cleanly; if you need that, use a service).
+- Services (the runtime hasn't started).
+- The database (DbService isn't running yet).
+- Electron's main-process modules (the `app` object isn't ready until after preloads run).
+
+If you find yourself needing those — that's a service, not a preload.
+
+## Type inference
+
+Whatever your preload returns *is* the published shape. The link generator infers `Awaited<ReturnType<typeof default>>` and registers it as `Preloads["<plugin-name>"]`. No extra type declaration needed.
+
+```typescript
+// src/main/preload.ts
+export default async function () {
+  return {
+    homeDir: "/Users/x",
+    platform: "darwin" as NodeJS.Platform,
+    cores: 8,
+  }
+}
+```
+
+After `zen link`:
+
+```typescript
+import { usePreload } from "@zenbujs/core/react"
+
+const env = usePreload(p => p["my-plugin"])
+//   ^? { homeDir: string; platform: NodeJS.Platform; cores: number }
+```
+
+## Error handling
+
+If a preload throws, **the framework refuses to boot**. This is intentional — preload failures are app-level configuration errors (missing env var, broken filesystem, etc.) and surfacing them as a hard boot failure makes them findable.
+
+If you want a "degrade gracefully" semantic, build it into your preload's return value:
+
+```typescript
+export default async function () {
+  let session: Session | null = null
+  try {
+    session = await readSessionFromDisk()
+  } catch {
+    // fall through; session stays null
+  }
+  return { session }
+}
+```
+
+That way the consuming code can handle `session === null` explicitly.
+
+## Performance budget
+
+Preloads block boot. The framework runs them in parallel across plugins, so a slow preload in plugin A doesn't serialize plugin B's preload. But every service waits on **all** preloads.
+
+Rough budget: aim for under **50ms per preload**, total under **200ms across all plugins**. If you're doing more than reading a file or two, ask yourself whether a service with `useDisposable` and an in-memory cache wouldn't be a better fit.
+
+## Hot reload
+
+Preloads do **not** hot-reload by default. A change to a preload file requires a full app restart (`rpc.runtime.quitAndRelaunch()`). This is intentional — preloads define types that flow through the registry; live-changing them mid-session would break invariants in already-loaded services.
+
+If you genuinely need hot-reloadable boot data, model it as a service that runs once in `start()` and exposes its result via a getter. Lose the preload's "available before services" guarantee, gain HMR.
+
+## What about *renderer-side* preloads?
+
+The renderer's analog of a preload is — `useDb()` plus a database default value. There is no separate "renderer preload" concept in Zenbu, because the database is already instantly available from any renderer.
+
+If you have data that's *expensive to derive but cheap to store*, compute it in a main-process preload and stash it into the DB on first boot:
+
+```typescript
+// preload runs in main process:
+export default async function () {
+  return { thumbnailHashes: await scanThumbnailDir() }
+}
+
+// service uses it:
+async start() {
+  const root = this.ctx.db.read()
+  if (!root.plugin["my-plugin"].thumbnailHashes) {
+    await this.ctx.db.update(r => {
+      r.plugin["my-plugin"].thumbnailHashes = this.ctx.preloads["my-plugin"].thumbnailHashes
+    })
+  }
+}
+```
+
+Now renderers can `useDb()` it freely.

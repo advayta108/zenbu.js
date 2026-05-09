@@ -1,7 +1,5 @@
 packages:
   - 'packages/*'
-  - 'packages/virtualizer/example'
-  - 'apps/*'
   - 'docs/*'
   - 'explorations/*'
 

@@ -1,0 +1,124 @@
+---
+title: Customizing boot
+description: When and how to override pieces of the framework's boot pipeline.
+---
+
+# Customizing boot
+
+For nearly every app, the answer is "don't." Boot is the part of the framework that tries hardest to be invariant — what your app does before services start should be approximately nothing.
+
+That said, there are a few legitimate reasons to put code before `setupGate()` runs:
+
+1. **Set process-wide env vars** that have to be in place before the framework reads them.
+2. **Show a splash screen** so users see *something* during the 200-400ms electron startup.
+3. **Register a custom Electron protocol** (e.g. for deep linking) before the framework's protocols are wired.
+4. **Crash-report wiring** — initialize Sentry, Rollbar, etc. before any of your services.
+
+This page is the playbook for those.
+
+## Replacing `package.json#main`
+
+Point `main` at your own file:
+
+```json
+{
+  "main": "src/main/boot.mjs"
+}
+```
+
+```typescript
+// src/main/boot.mjs
+import "./crash-reporter"        // run before anything else
+import { app } from "electron"
+import { setupGate } from "@zenbujs/core/setup-gate"
+
+app.whenReady().then(() => {
+  // splash logic, etc.
+})
+
+await setupGate()
+```
+
+That's the canonical pattern. `setupGate()` does everything documented in [setup-gate](/boot/setup-gate); your wrapper does pre-work.
+
+## What you can do *before* `setupGate()`
+
+Safe:
+
+- `import` modules (the loader chain isn't installed yet, but Node's normal ESM resolver works for plain JS / `.mjs` files; *don't* import TS files until after `setupGate()` registers tsx).
+- Set `process.env`.
+- Call `app.whenReady()` and create windows (the framework's own windows haven't been created yet).
+- Register `app.on(...)` handlers.
+
+Unsafe:
+
+- Importing a service file. The runtime singleton hasn't been wired; the file's `runtime.register(...)` call will crash.
+- Importing anything from `@zenbujs/core/services` — those modules call `runtime.register(...)` at top level.
+- Touching `process.cwd()` and assuming it's stable. `setupGate()` `chdir`s after env bootstrap.
+
+## What you can do *after* `setupGate()`
+
+Almost nothing useful — by the time `setupGate()` returns, the runtime is `whenIdle`'d and services have been ready for a while. Adding code after will run *eventually*, but it's racy: services may have already used what your code was supposed to install.
+
+If you need code that runs after services boot, register it as a service.
+
+## A custom main entrypoint that opens a splash
+
+```typescript
+// src/main/boot.mjs
+import { app, BrowserWindow } from "electron"
+import { fileURLToPath } from "node:url"
+import { dirname, resolve } from "node:path"
+
+const here = dirname(fileURLToPath(import.meta.url))
+
+app.whenReady().then(() => {
+  const splash = new BrowserWindow({
+    width: 400,
+    height: 300,
+    frame: false,
+    backgroundColor: "#1a1a1a",
+    transparent: true,
+  })
+  splash.loadFile(resolve(here, "../../loading.html"))
+
+  globalThis.__splash = splash
+})
+
+const { setupGate } = await import("@zenbujs/core/setup-gate")
+await setupGate()
+```
+
+Inside one of your services, close the splash once the real window opens:
+
+```typescript
+async start() {
+  await this.openMainWindow()
+  ;(globalThis as any).__splash?.close()
+}
+```
+
+We may eventually formalize this as a `splash:` lifecycle phase in `setupGate()`. For now, a global is the cleanest mechanism.
+
+## Custom CLI flags
+
+`setupGate()` reads `--project=` from `process.argv`. Other flags are yours. Parse them before `setupGate()`:
+
+```typescript
+const debug = process.argv.includes("--debug")
+if (debug) process.env.ZENBU_VERBOSE = "1"
+await setupGate()
+```
+
+Anything in `process.env.ZENBU_*` is read by the framework. See the env reference in [setup-gate](/boot/setup-gate).
+
+## Custom project resolution
+
+`setupGate()` reads `--project=` and falls back to `~/.zenbu/apps/<name>/`. To inject a different fallback:
+
+```typescript
+process.argv.push(`--project=${myCustomPath}`)
+await setupGate()
+```
+
+Don't try to override `setupGate()`'s internal resolution — it's intentional that the resolution is fixed.

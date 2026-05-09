@@ -1,0 +1,187 @@
+---
+title: Creating a plugin
+description: Building a standalone plugin you can publish separately from your application.
+---
+
+# Creating a plugin
+
+When you want code that isn't tied to one application — something users can install alongside any Zenbu app — you write a standalone plugin. The shape is identical to your app's own plugin (because your app is itself a plugin); only the publishing model differs.
+
+## Scaffold
+
+```bash
+nr zen init my-plugin
+cd my-plugin
+ni
+```
+
+You get:
+
+```
+my-plugin/
+├── package.json
+├── tsconfig.json
+├── zenbu.plugin.json
+├── vite.config.ts
+└── src/
+    ├── main/
+    │   ├── schema.ts          # optional, but commonly there
+    │   └── services/
+    │       └── plugin.ts
+    └── renderer/              # only if your plugin has views
+        └── ...
+```
+
+Edit the manifest:
+
+```json
+{
+  "name": "my-plugin",
+  "services": ["src/main/services/*.ts"],
+  "schema": "src/main/schema.ts"
+}
+```
+
+## Write the schema (if you have one)
+
+```typescript
+// src/main/schema.ts
+import { defineSchema, f, z } from "@zenbujs/core/db"
+
+export const schema = defineSchema({
+  notes: f.collection(z.object({ id: z.string(), text: z.string() })),
+})
+```
+
+Generate the initial migration:
+
+```bash
+nr zen db generate --name init
+```
+
+Commit the migration. It's part of your published source.
+
+## Write a service
+
+```typescript
+// src/main/services/notes.ts
+import { Service, runtime } from "@zenbujs/core/runtime"
+import { DbService } from "@zenbujs/core/services"
+import { nanoid } from "nanoid"
+
+export class NotesService extends Service.with({ db: DbService }) {
+  static key = "notes"
+
+  async list() {
+    return this.ctx.db.read().plugin["my-plugin"].notes
+  }
+
+  async add(text: string) {
+    const id = nanoid()
+    await this.ctx.db.update(r => {
+      r.plugin["my-plugin"].notes.concat([{ id, text }])
+    })
+    return { id }
+  }
+}
+
+runtime.register(NotesService, import.meta)
+```
+
+## Add a setup script (if needed)
+
+If your plugin needs one-time host setup — installing native deps, downloading a binary, creating a cache directory — write a `setup.ts`:
+
+```typescript
+// setup.ts
+import { $ } from "bun"
+
+await $`pnpm install`
+```
+
+And declare it:
+
+```json
+{
+  "name": "my-plugin",
+  "services": ["src/main/services/*.ts"],
+  "setup": { "script": "./setup.ts", "version": 1 }
+}
+```
+
+The framework runs this once per plugin per machine using the bundled bun. Bump `version` whenever you need to re-run on existing installs.
+
+## Add a view (if needed)
+
+Create a renderer source tree:
+
+```
+src/renderer/
+├── index.html
+├── main.tsx
+├── App.tsx
+└── app.css
+```
+
+Register it from a service:
+
+```typescript
+// src/main/services/notes-view.ts
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { Service, runtime } from "@zenbujs/core/runtime"
+import { Views } from "@zenbujs/core/services"
+
+export class NotesViewService extends Service.with({ views: Views }) {
+  static key = "notes:view"
+
+  async start() {
+    const here = path.dirname(fileURLToPath(import.meta.url))
+    this.useDisposable("register-view", () =>
+      this.ctx.views.register({
+        id: "notes",
+        root: path.resolve(here, "..", "..", "renderer"),
+        viteConfig: path.resolve(here, "..", "..", "..", "vite.config.ts"),
+        panel: { sidebar: true, label: "Notes" },
+      }),
+    )
+  }
+}
+
+runtime.register(NotesViewService, import.meta)
+```
+
+The view's URL gets a `?scope=notes` query parameter that's used to scope advice and content scripts injected by other plugins.
+
+## Test locally
+
+Add your plugin's manifest path to a test app's `config.json`:
+
+```json
+{
+  "plugins": [
+    "/path/to/test-app/zenbu.plugin.json",
+    "/path/to/my-plugin/zenbu.plugin.json"
+  ]
+}
+```
+
+Run the test app (`nr dev` in its directory). Save your plugin's source — HMR applies to plugins exactly like to your app code.
+
+## Publish
+
+The simplest publish flow is git: push to a public repo, and tell users to clone it into `~/.zenbu/plugins/<name>/` and add the manifest path to their `config.json`.
+
+If your plugin has runtime npm dependencies, the user's plugin install will run `pnpm install` (via your setup script) the first time. Pre-built binaries should be downloaded inside `setup.ts` rather than committed to git — the [registry](/plugins/installing-and-managing) is intended for plugin discovery, not asset distribution.
+
+## What about a plugin that needs to extend another plugin?
+
+Common patterns:
+
+- **Add a new database section** — declare your own `schema`. It lives at `root.plugin["your-name"]` and doesn't collide.
+- **Subscribe to another plugin's events** — declare a service that reads `events["other-plugin"].something.subscribe(...)`. No need to import the other plugin's code.
+- **Add a UI to another plugin's view** — use a [content script](/advice/content-scripts) targeting `view: "<other-plugin-view-id>"`.
+- **Replace or wrap a function in another plugin** — use [advice](/advice/function-advice).
+- **Read another plugin's database section** — declare `peerDependencies` in `package.json`, then `root.plugin["other-plugin"].x` is typed.
+
+These compose: a plugin can do all five at once.

@@ -1,1 +1,0 @@
-export { GreetingBadge } from './GreetingBadge'

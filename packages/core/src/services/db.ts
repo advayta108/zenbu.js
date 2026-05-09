@@ -16,7 +16,6 @@ import { loadMigrationsFromDir } from "@zenbu/kyju/loader";
 import { Service, runtime } from "../runtime";
 import type { ResolvedDbRoot } from "../registry";
 import { schema as coreSchema } from "../schema";
-import { trace as traceSpan } from "../shared/tracer";
 import { addDb, resolveDbPath } from "../shared/db-registry";
 import { HttpService } from "./http";
 import { createLogger } from "../shared/log";
@@ -273,11 +272,7 @@ export async function discoverSections(
 
       try {
         const t0 = Date.now();
-        const raw = await traceSpan(
-          "discover:read-manifest",
-          () => fs.readFile(manifestPath, "utf8"),
-          { parentKey: "db", meta: { plugin: pluginName } },
-        );
+        const raw = await fs.readFile(manifestPath, "utf8");
         manifestMs = Date.now() - t0;
 
         const manifest = JSON.parse(raw);
@@ -293,19 +288,14 @@ export async function discoverSections(
 
         const schemaChain = (async () => {
           const s0 = Date.now();
-          const schemaPath = await traceSpan(
-            "discover:resolve-schema",
-            () => resolveManifestModulePath(baseDir, manifest.schema),
-            { parentKey: "db", meta: { plugin: pluginName } },
+          const schemaPath = await resolveManifestModulePath(
+            baseDir,
+            manifest.schema,
           );
           resolveSchemaMs = Date.now() - s0;
 
           const s1 = Date.now();
-          const schemaModule = await traceSpan(
-            "discover:import-schema",
-            () => importFreshModule(schemaPath),
-            { parentKey: "db", meta: { plugin: pluginName } },
-          );
+          const schemaModule = await importFreshModule(schemaPath);
           importSchemaMs = Date.now() - s1;
 
           return { schemaPath, schemaModule };
@@ -315,10 +305,9 @@ export async function discoverSections(
           ? (async () => {
               try {
                 const m0 = Date.now();
-                const migrationsPath = await traceSpan(
-                  "discover:resolve-migrations",
-                  () => resolveManifestModulePath(baseDir, manifest.migrations),
-                  { parentKey: "db", meta: { plugin: pluginName } },
+                const migrationsPath = await resolveManifestModulePath(
+                  baseDir,
+                  manifest.migrations,
                 );
                 resolveMigrationsMs = Date.now() - m0;
 
@@ -326,17 +315,9 @@ export async function discoverSections(
                 const stat = await fs.stat(migrationsPath);
                 let migrations: any[];
                 if (stat.isDirectory()) {
-                  migrations = await traceSpan(
-                    "discover:load-migrations-dir",
-                    () => loadMigrationsFromDir(migrationsPath),
-                    { parentKey: "db", meta: { plugin: pluginName } },
-                  );
+                  migrations = await loadMigrationsFromDir(migrationsPath);
                 } else {
-                  const migModule = await traceSpan(
-                    "discover:import-migrations",
-                    () => importFreshModule(migrationsPath),
-                    { parentKey: "db", meta: { plugin: pluginName } },
-                  );
+                  const migModule = await importFreshModule(migrationsPath);
                   migrations =
                     migModule.migrations ?? migModule.default ?? [];
                 }
@@ -484,6 +465,20 @@ export class DbService extends Service {
     }
   }
 
+  /**
+   * Flush + release the kyju cross-process lock at `<dbPath>/.lock`.
+   * Called on service teardown so a subsequent process can open the DB
+   * without seeing a stale lock. Idempotent.
+   */
+  async close(): Promise<void> {
+    if (!this.db) return;
+    try {
+      await this.db.close();
+    } catch (err) {
+      log.error("close failed:", err);
+    }
+  }
+
   async evaluate() {
     const configPath = await resolveConfigPath();
     const configDir = path.dirname(configPath);
@@ -508,6 +503,19 @@ export class DbService extends Service {
       this.sectionsHash !== sectionsHash ||
       this._dbPath !== dbPath
     ) {
+      // If we're replacing an existing Db (sectionsHash or path changed
+      // mid-process), close the old one first so it flushes and releases
+      // its lock-file nonce. Without this, the abandoned Db would still
+      // have its `process.on("exit")` handler attached and could
+      // unintentionally release the lock the new instance is about to
+      // acquire (or vice versa).
+      if (this.db) {
+        try {
+          await this.db.close();
+        } catch (err) {
+          log.error("close of previous db failed:", err);
+        }
+      }
       this.dbRouter = createRouter();
       this.db = await this.trace("create-db", () =>
         createDb({
@@ -534,11 +542,14 @@ export class DbService extends Service {
       { receive: (event: any) => Promise<void>; close: () => void }
     >();
 
-    // Flush lagged kyju writes on any teardown (hot-reload OR shutdown).
-    // Without this, in-memory writes that haven't yet hit setImmediate's
-    // disk write would vanish when the Db instance is replaced/destroyed.
-    this.setup("kyju-flush-on-cleanup", () => async () => {
-      await this.flush();
+    // On any teardown (hot-reload OR shutdown), drain kyju's lagged
+    // writes AND release the cross-process lock. Without `close()`, in-
+    // memory writes that haven't reached setImmediate's flush would
+    // vanish, AND the next process attempting to open this DB would
+    // either be blocked by a stale lock or (in the same-process re-init
+    // case) would race against the abandoned writer.
+    this.setup("kyju-close-on-cleanup", () => async () => {
+      await this.close();
     });
 
     this.setup("ws-transport", () => {

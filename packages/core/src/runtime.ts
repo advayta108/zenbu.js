@@ -1,6 +1,3 @@
-import { bootBus } from "./shared/boot-bus"
-import { trace as traceSpan, traceSync as traceSpanSync, type SpanOptions } from "./shared/tracer"
-
 export type CleanupReason = "reload" | "shutdown"
 type SetupCleanup = ((reason: CleanupReason) => void | Promise<void>) | void
 type SetupFn = () => SetupCleanup
@@ -74,10 +71,7 @@ export abstract class Service {
     if (existing) {
       try { existing("reload") } catch (e) { console.error(`[hot] setup cleanup "${key}" failed:`, e) }
     }
-    const serviceKey = (this.constructor as typeof Service).key
-    const cleanup = traceSpanSync(`setup:${key}`, () => fn(), {
-      parentKey: serviceKey,
-    })
+    const cleanup = fn()
     if (cleanup) {
       this.__setupCleanups.set(key, cleanup)
     } else {
@@ -86,32 +80,24 @@ export abstract class Service {
   }
 
   /**
-   * Report a named span inside this service's boot-trace row. Use for any
-   * non-trivial async work in `evaluate()` (opening a db, starting a server,
-   * awaiting a process) so we can see where time goes.
-   *
-   *     await this.trace("migrations", () => runMigrations())
+   * Run `fn` and return its result. Historically reported a boot-trace span;
+   * now a thin wrapper preserved for caller ergonomics inside service
+   * `evaluate()` bodies.
    */
   trace<T>(
-    name: string,
+    _name: string,
     fn: () => T | Promise<T>,
-    meta?: Record<string, unknown>,
+    _meta?: Record<string, unknown>,
   ): Promise<T> {
-    const key = (this.constructor as typeof Service).key
-    const opts: SpanOptions = { parentKey: key }
-    if (meta) opts.meta = meta
-    return traceSpan(name, fn, opts)
+    return Promise.resolve(fn())
   }
 
   traceSync<T>(
-    name: string,
+    _name: string,
     fn: () => T,
-    meta?: Record<string, unknown>,
+    _meta?: Record<string, unknown>,
   ): T {
-    const key = (this.constructor as typeof Service).key
-    const opts: SpanOptions = { parentKey: key }
-    if (meta) opts.meta = meta
-    return traceSpanSync(name, fn, opts)
+    return fn()
   }
 
   /** @internal */
@@ -466,7 +452,6 @@ export class ServiceRuntime {
       return
     }
 
-    const wasReady = slot.status === "ready" && slot.instance !== null
     let instance = slot.instance
     if (!instance) {
       instance = new (ServiceClass as any)() as Service
@@ -478,33 +463,14 @@ export class ServiceRuntime {
     slot.status = "evaluating"
     slot.error = null
 
-    const startedAt = Date.now()
     try {
       await instance!.__cleanupAllSetups("reload")
       this.injectCtx(instance!, ServiceClass)
-      if (!wasReady) {
-        bootBus.emit("status", { message: "Starting services…", detail: key })
-        bootBus.emit("service:start", { key, at: startedAt })
-      }
       await instance!.evaluate()
       slot.status = "ready"
-      if (!wasReady) {
-        const endedAt = Date.now()
-        const durationMs = endedAt - startedAt
-        bootBus.emit("service:end", { key, at: endedAt, durationMs })
-      }
     } catch (e) {
       slot.status = "failed"
       slot.error = e
-      if (!wasReady) {
-        const endedAt = Date.now()
-        bootBus.emit("service:end", {
-          key,
-          at: endedAt,
-          durationMs: endedAt - startedAt,
-          error: e instanceof Error ? e.message : String(e),
-        })
-      }
       console.error(`[hot] ${key} failed to evaluate:`, e)
     }
   }
@@ -567,13 +533,42 @@ export class ServiceRuntime {
 // here would be invisible to the live instance until the next process
 // restart. `setPrototypeOf` after the `??=` rebinds the instance to the
 // freshly-evaluated prototype, so HMR of runtime.ts itself works.
+
+/**
+ * Devtools-only handles, attached to the global so they aren't part of the
+ * public `ServiceRuntime` autocomplete surface. Same shape React DevTools
+ * uses (`__REACT_DEVTOOLS_GLOBAL_HOOK__`): user code reading
+ * `runtime.<...>` never lands on these methods; you only find them if you
+ * specifically type `globalThis.__zenbu_dev__`. Kept here (next to the
+ * runtime that owns the state) because the hook reaches into private
+ * implementation details — `scheduleReconcile` stays `private` on the
+ * class; the cast lives inside the encapsulation boundary.
+ */
+function installDevHook(rt: ServiceRuntime): void {
+  const internals = rt as unknown as {
+    definitions: Map<string, unknown>
+    scheduleReconcile: (keys: string[]) => Promise<void>
+  }
+  ;(globalThis as any).__zenbu_dev__ = {
+    reloadService: async (key: string): Promise<void> => {
+      if (!internals.definitions.has(key)) {
+        throw new Error(`No service registered for key "${key}"`)
+      }
+      await internals.scheduleReconcile([key])
+      await rt.whenIdle()
+    },
+  }
+}
+
 export const runtime: ServiceRuntime = (() => {
   const existing = (globalThis as any).__zenbu_service_runtime__ as ServiceRuntime | undefined
   if (existing) {
     Object.setPrototypeOf(existing, ServiceRuntime.prototype)
+    installDevHook(existing)
     return existing
   }
   const fresh = new ServiceRuntime()
   ;(globalThis as any).__zenbu_service_runtime__ = fresh
+  installDevHook(fresh)
   return fresh
 })()

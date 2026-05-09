@@ -1,0 +1,68 @@
+---
+title: Introduction
+description: A JavaScript framework for building extensible, live-editable desktop apps.
+---
+
+# Zenbu.js
+
+Zenbu.js is a JavaScript framework for building **desktop apps that are good by default and extensible from day one**. You write a normal-looking React + TypeScript codebase; Zenbu turns it into an Electron application that is:
+
+- **Type-safe end to end.** A single source of truth for your database schema, your RPC surface, and your event topics — typed across every process.
+- **Hot-reloadable everywhere.** Server services, database migrations, renderer code, content scripts, and even framework code reload without a restart.
+- **Plugin-native.** Your application *is* a plugin. Anyone — including your end users — can drop another plugin into the same application and the two compose.
+- **Live-editable.** Ship the source code, not just the bundle. Users (and you) can patch a function, add a UI element, or wrap a procedure while the app is running. Updates are distributed over git, not via an opaque bundle replacement.
+
+If those four bullets sound like four separate frameworks, that's the point. Zenbu.js bundles them into one consistent programming model so you can stop hand-wiring them every time you start a new desktop project.
+
+```typescript
+// src/main/services/counter.ts
+import { Service, runtime } from "@zenbujs/core/runtime"
+
+export class CounterService extends Service {
+  static key = "counter"
+
+  async increment() {
+    await this.ctx.db.update(root => {
+      root.plugin.counter.count += 1
+    })
+  }
+}
+
+runtime.register(CounterService, import.meta)
+```
+
+```tsx
+// src/renderer/Counter.tsx
+import { useDb, useRpc } from "@zenbujs/core/react"
+
+export function Counter() {
+  const count = useDb(root => root.plugin.counter.count)
+  const rpc = useRpc()
+  return <button onClick={() => rpc.counter.increment()}>{count}</button>
+}
+```
+
+That's a working app. There is no glue code between those two files: the database is one declared schema, RPC is auto-derived from the service's public methods, and the renderer subscribes to the live in-memory replica with optimistic updates. No Redux, no IPC handlers, no `contextBridge.exposeInMainWorld`.
+
+## Where to next
+
+<CardGroup cols={2}>
+  <Card title="Why Zenbu?" icon="lightbulb" href="/why-zenbu">
+    The problem we set out to solve, the trade-offs we chose, and how we compare to other frameworks.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build a counter app from scratch in 10 minutes. No prior Electron knowledge required.
+  </Card>
+  <Card title="Mental model" icon="diagram-project" href="/mental-model">
+    Plugins, services, processes, runtimes — the four nouns you need before reading any other doc.
+  </Card>
+  <Card title="API reference" icon="book-open" href="/api/core/runtime">
+    Strict, opinionated public-API contract. Effect-free.
+  </Card>
+</CardGroup>
+
+## Status
+
+Zenbu.js is approaching its first stable release. The public API documented on this site is the **commitment** — anything not documented here is internal, even if it's accidentally exported from a package today. We are deliberately strict about this because the live-update model means breaking-change cleanup happens on real users' machines, not just in your CI.
+
+If you want a feature that isn't here, [open an issue](https://github.com/zenbu-org/zenbu/issues) or join [Discord](https://discord.gg/t3jzHHfc6z) — we'd rather add it deliberately than ship it by accident.

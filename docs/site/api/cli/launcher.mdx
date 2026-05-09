@@ -1,0 +1,35 @@
+---
+title: "@zenbujs/cli/launcher"
+description: The launcher shim used by liveSource builds.
+---
+
+# `@zenbujs/cli/launcher`
+
+The launcher is the small shim that runs as the **first** main-process module when a live-source-built app launches. It provisions the per-user app directory, runs `pnpm install` if needed, and hands off to `@zenbujs/core/setup-gate`.
+
+For plugin authors, this is internal — you never import or call it. It's documented so the contract between adapters and the framework is explicit.
+
+## What it does
+
+1. Reads the launcher's own `package.json` to find the app's name.
+2. Resolves the per-user apps dir (`ZENBU_APPS_DIR/<name>`).
+3. If the dir doesn't exist:
+   - Clones `seed/` (the bundled bare git repo) into the apps dir.
+   - Installs deps with the bundled `pnpm`.
+4. If the dir exists:
+   - `git fetch` against the configured mirror URL.
+   - Fast-forwards if there's an update; runs `pnpm install` if the lockfile changed.
+5. Sets `--project=<apps-dir>` on `process.argv`.
+6. Imports `@zenbujs/core/setup-gate` to hand off control.
+
+## Where it lives
+
+The launcher's source is in `packages/cli/src/launcher.ts` (compiled to `dist/launcher.mjs`). The `liveSource` adapter copies it into the bundle's `Resources/app/` and points `package.json#main` at it.
+
+## When it runs
+
+Only in production live-source builds. In dev (`nr dev`), Electron loads `setup-gate.mjs` directly — the apps-dir provisioning is skipped because the user is already running against the source on disk.
+
+## Customizing
+
+You don't customize the launcher. If you need a different entrypoint (splash, env, etc.), do it in your own `boot.mjs` that wraps `setupGate()` and ship that as the gate (`adapter.runtime.mainEntry`). See [Customizing boot](/boot/customizing-boot).

@@ -6,7 +6,6 @@ import {
   type CollectionIndex,
   type PageIndex,
   type BlobIndex,
-  broadcastCollectionDbUpdate,
   broadcastCollectionWrite,
   broadcastDbUpdate,
   broadcastWrite,
@@ -228,16 +227,12 @@ const handleWriteImpl = (ctx: DbHandlerContext, event: WriteEvent) =>
               sessions,
               excludeSessionId: event.sessionId,
               collectionId: typedOp.collectionId,
-              op: { ...typedOp, authority: { startIndex } },
-            });
-
-            broadcastCollectionDbUpdate({
-              sessions,
-              collectionId: typedOp.collectionId,
-              message: {
-                type: "collection.page.metadataUpdate",
-                pageId: activePageId,
-                fileSize: newFileSize,
+              op: {
+                ...typedOp,
+                authority: {
+                  startIndex,
+                  totalCount: collectionIndex.totalCount,
+                },
               },
             });
           }),

@@ -1,0 +1,174 @@
+---
+title: Manifest schema
+description: Every field in zenbu.plugin.json with semantics, defaults, and validation rules.
+---
+
+# `zenbu.plugin.json`
+
+A plugin's manifest is a JSON (or JSON-with-comments) file at the plugin's root. Its full shape:
+
+```jsonc
+{
+  // Required — globally unique, used as the plugin's namespace everywhere.
+  "name": "notes-plugin",
+
+  // Optional — root of the plugin's renderer source. Loaded as the default view.
+  "uiEntrypoint": "src/renderer",
+
+  // Optional — array of TS file paths or globs registering services with the runtime.
+  "services": [
+    "src/main/services/*.ts"
+  ],
+
+  // Optional — path to a TS file exporting `schema` (a defineSchema(...) result).
+  "schema": "src/main/schema.ts",
+
+  // Optional — path to a TS file exporting an `Events` type.
+  "events": "src/main/events.ts",
+
+  // Optional — path to a TS file with `export default async function preload() { ... }`.
+  "preload": "src/main/preload.ts",
+
+  // Optional — per-scope SVGs for sidebar icons in the host shell.
+  "icons": {
+    "notes-view": "<svg>...</svg>"
+  },
+
+  // Optional — one-time host-machine setup script.
+  "setup": {
+    "script": "./setup.ts",
+    "version": 1
+  },
+
+  // Optional — path to the plugin's migrations directory. Defaults to `./db/migrations`.
+  "migrations": "db/migrations"
+}
+```
+
+## Field-by-field
+
+### `name` (required)
+
+A string that uniquely identifies the plugin. This is:
+
+- The key under `root.plugin.<name>` in the database.
+- The namespace under `events[<name>]` and `preloads[<name>]`.
+- The display name in any UI that lists plugins.
+
+Rules:
+
+- Lowercase, kebab-case, ASCII. Match `[a-z][a-z0-9-]*`.
+- Must be globally unique across all plugins installed in the user's `config.json`.
+- Don't change after publishing — renaming changes the database section path, which breaks existing user data.
+
+### `uiEntrypoint` (optional)
+
+Path to the plugin's renderer source root, relative to the manifest. Loading the plugin registers a default view at this path with the scope name equal to the plugin's `name`. If your plugin has multiple views or you prefer to register them imperatively, omit this field and use [`Views.register`](/views/defining-a-view) from a service instead.
+
+### `services` (optional)
+
+An array of paths to TypeScript files. Each entry is one of:
+
+- **A glob** — `"src/main/services/*.ts"`. Matched at boot; new files added later show up after a manifest re-read.
+- **A direct path** — `"src/main/services/app.ts"`.
+- **A nested manifest** — `"sub-plugin/zenbu.plugin.json"`. Recursively imports another manifest, treating its services as part of this plugin's barrel.
+
+Every file in this list is imported for its side effect — the framework expects it to call [`runtime.register(...)`](/api/core/runtime#runtime).
+
+### `schema` (optional)
+
+Path to a TypeScript file that exports `schema`:
+
+```typescript
+import { defineSchema, f } from "@zenbujs/core/db"
+
+export const schema = defineSchema({
+  count: f.number().default(0),
+})
+```
+
+Or as the default export:
+
+```typescript
+export default defineSchema({ count: f.number().default(0) })
+```
+
+Both are accepted.
+
+### `events` (optional)
+
+Path to a TypeScript file exporting an `Events` type:
+
+```typescript
+export type Events = {
+  noteAdded: { id: string; text: string }
+}
+```
+
+This is type-only — there's nothing the framework runs from this file beyond reading the type via the registry generator.
+
+### `preload` (optional)
+
+Path to a TypeScript file with a default-exported async function (or static object). See [Preloads](/preloads/overview).
+
+### `icons` (optional)
+
+A map of `<scope>: <svg-string>` for any views the plugin registers. The host shell renders the SVG in its sidebar / tab strip when the corresponding scope is shown.
+
+```json
+{
+  "icons": {
+    "notes-view": "<svg viewBox='0 0 24 24'>...</svg>"
+  }
+}
+```
+
+### `setup` (optional)
+
+A one-time host-machine setup script:
+
+```json
+{
+  "setup": {
+    "script": "./setup.ts",
+    "version": 1
+  }
+}
+```
+
+The framework runs `script` (a TypeScript file) via the bundled bun binary the first time the plugin is installed, and again whenever `version` is bumped above the recorded value in `~/.zenbu/.internal/plugin-setup-state.json`. Use it for things like:
+
+- `pnpm install` inside the plugin directory,
+- downloading a binary,
+- creating cache directories.
+
+The script gets `process.env`, full filesystem access, and the ability to spawn subprocesses. It runs in a subprocess so it never blocks the main Electron thread.
+
+### `migrations` (optional)
+
+Path to the plugin's migrations directory, relative to the manifest. Defaults to `db/migrations`. Override only if you have an unusual layout.
+
+## What's *not* in the manifest
+
+Deliberately:
+
+- **Plugin dependencies.** Use `package.json#peerDependencies` for npm-level deps; service-level deps are declared via `Service.with({...})`.
+- **Permissions.** Zenbu doesn't have a permission model. Adding one is on the medium-term roadmap (see `setup.permissions` in the [open questions](/reference/open-questions)).
+- **Version / author / description.** Use `package.json` for metadata. The framework deliberately doesn't grow a parallel metadata system.
+- **Activation events.** All declared services start when the plugin is enabled. There's no "lazy load on first call" — a service's lifecycle is the framework's lifecycle.
+
+## Validation
+
+The framework validates the manifest at boot. Errors block the plugin (other plugins still load):
+
+- `name` is missing or invalid → plugin skipped, logged.
+- Required path doesn't resolve → plugin skipped, logged.
+- `services` contains a glob that matches zero files → warning, plugin loads.
+
+For comprehensive validation of all your manifests, run:
+
+```bash
+nr zen doctor
+```
+
+It dry-runs the boot flow against your config and reports every issue.

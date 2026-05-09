@@ -50,14 +50,16 @@ function parseArgs(argv: string[]): { name: string; runtimeVersion: string } {
   if (!name) {
     const projectDir = resolveProjectDir()
     try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(projectDir, "package.json"), "utf8"))
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(projectDir, "package.json"), "utf8"),
+      ) as { name?: string }
       name = pkg.name ?? path.basename(projectDir)
     } catch {
       name = path.basename(projectDir)
     }
   }
 
-  return { name, runtimeVersion }
+  return { name: name!, runtimeVersion }
 }
 
 export async function runSetupApp(argv: string[]) {

@@ -10,13 +10,12 @@ import {
   type BlobDeleteOp,
   type BlobSetOp,
   type ClientBlob,
-  type ClientCollection,
   type ClientEvent,
-  type ClientPage,
   type ClientState,
   type CollectionCreateOp,
   type CollectionDeleteOp,
-  type CollectionReadAck,
+  type CollectionFetchRangeAck,
+  type CollectionState,
   type ConnectAck,
   type SubscribeAck,
   type BlobReadAck,
@@ -37,37 +36,16 @@ import {
 } from "./helpers";
 import { traceKyju } from "../trace";
 
-const concatToCollection = ({
-  col,
-  items,
-  maxPageSizeBytes,
-}: {
-  col: ClientCollection;
-  items: KyjuJSON[];
-  maxPageSizeBytes: number;
-}): ClientCollection => {
+const concatToCollection = (
+  col: CollectionState,
+  items: KyjuJSON[],
+): CollectionState => {
   if (items.length === 0) return col;
-  const pages = [...col.pages];
-  const lastPage = pages[pages.length - 1];
-  if (!lastPage || lastPage.data.kind === "cold") return col;
-
-  if (lastPage.currentSize >= maxPageSizeBytes) {
-    pages.push({
-      id: nanoid(),
-      data: { kind: "hot", items: [...items] },
-      currentSize: 0,
-    });
-  } else {
-    pages[pages.length - 1] = {
-      ...lastPage,
-      data: {
-        kind: "hot",
-        items: [...lastPage.data.items, ...items],
-      },
-    };
-  }
-
-  return { ...col, pages, totalCount: col.totalCount + items.length };
+  return {
+    ...col,
+    items: [...col.items, ...items],
+    totalCount: col.totalCount + items.length,
+  };
 };
 
 const applyRootSet = (ref: Ref.Ref<ClientState>, op: RootSetOp) =>
@@ -83,15 +61,10 @@ const applyCollectionCreate = (
   ref: Ref.Ref<ClientState>,
   op: CollectionCreateOp,
 ) => {
-  const initialPage: ClientPage = {
-    id: nanoid(),
-    data: { kind: "hot", items: op.data ?? [] },
-    currentSize: 0,
-  };
-  const collection: ClientCollection = {
+  const collection: CollectionState = {
     id: op.collectionId,
-    pages: [initialPage],
     totalCount: op.data?.length ?? 0,
+    items: op.data ?? [],
   };
   return applyState({
     ref,
@@ -161,11 +134,9 @@ const applyBlobDelete = (ref: Ref.Ref<ClientState>, op: BlobDeleteOp) =>
 const applyWrite = ({
   stateRef,
   op,
-  maxPageSizeBytes,
 }: {
   stateRef: Ref.Ref<ClientState>;
   op: WriteOp;
-  maxPageSizeBytes: number;
 }) => {
   switch (op.type) {
     case "root.set":
@@ -179,7 +150,7 @@ const applyWrite = ({
           ...state,
           collections: state.collections.map((col) =>
             col.id === op.collectionId
-              ? concatToCollection({ col, items: op.data, maxPageSizeBytes })
+              ? concatToCollection(col, op.data)
               : col,
           ),
         }),
@@ -199,11 +170,9 @@ const applyWrite = ({
 const applyReplicatedWrite = ({
   stateRef,
   op,
-  maxPageSizeBytes,
 }: {
   stateRef: Ref.Ref<ClientState>;
   op: WriteOp;
-  maxPageSizeBytes: number;
 }) => {
   switch (op.type) {
     case "root.set":
@@ -211,25 +180,13 @@ const applyReplicatedWrite = ({
     case "collection.create":
       return applyCollectionCreate(stateRef, op);
     case "collection.concat": {
-      const startIndex = op.authority?.startIndex ?? 0;
       return applyState({
         ref: stateRef,
         fn: (state) => ({
           ...state,
           collections: state.collections.map((col) => {
             if (col.id !== op.collectionId) return col;
-            const updated = concatToCollection({
-              col,
-              items: op.data,
-              maxPageSizeBytes,
-            });
-            return {
-              ...updated,
-              totalCount: Math.max(
-                updated.totalCount,
-                startIndex + op.data.length,
-              ),
-            };
+            return concatToCollection(col, op.data);
           }),
         }),
       });
@@ -249,7 +206,7 @@ const applyReplicatedWrite = ({
 export type CollectionConcatCallback = (data: {
   collectionId: string;
   newItems: KyjuJSON[];
-  collection: ClientCollection;
+  collection: CollectionState;
 }) => void;
 
 const createReplicaEffect = (
@@ -259,8 +216,6 @@ const createReplicaEffect = (
   Effect.gen(function* () {
     const awaiter = makeRequestAwaiter();
     const stateRef = yield* ClientStateRef;
-    const { maxPageSizeBytes } = yield* MaxPageSizeContext;
-    // todo: no positional params
     const sendToServer = <T extends Ack<any, any>>(
       event: ServerEvent,
       requestId: string,
@@ -272,20 +227,15 @@ const createReplicaEffect = (
         return yield* Effect.promise(() => promise);
       });
 
-    const mergeSubscribePages = (ack: SubscribeAck, collectionId: string) =>
+    const mergeSubscribeAck = (ack: SubscribeAck, collectionId: string) =>
       applyState({
         ref: stateRef,
         fn: (state) => {
-          const pages: ClientPage[] = ack.pages.map((page) => ({
-            id: page.id,
-            data: { kind: "hot" as const, items: page.data },
-            currentSize: page.size,
-          }));
-          const totalCount = ack.pages.reduce(
-            (sum, page) => sum + page.count,
-            0,
-          );
-          const entry: ClientCollection = { id: collectionId, pages, totalCount };
+          const entry: CollectionState = {
+            id: collectionId,
+            totalCount: ack.totalCount,
+            items: ack.items,
+          };
           const exists = state.collections.some((col) => col.id === collectionId);
           return {
             ...state,
@@ -375,7 +325,6 @@ const createReplicaEffect = (
               {
                 kind: "subscribe-collection",
                 collectionId: event.collectionId,
-                pageIds: event.pageIds,
                 sessionId: state.sessionId,
                 requestId,
                 replicaId,
@@ -384,7 +333,7 @@ const createReplicaEffect = (
             );
             if (ack.error) return yield* Effect.fail(ack.error);
 
-            yield* mergeSubscribePages(ack, event.collectionId);
+            yield* mergeSubscribeAck(ack, event.collectionId);
             return;
           }
 
@@ -418,7 +367,7 @@ const createReplicaEffect = (
             const state = yield* requireConnected({ ref: stateRef });
             yield* traceKyju(
               "kyju:replica.applyWrite",
-              applyWrite({ stateRef, op: event.op, maxPageSizeBytes }),
+              applyWrite({ stateRef, op: event.op }),
               { op: event.op.type },
             );
             yield* notifyConcatCallbacks(event.op);
@@ -443,11 +392,7 @@ const createReplicaEffect = (
 
           case "replicated-write": {
             yield* requireConnected({ ref: stateRef });
-            yield* applyReplicatedWrite({
-              stateRef,
-              op: event.op,
-              maxPageSizeBytes,
-            });
+            yield* applyReplicatedWrite({ stateRef, op: event.op });
             yield* notifyConcatCallbacks(event.op);
             return;
           }
@@ -458,8 +403,8 @@ const createReplicaEffect = (
             const readOp = event.op;
 
             switch (readOp.type) {
-              case "collection.read": {
-                const ack = yield* sendToServer<CollectionReadAck>(
+              case "collection.fetch-range": {
+                yield* sendToServer<CollectionFetchRangeAck>(
                   {
                     kind: "read",
                     op: readOp,
@@ -469,50 +414,6 @@ const createReplicaEffect = (
                   },
                   readRequestId,
                 );
-                if (ack.error) return yield* Effect.fail(ack.error);
-
-                yield* applyState({
-                  ref: stateRef,
-                  fn: (state) => {
-                    const newPages: ClientPage[] = ack.pages.map((page) => ({
-                      id: page.id,
-                      data: { kind: "hot" as const, items: page.data },
-                      currentSize: page.size,
-                    }));
-
-                    const existing = state.collections.find(
-                      (col) => col.id === readOp.collectionId,
-                    );
-
-                    const mergedPages = existing ? [...existing.pages] : [];
-                    for (const np of newPages) {
-                      const idx = mergedPages.findIndex((p) => p.id === np.id);
-                      if (idx >= 0) {
-                        mergedPages[idx] = np;
-                      } else {
-                        mergedPages.push(np);
-                      }
-                    }
-
-                    const entry: ClientCollection = {
-                      id: readOp.collectionId,
-                      pages: mergedPages,
-                      totalCount: existing?.totalCount ?? mergedPages.reduce(
-                        (sum, p) => sum + (p.data.kind === "hot" ? p.data.items.length : 0),
-                        0,
-                      ),
-                    };
-
-                    return {
-                      ...state,
-                      collections: existing
-                        ? state.collections.map((col) =>
-                            col.id === readOp.collectionId ? entry : col,
-                          )
-                        : [...state.collections, entry],
-                    };
-                  },
-                });
                 return;
               }
 
@@ -567,24 +468,6 @@ const createReplicaEffect = (
             yield* requireConnected({ ref: stateRef });
 
             switch (msg.type) {
-              case "collection.page.metadataUpdate": {
-                yield* applyState({
-                  ref: stateRef,
-                  fn: (state) => ({
-                    ...state,
-                    collections: state.collections.map((col) => ({
-                      ...col,
-                      pages: col.pages.map((page) =>
-                        page.id === msg.pageId
-                          ? { ...page, currentSize: msg.fileSize }
-                          : page,
-                      ),
-                    })),
-                  }),
-                });
-                return;
-              }
-
               case "blob.metadataUpdate": {
                 yield* applyState({
                   ref: stateRef,

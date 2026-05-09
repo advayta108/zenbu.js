@@ -1,0 +1,114 @@
+---
+title: "@zenbujs/core/events"
+description: The strict public surface of the events system.
+---
+
+# Events API
+
+There is no `@zenbujs/core/events` import path — events are part of the core. The runtime surface is split:
+
+- **Defining events**: a TypeScript file referenced from `zenbu.plugin.json#events`.
+- **Emitting**: the `Events` service.
+- **Subscribing**: `useEvents()` from `@zenbujs/core/react`.
+
+This page collects the API in one place.
+
+## Defining
+
+A plugin's events file is a single TypeScript file that exports a type named `Events`:
+
+```typescript
+// src/main/events.ts
+export type Events = {
+  noteAdded: { id: string; text: string; at: number }
+  noteDeleted: { id: string }
+}
+```
+
+The framework infers the namespace from `zenbu.plugin.json#name`. If your plugin is named `notes-plugin`, the events become accessible as `events["notes-plugin"].noteAdded(...)`.
+
+### Nested topics
+
+You can nest event names if your plugin has a lot of them:
+
+```typescript
+export type Events = {
+  notes: {
+    added: { id: string; text: string }
+    deleted: { id: string }
+  }
+  search: {
+    indexed: { count: number }
+  }
+}
+```
+
+Subscribers see them as `events["my-plugin"].notes.added.subscribe(cb)`.
+
+## `Events` service (server-side)
+
+Imported from `@zenbujs/core/services`:
+
+```typescript
+import { Events } from "@zenbujs/core/services"
+
+export class MyService extends Service.with({ events: Events }) {
+  static key = "my-service"
+
+  async start() {
+    this.ctx.events["my-plugin"].noteAdded({ id: "1", text: "hi", at: Date.now() })
+  }
+}
+```
+
+The `Events` service has exactly one public surface: a typed proxy keyed by every plugin's namespace. Each leaf node is callable with the typed payload.
+
+There is no targeted-emit, no per-renderer filter, and no return value. Emit is fire-and-forget.
+
+## `useEvents()` (renderer-side)
+
+Imported from `@zenbujs/core/react`:
+
+```typescript
+import { useEvents } from "@zenbujs/core/react"
+
+function Listener() {
+  const events = useEvents()
+
+  useEffect(
+    () =>
+      events["my-plugin"].noteAdded.subscribe(({ id }) => {
+        console.log("note added:", id)
+      }),
+    [events],
+  )
+
+  return null
+}
+```
+
+Each leaf node has one method:
+
+```typescript
+subscribe(cb: (payload: T) => void): () => void
+```
+
+The returned function unsubscribes. Returning it from `useEffect` is the canonical pattern.
+
+## What's *not* public
+
+- `RpcService.emit` — exists as an internal coupling between `RpcService` and `Events`. **Use `Events` instead** in plugin code; `rpc.emit` may be removed in a future minor.
+- `CoreEvents` type (the framework's own events: `advice.reload`) — leaks through `ZenbuRegister` but plugin code shouldn't subscribe to framework internals. The framework guarantees `advice.reload` for now; everything else under `core.*` may change.
+
+## Cross-plugin events
+
+Subscribing to another plugin's events works as long as that plugin is registered (`zen link` includes it). The type system enforces this: if you write `events["other-plugin"].something.subscribe(...)` and `other-plugin` doesn't exist in your registry, TypeScript errors.
+
+If you need to depend on another plugin's events but don't want a hard type-dependency, you can fall back to the untyped helper:
+
+```typescript
+const events = useEvents()
+;(events as any)["other-plugin"]?.something?.subscribe?.(cb)
+```
+
+But this is rarely the right answer — usually you want the type to enforce that the other plugin is installed.

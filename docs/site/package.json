@@ -1,0 +1,14 @@
+{
+  "name": "@zenbujs/docs-site",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Public documentation site for Zenbu.js. Rendered with Mintlify.",
+  "scripts": {
+    "dev": "mintlify dev",
+    "broken-links": "mintlify broken-links",
+    "rename": "echo 'no-op: renamed file slugs are tracked in docs.json'"
+  },
+  "devDependencies": {
+    "mintlify": "^4.0.0"
+  }
+}

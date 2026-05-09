@@ -62,7 +62,7 @@ export type CollectionConcatOp = {
   type: "collection.concat";
   collectionId: string;
   data: KyjuJSON[];
-  authority?: { startIndex: number };
+  authority?: { startIndex: number; totalCount: number };
 };
 
 export type CollectionDeleteOp = {
@@ -97,11 +97,10 @@ export type WriteOp =
   | BlobSetOp
   | BlobDeleteOp;
 
-
-export type CollectionReadOp = {
-  type: "collection.read";
+export type CollectionFetchRangeOp = {
+  type: "collection.fetch-range";
   collectionId: string;
-  range?: { start: number; end: number };
+  range: { start: number; end: number };
 };
 
 export type BlobReadOp = {
@@ -109,13 +108,7 @@ export type BlobReadOp = {
   blobId: string;
 };
 
-export type ReadOp = CollectionReadOp | BlobReadOp;
-
-export type PageMetadataUpdate = {
-  type: "collection.page.metadataUpdate";
-  pageId: string;
-  fileSize: number;
-};
+export type ReadOp = CollectionFetchRangeOp | BlobReadOp;
 
 export type BlobMetadataUpdate = {
   type: "blob.metadataUpdate";
@@ -129,27 +122,24 @@ export type ReconnectUpdate = {
 
 export type DbUpdateMessage =
   | Ack
-  | PageMetadataUpdate
   | BlobMetadataUpdate
   | ReconnectUpdate;
 
 export type ConnectAck = Ack<{ root: KyjuJSON }, "VersionMismatchError">;
-export type CollectionReadAck = Ack<{ pages: WirePage[] }, "NotFoundError">;
-export type SubscribeAck = Ack<{ pages: WirePage[] }, "NotFoundError">;
+export type CollectionFetchRangeAck = Ack<
+  { items: KyjuJSON[]; totalCount: number },
+  "NotFoundError"
+>;
+export type SubscribeAck = Ack<
+  { items: KyjuJSON[]; totalCount: number },
+  "NotFoundError"
+>;
 export type BlobReadAck = Ack<{ data: Uint8Array }, "NotFoundError">;
-
-export type WirePage = {
-  id: string;
-  collectionId: string;
-  size: number;
-  count: number;
-  data: KyjuJSON[];
-};
 
 export type ClientEvent =
   | { kind: "connect"; version: number }
   | { kind: "disconnect" }
-  | { kind: "subscribe-collection"; collectionId: string; pageIds?: string[] }
+  | { kind: "subscribe-collection"; collectionId: string }
   | { kind: "unsubscribe-collection"; collectionId: string }
   | { kind: "write"; op: WriteOp }
   | { kind: "replicated-write"; op: WriteOp }
@@ -176,7 +166,6 @@ export type ServerEvent =
   | {
       kind: "subscribe-collection";
       collectionId: string;
-      pageIds?: string[];
       sessionId: string;
       requestId: string;
       replicaId: string;
@@ -203,18 +192,14 @@ export type ServerEvent =
       replicaId: string;
     };
 
-export type PageData = { kind: "hot"; items: KyjuJSON[] } | { kind: "cold" };
-
-export type ClientPage = {
+/**
+ * Replica-side collection state. The replica holds the full item set;
+ * paging is an internal storage concern of the database.
+ */
+export type CollectionState = {
   id: string;
-  data: PageData;
-  currentSize: number;
-};
-
-export type ClientCollection = {
-  id: string;
-  pages: ClientPage[];
   totalCount: number;
+  items: KyjuJSON[];
 };
 
 export type BlobData = { kind: "hot"; value: Uint8Array } | { kind: "cold" };
@@ -230,7 +215,7 @@ export type ClientState =
       kind: "connected";
       sessionId: string;
       root: KyjuJSON;
-      collections: ClientCollection[];
+      collections: CollectionState[];
       blobs: ClientBlob[];
     }
   | { kind: "disconnected" };
@@ -246,3 +231,7 @@ export const MaxPageSizeContext = Context.GenericTag<{
   maxPageSizeBytes: number;
 }>("MaxPageSizeContext");
 
+/** @deprecated Use CollectionState */
+export type CollectionWindow = CollectionState;
+/** @deprecated Use CollectionState */
+export type ClientCollection = CollectionState;

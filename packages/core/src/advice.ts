@@ -40,3 +40,16 @@ export {
   type AdviceSpec,
   type ViewAdviceEntry,
 } from "./services/advice-config";
+
+/**
+ * Read-side accessors for tools that introspect what's currently registered
+ * for a given view scope (devtools, debug overlays, etc.). These are pure
+ * reads against the in-memory registries; they don't trigger reload.
+ */
+export {
+  getAdvice,
+  getAllAdviceScopes,
+  getContentScripts,
+  getAllContentScriptPaths,
+  getAllScopes,
+} from "./services/advice-config";

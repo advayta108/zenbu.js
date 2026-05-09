@@ -19,24 +19,61 @@ function managedTool(projectDir: string, name: string): string {
   return toolPath;
 }
 
-function parseArgs(argv: string[]): { projectDir: string; force: boolean } {
+/**
+ * `zen install` has two modes:
+ *
+ *   Dev (default):  thin pass-through to the bundled pnpm. No flag injection,
+ *                   no deps-sig caching, no policy enforcement. Behaves the
+ *                   way `pnpm install` does in your terminal.
+ *
+ *                     zen install                  -> pnpm install
+ *                     zen install tailwindcss      -> pnpm install tailwindcss
+ *                     zen install -D vite          -> pnpm install -D vite
+ *
+ *   CI (`--ci`):    programmatic mode for non-TTY callers (launchers, build
+ *                   pipelines, tests). Forces `CI=true` so pnpm doesn't
+ *                   prompt, redirects `HOME` so node-gyp's header cache stays
+ *                   inside the project, auto-appends `--no-frozen-lockfile`
+ *                   on bare installs (so a legitimate package.json edit
+ *                   doesn't get rejected by CI=true's implicit frozen mode),
+ *                   short-circuits when the deps-sig matches, and enforces
+ *                   the no-native-without-prebuild policy at the end.
+ *
+ *                     zen install --ci             -> ensure deps installed
+ *                                                     (used by launcher / CI)
+ *
+ *   `--zen-force` bypasses the deps-sig short-circuit (CI mode only).
+ *   `--project=<dir>` overrides the cwd for either mode.
+ *
+ * Electron-targeting env vars (`npm_config_runtime=electron`, `_target`,
+ * `_disturl`, `_arch`) are set in both modes so native deps build against
+ * the right runtime regardless of how the install was invoked.
+ */
+function parseArgs(argv: string[]): {
+  projectDir: string;
+  ci: boolean;
+  force: boolean;
+  pnpmArgs: string[];
+} {
   let projectDir = process.cwd();
+  let ci = false;
   let force = false;
+  const pnpmArgs: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--project" && argv[i + 1]) {
       projectDir = path.resolve(argv[++i]!);
     } else if (arg.startsWith("--project=")) {
       projectDir = path.resolve(arg.slice("--project=".length));
-    } else if (arg === "--force") {
+    } else if (arg === "--ci") {
+      ci = true;
+    } else if (arg === "--zen-force") {
       force = true;
-    } else if (!arg.startsWith("-")) {
-      projectDir = path.resolve(arg);
     } else {
-      throw new Error(`unknown zen install flag: ${arg}`);
+      pnpmArgs.push(arg);
     }
   }
-  return { projectDir, force };
+  return { projectDir, ci, force, pnpmArgs };
 }
 
 async function fileHash(hash: crypto.Hash, filePath: string): Promise<void> {
@@ -75,30 +112,45 @@ function electronTargetVersion(projectDir: string): string {
   return version.replace(/^[^\d]*/, "") || "42.0.0";
 }
 
-async function runPnpmInstall(projectDir: string): Promise<void> {
+async function runPnpmInstall(
+  projectDir: string,
+  pnpmArgs: string[],
+  opts: { ci: boolean },
+): Promise<void> {
   const pnpm = managedTool(projectDir, "pnpm");
   const target = electronTargetVersion(projectDir);
-  // We pass `CI=true` to stop pnpm from prompting (approve-builds, modules-purge,
-  // etc.) so that `zen install` can be driven from non-TTY callers without
-  // hanging. `CI=true` also implicitly turns on `--frozen-lockfile`, which is
-  // wrong for an editable-source dev tool: when the user legitimately edits a
-  // dep in `package.json`, frozen mode rejects the install. So we explicitly
-  // override that one knob with `--no-frozen-lockfile`. (For strict CI installs,
-  // expose a separate `--frozen` flag; not needed for the dev path.)
+
+  const args = ["install", ...pnpmArgs];
+  if (opts.ci) {
+    // CI=true forces `--frozen-lockfile` for the bare-install codepath.
+    // That's wrong for an editable-source dev tool: when the user (or a
+    // launcher / postinstall) legitimately edits a dep in `package.json`,
+    // frozen mode rejects the install. Override that knob explicitly,
+    // but only for bare installs — pnpm's `add`/`remove`/etc. codepaths
+    // reject the flag entirely.
+    const isBareInstall = !pnpmArgs.some((a) => !a.startsWith("-"));
+    const explicitFrozen = args.some(
+      (a) => a === "--frozen-lockfile" || a === "--no-frozen-lockfile",
+    );
+    if (isBareInstall && !explicitFrozen) args.push("--no-frozen-lockfile");
+  }
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    npm_config_runtime: "electron",
+    npm_config_target: target,
+    npm_config_disturl: "https://electronjs.org/headers",
+    npm_config_arch: process.arch,
+  };
+  if (opts.ci) {
+    env.CI = "true";
+    // Keep node-gyp's header cache scoped to the project so non-TTY
+    // launchers don't pollute the user's global ~/.node-gyp.
+    env.HOME = path.join(projectDir, ".zenbu", ".node-gyp");
+  }
+
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(pnpm, ["install", "--no-frozen-lockfile"], {
-      cwd: projectDir,
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        CI: "true",
-        HOME: path.join(projectDir, ".zenbu", ".node-gyp"),
-        npm_config_runtime: "electron",
-        npm_config_target: target,
-        npm_config_disturl: "https://electronjs.org/headers",
-        npm_config_arch: process.arch,
-      },
-    });
+    const child = spawn(pnpm, args, { cwd: projectDir, stdio: "inherit", env });
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) resolve();
@@ -201,26 +253,43 @@ async function enforceNativeDependencyPolicy(projectDir: string): Promise<void> 
 }
 
 export async function runInstall(argv: string[]): Promise<void> {
-  const { projectDir, force } = parseArgs(argv);
+  const { projectDir, ci, force, pnpmArgs } = parseArgs(argv);
   const pkgPath = path.join(projectDir, "package.json");
   if (!fs.existsSync(pkgPath)) {
     throw new Error(`package.json not found at ${pkgPath}`);
   }
 
+  // Dev mode: pure pnpm pass-through. No caching, no policy. The bundled
+  // pnpm still gets the electron-target env vars so any native dep the
+  // user adds builds against the right runtime.
+  if (!ci) {
+    await runPnpmInstall(projectDir, pnpmArgs, { ci: false });
+    return;
+  }
+
+  // CI mode: deps-sig short-circuit on bare installs, then pnpm, then
+  // the no-native-without-prebuild policy enforcement.
+  const isBareInstall = pnpmArgs.length === 0;
   const marker = path.join(projectDir, ".zenbu", "deps-sig");
   const nodeModules = path.join(projectDir, "node_modules");
-  const nextSig = await installSignature(projectDir);
-  if (!force) {
+  if (isBareInstall && !force) {
     try {
-      if (fs.existsSync(nodeModules) && fs.readFileSync(marker, "utf8") === nextSig) {
+      const nextSig = await installSignature(projectDir);
+      if (
+        fs.existsSync(nodeModules) &&
+        fs.readFileSync(marker, "utf8") === nextSig
+      ) {
         console.log("zen install: dependencies are up to date");
         return;
       }
     } catch {}
   }
 
-  await runPnpmInstall(projectDir);
+  await runPnpmInstall(projectDir, pnpmArgs, { ci: true });
   await enforceNativeDependencyPolicy(projectDir);
-  await fsp.mkdir(path.dirname(marker), { recursive: true });
-  await fsp.writeFile(marker, nextSig);
+  if (isBareInstall) {
+    const nextSig = await installSignature(projectDir);
+    await fsp.mkdir(path.dirname(marker), { recursive: true });
+    await fsp.writeFile(marker, nextSig);
+  }
 }

@@ -1,7 +1,0 @@
-{
-  "id": "ml-experiment",
-  "name": "ML Experiment",
-  "description": "Notebook view, data explorer, training dashboard, model eval",
-  "tags": ["notebook", "data", "training"],
-  "thumbnail": "thumbnail.png"
-}

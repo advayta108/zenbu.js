@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import { nanoid } from "nanoid";
 import type {
-  ClientCollection,
+  CollectionWindow,
   ClientState,
   ClientEvent,
   KyjuJSON,
@@ -31,7 +31,7 @@ export type EffectCollectionNode<Item> = {
     cb: (value: { collectionId: string; debugName: string }) => void,
   ): () => void;
   subscribeData(
-    cb: (data: { collection: ClientCollection; newItems: Item[] }) => void,
+    cb: (data: { collection: CollectionWindow; newItems: Item[] }) => void,
   ): () => void;
 };
 
@@ -86,7 +86,7 @@ export type CollectionNode<Item> = {
     cb: (value: { collectionId: string; debugName: string }) => void,
   ): () => void;
   subscribeData(
-    cb: (data: { collection: ClientCollection; newItems: Item[] }) => void,
+    cb: (data: { collection: CollectionWindow; newItems: Item[] }) => void,
   ): () => void;
 };
 
@@ -278,9 +278,9 @@ function createClientCore<TShape extends SchemaShape>(
         send({
           kind: "read",
           op: {
-            type: "collection.read",
+            type: "collection.fetch-range",
             collectionId: getCollectionId(),
-            range,
+            range: range ?? { start: 0, end: Number.MAX_SAFE_INTEGER },
           },
         }),
       create: (data) =>
@@ -339,9 +339,9 @@ function createClientCore<TShape extends SchemaShape>(
         send({
           kind: "read",
           op: {
-            type: "collection.read",
+            type: "collection.fetch-range",
             collectionId: getCollectionId(),
-            range,
+            range: range ?? { start: 0, end: Number.MAX_SAFE_INTEGER },
           },
         }),
       create: (data) =>
@@ -389,11 +389,7 @@ function createClientCore<TShape extends SchemaShape>(
           if (state.kind === "connected") {
             const col = state.collections.find((c) => c.id === collectionId);
             if (col) {
-              const allItems: any[] = [];
-              for (const page of col.pages) {
-                if (page.data.kind === "hot") allItems.push(...page.data.items);
-              }
-              cb({ collection: col, newItems: allItems });
+              cb({ collection: col, newItems: col.items as any[] });
             }
           }
         };

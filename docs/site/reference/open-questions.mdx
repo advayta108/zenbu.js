@@ -1,0 +1,170 @@
+---
+title: Open API questions
+description: Design decisions still up for debate before v1, with proposed answers and trade-offs.
+---
+
+# Open API questions
+
+This page is the living list of API decisions we're still finalizing. Each entry has a proposed answer and the trade-offs. **None of these block plugin authors from shipping today** — they're either renames (with a deprecation cycle) or feature additions that don't break existing code.
+
+If you have an opinion, [open an issue](https://github.com/zenbu-org/zenbu/issues) referencing the heading.
+
+## Naming
+
+### `setup()` → `useDisposable()`?
+
+**Status:** proposed.
+
+The current Service base class has a method called `setup(key, fn)` that registers a disposable. The name collides with `setup-gate.ts`, `setup.ts` plugin scripts, the `setup` field in the manifest, and a half-dozen other "setup"-flavored words.
+
+Proposed rename: `useDisposable(key, fn)`. Makes the resource-management semantics explicit; aligned with React's `useEffect` shape (which we may also add as a one-shot variant).
+
+Trade-off: every existing service has to be touched. We'd ship a deprecated alias for one minor.
+
+### `evaluate()` → `start()`?
+
+**Status:** proposed.
+
+Lifecycle method named `evaluate()` because the runtime was originally Lisp-inspired. JS developers reach for `start()` first; this is the only Lisp-ism that's surfaced on the user-facing API.
+
+Trade-off: same as above. Deprecated alias for one minor.
+
+### `serviceWithDeps(...)` → `Service.with({...})`?
+
+**Status:** proposed.
+
+`serviceWithDeps` is a function that returns a base class. `Service.with(...)` is a static method on the class. Same semantics, smaller import.
+
+Trade-off: existing `serviceWithDeps` users have to change. Single-line search-and-replace.
+
+### `registerAdvice` / `registerContentScript` → `advise` / `inject`?
+
+**Status:** proposed.
+
+Verbs are clearer; the `register` prefix duplicates the runtime's own register. Field renames included:
+
+| Old | New |
+| --- | --- |
+| `entry.scope` | `spec.view` |
+| `entry.type` | `spec.kind` |
+| `entry.moduleId` / `entry.name` | `spec.target.{module, export}` |
+| `entry.modulePath` / `entry.exportName` | `spec.handler.{module, export}` |
+
+Trade-off: shape change requires a codemod. We'd publish one with the rename.
+
+### `WindowService` / `ViewRegistryService` → `Window` / `Views`?
+
+**Status:** proposed.
+
+Built-in service classes drop the `Service` suffix when re-exported from `@zenbujs/core/services`. Less typing, no semantic loss.
+
+Trade-off: re-exports under both names for one minor.
+
+## Defaults
+
+### Default `adapter:` when omitted: `frozenSource()` or `liveSource()`?
+
+**Status:** proposed `frozenSource()`, but currently `liveSource()` to preserve today's behavior.
+
+If a `zenbu.build.ts` doesn't specify `adapter:`, what should we assume?
+
+- `liveSource()` — preserves today's behavior. Migration shock for new users who didn't expect their app to ship source code.
+- `frozenSource()` — safer for new users. Existing apps need to add `adapter: liveSource(...)` explicitly.
+
+Proposal: switch to `frozenSource()` default at v1, with a clear migration note for the existing template.
+
+### Default `panel.kind`: free-form string vs typed enum
+
+**Status:** proposed enum.
+
+Currently `panel.kind` accepts any string. We'd like to lock it to `"primary" | "secondary" | "modal"` (or similar) so the host shell can make layout decisions.
+
+Trade-off: existing values that don't match the enum would need to be reclassified.
+
+## Scope
+
+### Should the framework provide a permission model for plugins?
+
+**Status:** open.
+
+Today, every plugin has full filesystem and network access — same as any Node module. Some users want a per-plugin sandbox.
+
+Proposed direction: extend `manifest.setup` with a `permissions` array (`["fs:write", "net:fetch", "subprocess:spawn"]`) that the host shell prompts for before running setup. Bigger question is whether to extend this beyond setup to the entire plugin's runtime.
+
+Honest assessment: this is a lot of design and implementation work for a use case that hasn't surfaced as a felt pain. Likely deferred past v1.
+
+### Should there be a "wildcard" advice target?
+
+**Status:** open.
+
+`advise({ view: "*" })` already works. `target: { module: "*", export: "*" }` doesn't — you have to register one advice per function. For "wrap every component with debug logging" this is tedious.
+
+Proposed: support `module: "*"` as "every module in the targeted view's source", `export: "*"` as "every adviseable export in the matched module(s)."
+
+Trade-off: chain composition gets harder to reason about. If two plugins both `advise({ target: { export: "*" }, kind: "around" })`, what's the order? Probably registration order, but the ergonomics need a closer look.
+
+### Should `events` support typed channels or only one-shot?
+
+**Status:** keeping one-shot.
+
+Some plugins want "subscribe and replay missed events." That's a queue, not an event bus. Right answer: model it as a kyju collection that the subscriber reads with cursor-style pagination. Don't add channels to the event system.
+
+### Should the framework provide a renderer-side preload?
+
+**Status:** no.
+
+Currently preloads are main-process only. The renderer's analog is the database (a default value in your section).
+
+Some users have asked for a renderer-side preload that runs synchronously inside the iframe before React mounts. The use case is usually theme/locale resolution. We're declining for now — the database default value covers it without a parallel system.
+
+## Distribution
+
+### Mirror push: should we tag automatically?
+
+**Status:** under consideration.
+
+Currently `nr publish:source push` doesn't tag. Some users tag manually after; others want automatic tags from `package.json#version`.
+
+Proposed: an `--tag` flag (and `--tag-prefix` for monorepos) that creates a tag matching the version and pushes it.
+
+### Should we ship an `electron-updater` integration for `frozenSource`?
+
+**Status:** open.
+
+Live-source apps update over git automatically. Frozen apps currently have no built-in update mechanism — users have to wire `electron-updater` themselves.
+
+Proposed: a `frozenSource({ updater: { provider: "github" } })` option that emits an `update.json` and wires `electron-updater` into the bundle.
+
+Trade-off: more dependencies in the frozen-source path, which is currently nicely minimal.
+
+### Adapter API: should `Adapter` and `Hook` merge?
+
+**Status:** keeping separate.
+
+Both have the same shape. The semantic distinction (one adapter per build, many hooks) is what justifies two types.
+
+If we ever have a use case where a single concept needs to be both adapter-like and hook-like, we'll merge. Not now.
+
+## Smaller items
+
+### `f.array().max(N)` — should it convert to a collection automatically?
+
+No. Conversions should be explicit; auto-converting at some N would surprise authors when their array suddenly stops behaving like an array.
+
+### Should `useDb()` selectors be reactive across processes?
+
+Already are — selectors run against the same replica that broadcasts updates from main.
+
+### Should advice work on the main process?
+
+Not currently. Adding it would require a Babel pass on every imported main-process module, which is a non-trivial cost. Open question whether it's worth doing for "logging on every service call" use cases.
+
+### Should `runtime.get(...)` be removed?
+
+Probably yes, eventually. Almost every use we've seen in plugin code should have been a declared dep. Open question whether to remove or restrict to internal use.
+
+### Should `Service.with({...})` accept a function instead of an object?
+
+For dynamic deps (e.g., a service that needs all installed plugins' DB sections), an object literal isn't expressive enough. Proposed: `Service.with(({ optional }) => ({ ... }))`.
+
+Open question whether the use case is real or whether dynamic deps are always a smell. Currently leaning "smell."

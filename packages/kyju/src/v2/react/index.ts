@@ -10,13 +10,14 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import type { ClientCollection, ClientState, ClientEvent, KyjuJSON } from "../shared";
+import type { CollectionState, ClientState, ClientEvent, KyjuJSON } from "../shared";
 import type { SchemaShape, InferRoot, CollectionRefBrand, InferCollectionItem } from "../db/schema";
 import type { ClientProxy } from "../client/client";
 
 export type CollectionResult<Item> = {
   items: Item[];
-  collection: ClientCollection | null;
+  totalCount: number;
+  collection: CollectionState | null;
   concat: (items: Item[]) => void;
 };
 
@@ -24,8 +25,8 @@ type Replica = {
   getState: () => ClientState;
   subscribe: (cb: (state: ClientState) => void) => () => void;
   postMessage: (event: ClientEvent) => Promise<void>;
-  onCollectionConcat: (collectionId: string, cb: (data: { collection: ClientCollection; newItems: unknown[] }) => void) => void;
-  offCollectionConcat: (collectionId: string, cb: (data: { collection: ClientCollection; newItems: unknown[] }) => void) => void;
+  onCollectionConcat: (collectionId: string, cb: (data: { collection: CollectionState; newItems: unknown[] }) => void) => void;
+  offCollectionConcat: (collectionId: string, cb: (data: { collection: CollectionState; newItems: unknown[] }) => void) => void;
 };
 
 type KyjuContextValue<TShape extends SchemaShape> = {
@@ -33,7 +34,10 @@ type KyjuContextValue<TShape extends SchemaShape> = {
   replica: Replica;
 };
 
-export function createKyjuReact<TShape extends SchemaShape>() {
+export function createKyjuReact<
+  TShape extends SchemaShape = SchemaShape,
+  TRoot = InferRoot<TShape>,
+>() {
   const KyjuContext = createContext<KyjuContextValue<TShape> | null>(null);
 
   type ProviderProps = {
@@ -57,7 +61,7 @@ export function createKyjuReact<TShape extends SchemaShape>() {
     return ctx;
   }
 
-  type Root = InferRoot<TShape>;
+  type Root = TRoot;
 
   function useDb(): Root;
   function useDb<T>(
@@ -74,14 +78,6 @@ export function createKyjuReact<TShape extends SchemaShape>() {
     const isEqualRef = useRef<((a: T, b: T) => boolean) | undefined>(isEqual);
     isEqualRef.current = isEqual;
 
-    // Cache the last selector result so getSnapshot returns a stable
-    // reference when the selector produces a freshly-allocated value
-    // (filter/map/slice/etc) over unchanged data. Without this, React's
-    // useSyncExternalStore sees `Object.is(prev, next) === false` for
-    // every snapshot read and storms into an infinite re-render loop.
-    // Default equality is shallow: arrays + plain objects compare by
-    // their members with Object.is. Callers transforming into a deeper
-    // shape can pass a custom isEqual.
     const cacheRef = useRef<{ output: T } | null>(null);
 
     const subscribe = useCallback(
@@ -117,18 +113,19 @@ export function createKyjuReact<TShape extends SchemaShape>() {
 
     const [state, setState] = useState<{
       items: Item[];
-      collection: ClientCollection | null;
-    }>({ items: [], collection: null });
+      totalCount: number;
+      collection: CollectionState | null;
+    }>({ items: [], totalCount: 0, collection: null });
 
     useEffect(() => {
       if (!collectionId) return;
 
-      const onData = (data: { collection: ClientCollection; newItems: unknown[] }) => {
-        const items = data.collection.pages.flatMap(
-          (p: ClientCollection["pages"][number]) =>
-            p.data.kind === "hot" ? (p.data.items as Item[]) : [],
-        );
-        setState({ items, collection: data.collection });
+      const onData = (data: { collection: CollectionState; newItems: unknown[] }) => {
+        setState({
+          items: data.collection.items as Item[],
+          totalCount: data.collection.totalCount,
+          collection: data.collection,
+        });
       };
 
       replica.onCollectionConcat(collectionId, onData);
@@ -163,11 +160,6 @@ export function createKyjuReact<TShape extends SchemaShape>() {
   return { KyjuProvider, useDb, useCollection };
 }
 
-// One-level structural equality. Same identity wins fast; otherwise compare
-// arrays element-wise and plain objects key-wise via Object.is. This is the
-// right default for selectors derived from kyju state (filter/map/slice on
-// stable arrays of refs, picking sub-objects). Callers reaching for deeper
-// transforms can pass a custom isEqual to useDb.
 function shallowEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (
