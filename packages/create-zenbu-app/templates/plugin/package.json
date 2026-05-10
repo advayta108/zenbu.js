@@ -1,0 +1,24 @@
+{
+  "name": "{{projectName}}",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "link": "zen link --plugin .",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@zenbujs/core": "*",
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@zenbujs/core": "^0.0.9",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.4.5"
+  }
+}

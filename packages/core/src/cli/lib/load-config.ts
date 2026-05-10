@@ -301,3 +301,25 @@ export async function loadPluginFromPath(args: {
   }
   return resolvePluginPaths(plugin, path.dirname(fromPath))
 }
+
+/**
+ * Load a standalone `zenbu.plugin.ts` (or any TS file whose default export
+ * is a `Plugin`) and return its `ResolvedPlugin`. Used by `zen link
+ * --plugin <dir>` to wire types for a plugin that has no host context yet.
+ *
+ * Unlike `loadPluginFromPath`, no `name` filter is required — the file
+ * must declare a single plugin.
+ */
+export async function loadPluginManifest(filePath: string): Promise<ResolvedPlugin> {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`zen link --plugin: ${filePath} does not exist.`)
+  }
+  if (!PLUGIN_FILE_RE.test(filePath)) {
+    throw new Error(
+      `zen link --plugin: expected a .ts/.js file, got ${path.basename(filePath)}.`,
+    )
+  }
+  const plugin = await importFresh<Plugin>(filePath)
+  assertPluginShape(plugin, filePath)
+  return resolvePluginPaths(plugin, path.dirname(filePath))
+}

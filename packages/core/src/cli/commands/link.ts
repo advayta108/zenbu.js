@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   loadConfig,
   loadPluginFromPath,
+  loadPluginManifest,
   findConfigPath,
 } from "../lib/load-config";
 import type {
@@ -596,11 +597,15 @@ function parseLinkArgs(argv: string[]): {
   typesConfigArg: string | null;
   surfaceOutArg: string | null;
   augmentOutArg: string | null;
+  pluginMode: boolean;
+  pluginDirArg: string | null;
 } {
   let manifestArg: string | null = null;
   let typesConfigArg: string | null = null;
   let surfaceOutArg: string | null = null;
   let augmentOutArg: string | null = null;
+  let pluginMode = false;
+  let pluginDirArg: string | null = null;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--types-config" && i + 1 < argv.length)
@@ -614,9 +619,28 @@ function parseLinkArgs(argv: string[]): {
       augmentOutArg = argv[++i]!;
     else if (arg.startsWith("--augment-out="))
       augmentOutArg = arg.slice("--augment-out=".length);
-    else if (!arg.startsWith("-") && !manifestArg) manifestArg = arg;
+    else if (arg === "--plugin") {
+      pluginMode = true;
+      // Optional inline arg: --plugin <dir>. We consume the next positional
+      // only if it doesn't look like a flag.
+      const next = argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        pluginDirArg = next;
+        i++;
+      }
+    } else if (arg.startsWith("--plugin=")) {
+      pluginMode = true;
+      pluginDirArg = arg.slice("--plugin=".length);
+    } else if (!arg.startsWith("-") && !manifestArg) manifestArg = arg;
   }
-  return { manifestArg, typesConfigArg, surfaceOutArg, augmentOutArg };
+  return {
+    manifestArg,
+    typesConfigArg,
+    surfaceOutArg,
+    augmentOutArg,
+    pluginMode,
+    pluginDirArg,
+  };
 }
 
 // =============================================================================
@@ -635,6 +659,97 @@ export interface LinkProjectOpts {
   quiet?: boolean;
 }
 
+/**
+ * Per-plugin link pipeline. Used by both `linkProject` (host context) and
+ * `linkSinglePlugin` (standalone). Writes the plugin's own surface, each
+ * declared dep surface, the composite augmentation, and bootstraps
+ * `tsconfig.json` / `.gitignore`. Stale `deps/<name>/` dirs that aren't in
+ * the current `dependsOn` set are pruned.
+ */
+async function processOnePlugin(
+  plugin: ResolvedPlugin,
+  writeOpts: WriteOpts,
+  log: (msg: string) => void,
+): Promise<void> {
+  // 1) Own surface — pointers into the plugin's own source.
+  const surface = discoverOwnSurface(plugin);
+  log(`Linking own surface "${plugin.name}" at ${plugin.dir}`);
+  log(`  ${surface.services.length} service(s)`);
+  if (surface.schemaPath) log(`  schema: ${surface.schemaPath}`);
+  if (surface.eventsPath) log(`  events: ${surface.eventsPath}`);
+  if (surface.preloadPath) log(`  preload: ${surface.preloadPath}`);
+  writeSurface(
+    path.join(plugin.dir, DOTZENBU_TYPES, "own"),
+    surface,
+    writeOpts,
+  );
+
+  // 2) Dep surfaces — pointers into upstream plugins' source.
+  type Dep = { depName: string; ownImportFromComposite: string };
+  const deps: Dep[] = [];
+  for (const dep of plugin.dependsOn ?? []) {
+    const upstream = await loadPluginFromPath({
+      fromPath: dep.fromPath,
+      name: dep.name,
+    });
+    const surfaceDir = path.join(
+      plugin.dir,
+      DOTZENBU_TYPES,
+      "deps",
+      dep.name,
+    );
+    const upstreamSurface = discoverOwnSurface(upstream);
+    log(`Linking dep "${dep.name}" into "${plugin.name}" (${upstream.dir})`);
+    writeSurface(surfaceDir, upstreamSurface, writeOpts);
+    deps.push({
+      depName: dep.name,
+      ownImportFromComposite: relImport(
+        path.join(plugin.dir, DOTZENBU_TYPES),
+        path.join(surfaceDir, "index.ts"),
+      ),
+    });
+  }
+
+  // Prune stale deps/<other>/ dirs.
+  const wantedDepNames = new Set(deps.map((d) => d.depName));
+  const depsRoot = path.join(plugin.dir, DOTZENBU_TYPES, "deps");
+  if (fs.existsSync(depsRoot)) {
+    for (const entry of fs.readdirSync(depsRoot)) {
+      if (wantedDepNames.has(entry)) continue;
+      const stale = path.join(depsRoot, entry);
+      try {
+        fs.rmSync(stale, { recursive: true, force: true });
+        if (!writeOpts.quiet) console.log(`  Pruned ${stale}`);
+      } catch {}
+    }
+  }
+
+  // 3) Composite — the only file the plugin's tsconfig pulls in.
+  const compositePath = path.join(
+    plugin.dir,
+    DOTZENBU_TYPES,
+    "zenbu-register.ts",
+  );
+  const compositeDir = path.dirname(compositePath);
+  const selfOwnImport = relImport(
+    compositeDir,
+    path.join(plugin.dir, DOTZENBU_TYPES, "own", "index.ts"),
+  );
+  const body = generateCompositeFile({
+    selfName: plugin.name,
+    selfOwnImport,
+    deps: deps.map((d) => ({
+      name: d.depName,
+      ownImport: d.ownImportFromComposite,
+    })),
+  });
+  writeIfChanged(compositePath, body, writeOpts);
+
+  // 4) tsconfig + .gitignore bootstrap.
+  bootstrapTsconfigJson(plugin.dir, writeOpts);
+  bootstrapGitignore(plugin.dir, writeOpts);
+}
+
 export async function linkProject(
   projectDir: string,
   opts: LinkProjectOpts = {},
@@ -644,8 +759,7 @@ export async function linkProject(
   const { resolved, pluginSourceFiles } = await loadConfig(projectDir);
 
   // Sanity: no two inline plugins (dir == projectDir) can share their own
-  // `.zenbu/types/own/` directory. If we ever decide to support that, we'd
-  // namespace the own dir per plugin.
+  // `.zenbu/types/own/` directory.
   const inlinePlugins = resolved.plugins.filter(
     (p) => p.dir === resolved.projectDir,
   );
@@ -657,103 +771,8 @@ export async function linkProject(
     );
   }
 
-  // 1) Per-plugin own surface — pointers into the plugin's own source.
   for (const plugin of resolved.plugins) {
-    const surface = discoverOwnSurface(plugin);
-    log(`Linking own surface "${plugin.name}" at ${plugin.dir}`);
-    log(`  ${surface.services.length} service(s)`);
-    if (surface.schemaPath) log(`  schema: ${surface.schemaPath}`);
-    if (surface.eventsPath) log(`  events: ${surface.eventsPath}`);
-    if (surface.preloadPath) log(`  preload: ${surface.preloadPath}`);
-    writeSurface(
-      path.join(plugin.dir, DOTZENBU_TYPES, "own"),
-      surface,
-      writeOpts,
-    );
-  }
-
-  // 2) Per-plugin dep surfaces — pointers into the upstream plugin's source.
-  // Every plugin (host included) gets EXACTLY what it declares in
-  // `dependsOn`. Nothing is implicit. If the host's inline plugin wants
-  // to reference another plugin's RPC/db/events from typed code, it has
-  // to declare that dependency itself.
-  type Dep = { depName: string; surfaceDir: string; ownImportFromComposite: string };
-  const perPluginDeps = new Map<ResolvedPlugin, Dep[]>();
-
-  for (const plugin of resolved.plugins) {
-    const deps: Dep[] = [];
-    const upstreams: Array<{ depName: string; upstream: ResolvedPlugin }> = [];
-    for (const dep of plugin.dependsOn ?? []) {
-      const upstream = await loadPluginFromPath({
-        fromPath: dep.fromPath,
-        name: dep.name,
-      });
-      upstreams.push({ depName: dep.name, upstream });
-    }
-    for (const { depName, upstream } of upstreams) {
-      const surfaceDir = path.join(
-        plugin.dir,
-        DOTZENBU_TYPES,
-        "deps",
-        depName,
-      );
-      const surface = discoverOwnSurface(upstream);
-      log(`Linking dep "${depName}" into "${plugin.name}" (${upstream.dir})`);
-      writeSurface(surfaceDir, surface, writeOpts);
-      deps.push({
-        depName,
-        surfaceDir,
-        ownImportFromComposite: relImport(
-          path.join(plugin.dir, DOTZENBU_TYPES),
-          path.join(surfaceDir, "index.ts"),
-        ),
-      });
-    }
-    perPluginDeps.set(plugin, deps);
-
-    // Prune stale deps/<other>/ dirs.
-    const wantedDepNames = new Set(deps.map((d) => d.depName));
-    const depsRoot = path.join(plugin.dir, DOTZENBU_TYPES, "deps");
-    if (fs.existsSync(depsRoot)) {
-      for (const entry of fs.readdirSync(depsRoot)) {
-        if (wantedDepNames.has(entry)) continue;
-        const stale = path.join(depsRoot, entry);
-        try {
-          fs.rmSync(stale, { recursive: true, force: true });
-          if (!writeOpts.quiet) console.log(`  Pruned ${stale}`);
-        } catch {}
-      }
-    }
-  }
-
-  // 3) Per-plugin composite (the only file the plugin's tsconfig pulls in).
-  for (const plugin of resolved.plugins) {
-    const compositePath = path.join(
-      plugin.dir,
-      DOTZENBU_TYPES,
-      "zenbu-register.ts",
-    );
-    const compositeDir = path.dirname(compositePath);
-    const selfOwnImport = relImport(
-      compositeDir,
-      path.join(plugin.dir, DOTZENBU_TYPES, "own", "index.ts"),
-    );
-    const deps = perPluginDeps.get(plugin) ?? [];
-    const body = generateCompositeFile({
-      selfName: plugin.name,
-      selfOwnImport,
-      deps: deps.map((d) => ({
-        name: d.depName,
-        ownImport: d.ownImportFromComposite,
-      })),
-    });
-    writeIfChanged(compositePath, body, writeOpts);
-  }
-
-  // 4) tsconfig + .gitignore bootstrap (idempotent).
-  for (const plugin of resolved.plugins) {
-    bootstrapTsconfigJson(plugin.dir, writeOpts);
-    bootstrapGitignore(plugin.dir, writeOpts);
+    await processOnePlugin(plugin, writeOpts, log);
   }
   if (inlinePlugins.length === 0) {
     bootstrapTsconfigJson(resolved.projectDir, writeOpts);
@@ -766,6 +785,46 @@ export async function linkProject(
     pluginSourceFiles,
     resolved,
   };
+}
+
+/**
+ * Standalone plugin link. Used by `zen link --plugin <dir>` when there's no
+ * host context — for example, right after `create-zenbu-app --plugin`
+ * scaffolds a plugin folder that hasn't been wired into any host yet.
+ *
+ * The plugin's `zenbu.plugin.ts` is loaded directly (no `zenbu.config.ts`
+ * required), and we run the same per-plugin pipeline `linkProject` uses.
+ */
+export async function linkSinglePlugin(
+  pluginDir: string,
+  opts: LinkProjectOpts = {},
+): Promise<void> {
+  const writeOpts: WriteOpts = { quiet: !!opts.quiet };
+  const log = opts.quiet ? () => {} : (msg: string) => console.log(msg);
+
+  const candidates = [
+    "zenbu.plugin.ts",
+    "zenbu.plugin.mts",
+    "zenbu.plugin.js",
+    "zenbu.plugin.mjs",
+  ];
+  let manifestPath: string | null = null;
+  for (const name of candidates) {
+    const candidate = path.join(pluginDir, name);
+    if (fs.existsSync(candidate)) {
+      manifestPath = candidate;
+      break;
+    }
+  }
+  if (!manifestPath) {
+    throw new Error(
+      `zen link --plugin: no zenbu.plugin.ts found in ${pluginDir}. ` +
+        `Expected one of: ${candidates.join(", ")}.`,
+    );
+  }
+
+  const plugin = await loadPluginManifest(manifestPath);
+  await processOnePlugin(plugin, writeOpts, log);
 }
 
 // =============================================================================
@@ -829,6 +888,20 @@ export async function runLink(argv: string[]) {
         augmentOut,
         opts: { quiet: false },
       });
+      console.log("Done.");
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+    return;
+  }
+
+  // Standalone plugin link: `zen link --plugin [dir]`. No host context;
+  // generates the plugin's own/+deps/+composite under <dir>/.zenbu/types/.
+  if (args.pluginMode) {
+    const pluginDir = path.resolve(args.pluginDirArg ?? process.cwd());
+    try {
+      await linkSinglePlugin(pluginDir);
       console.log("Done.");
     } catch (err) {
       console.error(err instanceof Error ? err.message : err);

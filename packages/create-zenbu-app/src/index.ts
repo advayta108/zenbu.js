@@ -16,9 +16,23 @@
 // `.git` exists.
 //
 // Flags:
-//   --yes / -y    Accept the default for every prompt (project = cwd, all
-//                 config options at their declared default).
-//   --no-install  Skip the post-copy install step.
+//   --yes / -y           Accept the default for every prompt (project = cwd,
+//                        all config options at their declared default).
+//   --no-install         Skip the post-copy install step.
+//   --no-git             Skip the git init prompt entirely. Git init is also
+//                        auto-skipped when an ancestor of the scaffold dir
+//                        already has a `.git/` directory.
+//   --plugin             Scaffold a plugin (not an app). Picks the plugin
+//                        template, skips app-only prompts (Tailwind), and
+//                        skips build-config seeding.
+//   --depends-on NAME=PATH
+//                        (Plugin mode only.) Declare a type-time dependency
+//                        on another plugin. Repeatable. `NAME` is the
+//                        upstream plugin's `name`. `PATH` points at either
+//                        a `zenbu.plugin.ts` (single plugin) or a
+//                        `zenbu.config.ts` (where `NAME` disambiguates).
+//   --no-add-to-host     Skip the prompt that offers to append the new
+//                        plugin to each upstream host's `plugins:[]` array.
 
 import path from "node:path"
 import fs from "node:fs"
@@ -29,11 +43,75 @@ import * as p from "@clack/prompts"
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATES_DIR = path.resolve(__dirname, "..", "templates")
 
-const argv = process.argv.slice(2)
-const flagsSet = new Set(argv.filter((a) => a.startsWith("-")))
-const positional = argv.filter((a) => !a.startsWith("-"))
+interface DependsOn {
+  name: string
+  /** Absolute path to the upstream's zenbu.plugin.ts or zenbu.config.ts. */
+  from: string
+}
+
+const rawArgv = process.argv.slice(2)
+const flagsSet = new Set<string>()
+const positional: string[] = []
+const dependsOn: DependsOn[] = []
+
+/**
+ * Parse flags. `--depends-on NAME=PATH` is consumed positionally because it
+ * carries a value; everything else is a boolean flag or a positional arg.
+ */
+for (let i = 0; i < rawArgv.length; i++) {
+  const arg = rawArgv[i]!
+  if (arg === "--depends-on" || arg === "--dependsOn") {
+    const value = rawArgv[++i]
+    if (!value) {
+      console.error("create-zenbu-app: --depends-on requires NAME=PATH")
+      process.exit(1)
+    }
+    dependsOn.push(parseDependsOn(value))
+  } else if (arg.startsWith("--depends-on=") || arg.startsWith("--dependsOn=")) {
+    dependsOn.push(parseDependsOn(arg.slice(arg.indexOf("=") + 1)))
+  } else if (arg.startsWith("-")) {
+    flagsSet.add(arg)
+  } else {
+    positional.push(arg)
+  }
+}
+
 const yes = flagsSet.has("--yes") || flagsSet.has("-y")
 const noInstall = flagsSet.has("--no-install")
+const noGit = flagsSet.has("--no-git")
+const pluginMode = flagsSet.has("--plugin")
+const noAddToHost = flagsSet.has("--no-add-to-host")
+
+if (dependsOn.length > 0 && !pluginMode) {
+  console.error("create-zenbu-app: --depends-on is only valid with --plugin")
+  process.exit(1)
+}
+
+function parseDependsOn(raw: string): DependsOn {
+  const eq = raw.indexOf("=")
+  if (eq < 0) {
+    console.error(
+      `create-zenbu-app: --depends-on must be of the form NAME=PATH (got "${raw}")`,
+    )
+    process.exit(1)
+  }
+  const name = raw.slice(0, eq).trim()
+  const rel = raw.slice(eq + 1).trim()
+  if (!name) {
+    console.error("create-zenbu-app: --depends-on NAME may not be empty")
+    process.exit(1)
+  }
+  if (!rel) {
+    console.error("create-zenbu-app: --depends-on PATH may not be empty")
+    process.exit(1)
+  }
+  const abs = path.isAbsolute(rel) ? rel : path.resolve(process.cwd(), rel)
+  if (!fs.existsSync(abs)) {
+    console.error(`create-zenbu-app: --depends-on path does not exist: ${abs}`)
+    process.exit(1)
+  }
+  return { name, from: abs }
+}
 
 // Internal/dev-only: when set to an absolute path of a local `@zenbujs/core`
 // checkout, the scaffold rewrites `@zenbujs/core` to `link:<path>` before the
@@ -144,25 +222,73 @@ function probeVersion(pm: PmType): string | null {
 //                          template rendering helpers
 // =============================================================================
 
-function renderTemplate(value: string, projectName: string): string {
-  return value.replace(/\{\{projectName\}\}/g, projectName)
+type TemplateCtx = Record<string, string>
+
+function renderTemplate(value: string, ctx: TemplateCtx): string {
+  return value.replace(/\{\{(\w+)\}\}/g, (full, key: string) => {
+    return Object.prototype.hasOwnProperty.call(ctx, key) ? ctx[key]! : full
+  })
 }
 
-function copyDirSync(src: string, dest: string, projectName: string): void {
+/**
+ * Copy a template directory tree to `dest`. Both file *contents* and
+ * file/directory *names* go through `renderTemplate`, so a template can
+ * place a file at e.g. `src/main/services/{{projectName}}.ts.tmpl` and have
+ * it land at `src/main/services/<projectName>.ts`. `.tmpl` is stripped.
+ */
+function copyDirSync(src: string, dest: string, ctx: TemplateCtx): void {
   fs.mkdirSync(dest, { recursive: true })
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name)
-    const destName = entry.name.endsWith(".tmpl")
+    let destName = entry.name.endsWith(".tmpl")
       ? entry.name.slice(0, -".tmpl".length)
       : entry.name
+    destName = renderTemplate(destName, ctx)
     const destPath = path.join(dest, destName)
     if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath, projectName)
+      copyDirSync(srcPath, destPath, ctx)
     } else {
       const content = fs.readFileSync(srcPath, "utf8")
-      fs.writeFileSync(destPath, renderTemplate(content, projectName))
+      fs.writeFileSync(destPath, renderTemplate(content, ctx))
     }
   }
+}
+
+function toPascalCase(s: string): string {
+  return s
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("")
+}
+
+function relPosix(fromDir: string, toFile: string): string {
+  let r = path.relative(fromDir, toFile).split(path.sep).join("/")
+  if (!r.startsWith(".")) r = "./" + r
+  return r
+}
+
+/**
+ * Render a plugin's `dependsOn` literal for the scaffolded `zenbu.plugin.ts`.
+ * Returns either an empty string (no deps → field omitted) or a leading-`\n`
+ * fragment that slots in after the `services:` line, e.g.
+ *
+ *   \n  dependsOn: [\n    { name: "app", from: "../../zenbu.config.ts" },\n  ],
+ *
+ * Each `from` is rewritten relative to `pluginDir` so the generated file is
+ * stable across moves of the surrounding workspace.
+ */
+function renderDependsOn(pluginDir: string, deps: DependsOn[]): string {
+  if (deps.length === 0) return ""
+  const lines: string[] = []
+  lines.push("")
+  lines.push("  dependsOn: [")
+  for (const d of deps) {
+    const fromRel = relPosix(pluginDir, d.from)
+    lines.push(`    { name: ${JSON.stringify(d.name)}, from: ${JSON.stringify(fromRel)} },`)
+  }
+  lines.push("  ],")
+  return lines.join("\n")
 }
 
 /**
@@ -181,14 +307,36 @@ function seedPackageManager(projectDir: string, pm: DetectedPm): void {
   }
 }
 
-function rewireToLocalCore(projectDir: string, corePath: string): void {
+/**
+ * Pin `@zenbujs/core` to a local checkout. For apps the dep lives in
+ * `dependencies`; for plugins it's in `devDependencies` (plugins peer on
+ * core).
+ */
+function rewireToLocalCore(
+  projectDir: string,
+  corePath: string,
+  isPlugin: boolean,
+): void {
   const pkgPath = path.join(projectDir, "package.json")
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
     dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
   }
-  pkg.dependencies = pkg.dependencies ?? {}
-  pkg.dependencies["@zenbujs/core"] = `link:${corePath}`
+  const bucket = isPlugin ? "devDependencies" : "dependencies"
+  pkg[bucket] = pkg[bucket] ?? {}
+  pkg[bucket]["@zenbujs/core"] = `link:${corePath}`
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n")
+}
+
+/** Walk upward from `fromDir` looking for an ancestor with a `.git` dir. */
+function findGitRoot(fromDir: string): string | null {
+  let dir = path.resolve(fromDir)
+  while (true) {
+    if (fs.existsSync(path.join(dir, ".git"))) return dir
+    const parent = path.dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
 }
 
 function gitInitWithInitialCommit(projectDir: string): void {
@@ -215,6 +363,97 @@ function gitInitWithInitialCommit(projectDir: string): void {
   )
 }
 
+// =============================================================================
+//                       Host zenbu.config.ts mutation
+// =============================================================================
+
+/**
+ * Append a path-form plugin entry to the host's `plugins: [ ... ]` array.
+ * Idempotent — if the entry is already there, returns "already-present" and
+ * doesn't rewrite. Returns "unsafe-shape" when the file's `plugins: [...]`
+ * doesn't look like the scaffolded shape (spread syntax, missing array, etc.)
+ * — caller logs a warning and prints the entry to add manually.
+ */
+type HostEditResult = "added" | "already-present" | "unsafe-shape" | "missing-file"
+
+function appendPluginToHostConfig(
+  hostConfigPath: string,
+  entry: string,
+): HostEditResult {
+  if (!fs.existsSync(hostConfigPath)) return "missing-file"
+  const raw = fs.readFileSync(hostConfigPath, "utf8")
+  // Find `plugins:` followed by `[`. We tolerate whitespace and a comment
+  // between them.
+  const pluginsMatch = raw.match(/\bplugins\s*:\s*\[/)
+  if (!pluginsMatch) return "unsafe-shape"
+  const openIdx = pluginsMatch.index! + pluginsMatch[0].length - 1
+  // Walk balanced brackets to find the matching `]`. Skips over strings and
+  // single-line + block comments so we don't get tricked by `]` inside them.
+  let depth = 1
+  let i = openIdx + 1
+  while (i < raw.length && depth > 0) {
+    const ch = raw[i]!
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const quote = ch
+      i++
+      while (i < raw.length && raw[i] !== quote) {
+        if (raw[i] === "\\") i++
+        i++
+      }
+      i++
+      continue
+    }
+    if (ch === "/" && raw[i + 1] === "/") {
+      while (i < raw.length && raw[i] !== "\n") i++
+      continue
+    }
+    if (ch === "/" && raw[i + 1] === "*") {
+      i += 2
+      while (i < raw.length - 1 && !(raw[i] === "*" && raw[i + 1] === "/")) i++
+      i += 2
+      continue
+    }
+    if (ch === "[") depth++
+    else if (ch === "]") depth--
+    i++
+  }
+  if (depth !== 0) return "unsafe-shape"
+  const closeIdx = i - 1
+  const arrayBody = raw.slice(openIdx + 1, closeIdx)
+  if (/\.\.\./.test(arrayBody)) return "unsafe-shape"
+  // Already present (string match against the literal we'd add)?
+  if (arrayBody.includes(JSON.stringify(entry))) return "already-present"
+  // Determine indent for the new line: take the indent of the first non-empty
+  // line inside the array, or default to two spaces of project + plugins indent.
+  const lines = arrayBody.split("\n")
+  let indent = "    "
+  for (const line of lines) {
+    if (line.trim().length === 0) continue
+    const m = line.match(/^[ \t]+/)
+    if (m) {
+      indent = m[0]
+      break
+    }
+  }
+  // Find the closing `]`'s line indent so the appended item lines up.
+  const beforeClose = raw.slice(0, closeIdx)
+  const lastLineStart = beforeClose.lastIndexOf("\n") + 1
+  const closeLineIndent = beforeClose.slice(lastLineStart).match(/^[ \t]*/)![0]
+  // Slice in: keep everything up to (and including) the last item / opening
+  // bracket, then add the new line, then the rest.
+  // We append directly before the closing `]`. If the last visible content
+  // before `]` doesn't end with a comma, add one.
+  let head = raw.slice(0, closeIdx).replace(/\s*$/, "")
+  if (head.length > 0 && !head.endsWith(",") && !head.endsWith("[")) {
+    head += ","
+  }
+  const insertion = `\n${indent}${JSON.stringify(entry)},\n${closeLineIndent}`
+  const next = head + insertion + raw.slice(closeIdx)
+  if (next === raw) return "already-present"
+  fs.writeFileSync(hostConfigPath, next)
+  return "added"
+}
+
 /**
  * Run `<pm> install` in the freshly-scaffolded project so the user can go
  * straight to `pnpm dev`/`bun dev`/etc. without the extra step. We run with
@@ -230,16 +469,23 @@ function runInstall(projectDir: string, pm: DetectedPm): boolean {
   return res.status === 0
 }
 
-/**
- * Run `<pm> run link` so the scaffold's typegen output (under `types/`) is
- * present before the initial git commit. Without this, the user's first
- * `pnpm dev` would generate those files and leave the working tree dirty.
- */
-function runLink(projectDir: string, pm: DetectedPm): boolean {
-  const res = spawnSync(pm.type, ["run", "link"], {
-    cwd: projectDir,
-    stdio: "inherit",
-  })
+/** Run `<pm> exec zen link [extraArgs...]` in `cwd`. */
+function runZenLink(
+  cwd: string,
+  pm: DetectedPm,
+  extraArgs: string[] = [],
+): boolean {
+  const args = ["exec", "zen", "link", ...extraArgs]
+  // yarn classic uses different exec semantics; bun/pnpm/npm all support
+  // `exec` to run a local binary. For yarn classic we fall back to direct
+  // `yarn zen link` which yarn rewrites to the bin lookup.
+  const cmd =
+    pm.type === "yarn" && pm.version.startsWith("1.") ? pm.type : pm.type
+  const finalArgs =
+    pm.type === "yarn" && pm.version.startsWith("1.")
+      ? ["zen", "link", ...extraArgs]
+      : args
+  const res = spawnSync(cmd, finalArgs, { cwd, stdio: "inherit" })
   return res.status === 0
 }
 
@@ -297,7 +543,7 @@ function defaultAnswers(): ResolvedAnswers {
 // =============================================================================
 
 async function main(): Promise<void> {
-  p.intro("create-zenbu-app")
+  p.intro(pluginMode ? "create-zenbu-app (plugin)" : "create-zenbu-app")
 
   let projectName: string
   if (positional[0]) {
@@ -309,9 +555,6 @@ async function main(): Promise<void> {
   }
 
   const projectDir = path.resolve(process.cwd(), projectName)
-  // Always use the basename for templated `{{projectName}}` substitution so
-  // path-style args like `/tmp/foo` don't leak `/` into `package.json#name`
-  // (which npm rejects) or the electron-builder appId.
   const displayName = path.basename(projectDir)
 
   if (fs.existsSync(projectDir)) {
@@ -324,16 +567,28 @@ async function main(): Promise<void> {
     }
   }
 
-  const answers = yes ? defaultAnswers() : await promptOptions()
-  const slug = resolveSlug(answers)
-  const templateDir = path.join(TEMPLATES_DIR, slug)
+  // Plugin mode short-circuits all CONFIG_OPTIONS prompts (those are
+  // app-only: Tailwind etc. don't apply to plugins). It also uses a
+  // different template and skips build-config seeding.
+  let templateDir: string
+  let slug: string
+  if (pluginMode) {
+    slug = "plugin"
+    templateDir = path.join(TEMPLATES_DIR, "plugin")
+  } else {
+    const answers = yes ? defaultAnswers() : await promptOptions()
+    slug = resolveSlug(answers)
+    templateDir = path.join(TEMPLATES_DIR, slug)
+  }
   if (!fs.existsSync(templateDir)) {
     bail(`No template found for configuration "${slug}".`)
   }
 
   const pm = detectPackageManager()
 
-  p.log.step(`Scaffolding Zenbu app in "${displayName}" (template: ${slug})`)
+  p.log.step(
+    `Scaffolding Zenbu ${pluginMode ? "plugin" : "app"} in "${displayName}" (template: ${slug})`,
+  )
   if (pm.fallback) {
     p.log.info(
       `couldn't detect invoking package manager; defaulting to ${pm.type}@${pm.version}.`,
@@ -342,18 +597,28 @@ async function main(): Promise<void> {
     p.log.info(`detected ${pm.type}@${pm.version} as the invoking package manager`)
   }
 
-  copyDirSync(templateDir, projectDir, displayName)
+  const ctx: TemplateCtx = pluginMode
+    ? {
+        projectName: displayName,
+        className: toPascalCase(displayName),
+        dependsOn: renderDependsOn(projectDir, dependsOn),
+      }
+    : { projectName: displayName }
+
+  copyDirSync(templateDir, projectDir, ctx)
 
   const gi = path.join(projectDir, "_gitignore")
   if (fs.existsSync(gi)) {
     fs.renameSync(gi, path.join(projectDir, ".gitignore"))
   }
 
-  seedPackageManager(projectDir, pm)
+  if (!pluginMode) {
+    seedPackageManager(projectDir, pm)
+  }
 
   if (ZENBU_LOCAL_CORE) {
     const corePath = path.resolve(ZENBU_LOCAL_CORE)
-    rewireToLocalCore(projectDir, corePath)
+    rewireToLocalCore(projectDir, corePath, pluginMode)
     p.log.info(`linked @zenbujs/core -> ${corePath}`)
   }
 
@@ -368,27 +633,116 @@ async function main(): Promise<void> {
     }
   }
 
-  // Run `<pm> run link` after install so the generated `types/` files (which
-  // are tracked, not gitignored) land in the initial commit. Skipping when
-  // install failed since link needs deps resolved.
-  if (installed) {
-    p.log.step(`running ${pm.type} run link`)
-    const linked = runLink(projectDir, pm)
-    if (!linked) {
-      p.log.warn(
-        `${pm.type} run link failed; you can retry manually after the scaffold completes.`,
+  // Plugin mode: optionally add this plugin to each upstream host's
+  // `plugins:[]`. Prompted interactively (default yes) unless `--yes` or
+  // `--no-add-to-host` short-circuit. Only zenbu.config.ts deps are
+  // candidates; standalone zenbu.plugin.ts dependencies are not hosts.
+  const hostsToLink = new Set<string>()
+  if (pluginMode && !noAddToHost) {
+    for (const dep of dependsOn) {
+      const base = path.basename(dep.from)
+      const isConfig = base.startsWith("zenbu.config.")
+      if (!isConfig) continue
+      const hostDir = path.dirname(dep.from)
+      const pluginManifestRel = relPosix(
+        hostDir,
+        path.join(projectDir, "zenbu.plugin.ts"),
       )
+      let accept = yes
+      if (!yes) {
+        const result = await p.confirm({
+          message: `Add "${pluginManifestRel}" to ${path.relative(process.cwd(), dep.from) || dep.from} plugins:?`,
+          initialValue: true,
+        })
+        if (p.isCancel(result)) bail("Scaffolding cancelled.")
+        accept = !!result
+      }
+      if (!accept) continue
+      const outcome = appendPluginToHostConfig(dep.from, pluginManifestRel)
+      switch (outcome) {
+        case "added":
+          p.log.success(`wired into ${dep.from}`)
+          hostsToLink.add(hostDir)
+          break
+        case "already-present":
+          p.log.info(`already listed in ${dep.from}`)
+          hostsToLink.add(hostDir)
+          break
+        case "missing-file":
+          p.log.warn(`host config not found: ${dep.from}`)
+          break
+        case "unsafe-shape":
+          p.log.warn(
+            `${dep.from}: couldn't safely edit plugins:[]. Add this manually:\n    ${JSON.stringify(pluginManifestRel)},`,
+          )
+          break
+      }
     }
   }
 
-  if (!fs.existsSync(path.join(projectDir, ".git"))) {
-    gitInitWithInitialCommit(projectDir)
+  // Run `zen link` after install so types are wired up.
+  if (installed) {
+    if (pluginMode) {
+      // Prefer host link (each host's composite picks up the new plugin
+      // in the same call). Fall back to standalone plugin link if no host
+      // got edited.
+      if (hostsToLink.size > 0) {
+        for (const hostDir of hostsToLink) {
+          p.log.step(`running zen link in ${hostDir}`)
+          const ok = runZenLink(hostDir, pm)
+          if (!ok) p.log.warn(`zen link failed in ${hostDir}`)
+        }
+      } else {
+        p.log.step(`running zen link --plugin .`)
+        const ok = runZenLink(projectDir, pm, ["--plugin", "."])
+        if (!ok) p.log.warn(`zen link --plugin . failed`)
+      }
+    } else {
+      p.log.step(`running ${pm.type} run link`)
+      const res = spawnSync(pm.type, ["run", "link"], {
+        cwd: projectDir,
+        stdio: "inherit",
+      })
+      if (res.status !== 0) {
+        p.log.warn(
+          `${pm.type} run link failed; you can retry manually after the scaffold completes.`,
+        )
+      }
+    }
+  }
+
+  // Git init: skipped automatically when an ancestor already owns a repo
+  // (common when scaffolding a plugin inside an existing host repo). When
+  // no ancestor repo exists, prompt (default yes); suppressed by --no-git;
+  // auto-confirmed by --yes.
+  if (!noGit) {
+    const ancestorRepo = findGitRoot(projectDir)
+    if (ancestorRepo) {
+      p.log.info(`inside existing repo at ${ancestorRepo} — skipping git init`)
+    } else {
+      let doInit = yes
+      if (!yes) {
+        const result = await p.confirm({
+          message: "Initialize a git repo here?",
+          initialValue: true,
+        })
+        if (p.isCancel(result)) bail("Scaffolding cancelled.")
+        doInit = !!result
+      }
+      if (doInit) {
+        gitInitWithInitialCommit(projectDir)
+      }
+    }
   }
 
   const cdHint = projectName === "." ? "" : `cd ${displayName} && `
-  const next = installed
-    ? `${cdHint}${pm.type} dev`
-    : `${cdHint}${pm.type} install\n  ${cdHint}${pm.type} dev`
+  const next = pluginMode
+    ? installed
+      ? `${cdHint}${pm.type} run typecheck`
+      : `${cdHint}${pm.type} install`
+    : installed
+      ? `${cdHint}${pm.type} dev`
+      : `${cdHint}${pm.type} install\n  ${cdHint}${pm.type} dev`
   p.outro(`Done. Next:\n\n  ${next}\n`)
 }
 
