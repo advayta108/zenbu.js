@@ -177,6 +177,13 @@ export async function loadConfig(projectDir: string): Promise<{
         `The splash file is shown raw (no Vite) during the brief window between Electron startup and the app's first paint.`,
     )
   }
+  // Optional: `installing.html` next to splash. When present, the
+  // production launcher loads it during clone + first install. Not
+  // required — apps without it just see the dock icon during install.
+  const installingCandidate = path.join(uiEntrypointPath, "installing.html")
+  const installingPath = fs.existsSync(installingCandidate)
+    ? installingCandidate
+    : undefined
 
   const plugins: ResolvedPlugin[] = []
   const pluginSourceFiles: string[] = []
@@ -200,6 +207,7 @@ export async function loadConfig(projectDir: string): Promise<{
       dbPath,
       uiEntrypointPath,
       splashPath,
+      installingPath,
       plugins,
       build,
     },

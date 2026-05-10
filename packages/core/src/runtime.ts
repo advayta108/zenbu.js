@@ -8,7 +8,9 @@ function readShutdownTimeoutMs(): number {
   const raw = process.env.ZENBU_SHUTDOWN_TIMEOUT_MS;
   if (!raw) return DEFAULT_SHUTDOWN_TIMEOUT_MS;
   const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SHUTDOWN_TIMEOUT_MS;
+  return Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_SHUTDOWN_TIMEOUT_MS;
 }
 
 interface HotContext {
@@ -21,51 +23,74 @@ interface HotContext {
 interface ServiceSlot {
   error: unknown | null;
   instance: Service | null;
-  ServiceClass: typeof Service;
+  ServiceClass: ServiceConstructor;
   status: "blocked" | "evaluating" | "ready" | "failed";
 }
 
-type AnyServiceClass = abstract new (...args: any[]) => Service;
-type DepRef = AnyServiceClass | string;
-type OptionalDep<R extends DepRef = DepRef> = { __optional: true; ref: R };
-type DepEntry = DepRef | OptionalDep;
+type AnyServiceClass = (abstract new (...args: any[]) => Service) & {
+  key: string;
+};
+type DepEntry = AnyServiceClass | string;
 
-type DepInstance<D> = D extends OptionalDep<infer R>
-  ? R extends AnyServiceClass
-    ? InstanceType<R> | undefined
-    : unknown
-  : D extends AnyServiceClass
-  ? InstanceType<D>
-  : unknown;
+type DepInstance<D> = D extends AnyServiceClass ? InstanceType<D> : unknown;
 
 type ResolveCtx<TDeps> = { [K in keyof TDeps]: DepInstance<TDeps[K]> };
 
-// TODO: Replace optional() with a reactive service tracker API, e.g.
-// this.track(SomeService, { onAvailable(instance) {}, onUnavailable() {} })
-// This gives both optional declaration and reactive listening in one primitive:
-// the dep may not exist at evaluate-time, but when it appears (plugin loaded,
-// plugin loaded) you get a callback — and a teardown when it disappears.
-// Eliminates the need for manual null-checks in evaluate() and global
-// onReconciled polling for a specific service key.
-export function optional<R extends DepRef>(ref: R): OptionalDep<R> {
-  return { __optional: true, ref };
+function resolveDepKey(entry: DepEntry): string {
+  if (typeof entry === "string") return entry;
+  return entry.key;
 }
 
-function resolveDep(entry: DepEntry): { key: string; optional: boolean } {
-  if (typeof entry === "string") return { key: entry, optional: false };
-  if (typeof entry === "object" && entry !== null && "__optional" in entry) {
-    const ref = entry.ref;
-    return {
-      key: typeof ref === "string" ? ref : (ref as typeof Service).key,
-      optional: true,
-    };
-  }
-  return { key: (entry as typeof Service).key, optional: false };
-}
+/**
+ * A concrete service class registered with the runtime. Always has a
+ * `static key` (set by `Service.create`) and an optional `static deps`
+ * map. Used as the parameter type of `runtime.register`.
+ */
+export type ServiceConstructor = (new (...args: any[]) => Service) & {
+  key: string;
+  deps?: Record<string, DepEntry>;
+};
 
 export abstract class Service {
-  static key: string;
-  static deps: Record<string, DepEntry>;
+  static deps: Record<string, DepEntry> = {};
+
+  /**
+   * Define a Service base class. The returned abstract class has
+   * `static key`, `static deps`, and a typed `this.ctx` already set up;
+   * extend it and add your `evaluate()` body.
+   *
+   *     export class WindowService extends Service.create({
+   *       key: "window",
+   *       deps: {
+   *         baseWindow: BaseWindowService,
+   *         http: HttpService,
+   *       },
+   *     }) {
+   *       evaluate() {
+   *         this.ctx.baseWindow  // BaseWindowService
+   *         this.ctx.http        // HttpService
+   *       }
+   *     }
+   *
+   * `key` is a required field on the config object, so TypeScript errors
+   * if you forget it. `deps` is optional (defaults to no deps).
+   *
+   * For dynamic / optional access to another service, use
+   * `runtime.get(SomeService, cb)` instead of declaring it in `deps`.
+   */
+  static create<
+    TKey extends string,
+    TDeps extends Record<string, DepEntry> = {},
+  >(config: { key: TKey; deps?: TDeps }) {
+    const { key, deps } = config;
+    const resolvedDeps = (deps ?? {}) as Record<string, DepEntry>;
+    abstract class ConfiguredService extends Service {
+      static key = key;
+      static deps = resolvedDeps;
+      declare ctx: ResolveCtx<TDeps>;
+    }
+    return ConfiguredService;
+  }
 
   ctx: any;
 
@@ -124,40 +149,12 @@ export abstract class Service {
   }
 }
 
-/**
- * Declare a Service base class with typed deps. The returned class has
- * `static deps = <your map>` already set, and `this.ctx` is auto-typed
- * from the dep classes — no `declare ctx` needed in the subclass.
- *
- *     export class WindowService extends serviceWithDeps({
- *       baseWindow: BaseWindowService,
- *       http: HttpService,
- *     }) {
- *       static key = "window"
- *       evaluate() {
- *         this.ctx.baseWindow  // BaseWindowService
- *         this.ctx.http        // HttpService
- *       }
- *     }
- *
- * `optional(SomeService)` is supported and produces `Instance | undefined`.
- */
-export function serviceWithDeps<TDeps extends Record<string, DepEntry>>(
-  deps: TDeps,
-) {
-  abstract class ServiceWithDeps extends Service {
-    static deps = deps as unknown as Record<string, DepEntry>;
-    declare ctx: ResolveCtx<TDeps>;
-  }
-  return ServiceWithDeps;
-}
-
 const SERVICE_BASE_METHODS = new Set(
   Object.getOwnPropertyNames(Service.prototype),
 );
 
 export class ServiceRuntime {
-  private definitions = new Map<string, typeof Service>();
+  private definitions = new Map<string, ServiceConstructor>();
   private dependentsIndex = new Map<string, Set<string>>();
   private dirtyKeys = new Set<string>();
   private drainError: unknown = null;
@@ -165,13 +162,24 @@ export class ServiceRuntime {
   private registrationTokens = new Map<string, symbol>();
   private slots = new Map<string, ServiceSlot>();
   private onReconciledCallbacks: Array<(changedKeys: string[]) => void> = [];
+  private subscribers = new Map<
+    string,
+    Set<(instance: Service | undefined) => void>
+  >();
 
-  register(ServiceClass: typeof Service, importMeta?: ImportMeta | null): void {
+  register(
+    ServiceClass: ServiceConstructor,
+    importMeta?: ImportMeta | null,
+  ): void {
     const hot: HotContext | null = (importMeta as any)?.hot ?? null;
-    const baseKey = ServiceClass.key;
-    if (!baseKey) throw new Error("Service must have a static key property");
-
-    const slotKey = baseKey;
+    const slotKey = ServiceClass.key;
+    if (typeof slotKey !== "string" || slotKey.length === 0) {
+      const name = (ServiceClass as { name?: string }).name ?? "<anonymous>";
+      throw new Error(
+        `[runtime] service "${name}" is missing \`static key\`. ` +
+          `Define it via \`Service.create({ key: "...", ... })\`.`,
+      );
+    }
 
     this.definitions.set(slotKey, ServiceClass);
     const slot = this.slots.get(slotKey);
@@ -223,6 +231,19 @@ export class ServiceRuntime {
     await this.whenIdle();
   }
 
+  /**
+   * Reload a single service by key. No-op if the key is not registered.
+   * Used by infrastructure that watches resources outside dynohot's
+   * import-graph (e.g. the migrations directory watcher in DbService) and
+   * needs to nudge a specific service to re-evaluate without leaning on
+   * the devtools-only `__zenbu_dev__.reloadService` hook.
+   */
+  async reload(key: string): Promise<void> {
+    if (!this.slots.has(key)) return;
+    await this.scheduleReconcile([key]);
+    await this.whenIdle();
+  }
+
   async shutdown(): Promise<void> {
     try {
       await this.whenIdle();
@@ -240,14 +261,59 @@ export class ServiceRuntime {
     this.registrationTokens.clear();
   }
 
-  get<T extends Service>(ref: { key: string }): T {
-    const slot = this.slots.get(ref.key);
-    if (!slot || slot.status !== "ready" || !slot.instance) {
-      throw new Error(
-        `Service "${ref.key}" not ready. Is it registered and evaluated?`,
-      );
+  /**
+   * Subscribe to a service. Behavior-subject style: the callback fires
+   * synchronously once with the current value (the live instance if ready,
+   * `undefined` otherwise), then again on every reconcile of that service —
+   * so you see the new instance after each HMR. Pass through `undefined`
+   * when the service tears down or unregisters.
+   *
+   * Returns an unsubscribe function. Always call it from a `setup()` cleanup
+   * (or wherever you'd otherwise leak callbacks across reloads).
+   */
+  get<T extends Service>(
+    ref: { key: string },
+    cb: (instance: T | undefined) => void,
+  ): () => void {
+    const key = ref.key;
+    let subs = this.subscribers.get(key);
+    if (!subs) {
+      subs = new Set();
+      this.subscribers.set(key, subs);
     }
-    return slot.instance as T;
+    const wrapped = cb as (instance: Service | undefined) => void;
+    subs.add(wrapped);
+
+    const slot = this.slots.get(key);
+    const current =
+      slot?.status === "ready" && slot.instance ? (slot.instance as T) : undefined;
+    try {
+      cb(current);
+    } catch (e) {
+      console.error(`[hot] runtime.get subscriber for "${key}" threw:`, e);
+    }
+
+    return () => {
+      const set = this.subscribers.get(key);
+      if (!set) return;
+      set.delete(wrapped);
+      if (set.size === 0) this.subscribers.delete(key);
+    };
+  }
+
+  private fireSubscribers(key: string): void {
+    const subs = this.subscribers.get(key);
+    if (!subs || subs.size === 0) return;
+    const slot = this.slots.get(key);
+    const instance =
+      slot?.status === "ready" && slot.instance ? slot.instance : undefined;
+    for (const cb of [...subs]) {
+      try {
+        cb(instance);
+      } catch (e) {
+        console.error(`[hot] runtime.get subscriber for "${key}" threw:`, e);
+      }
+    }
   }
 
   buildRouter(): Record<string, Record<string, (...args: any[]) => any>> {
@@ -284,19 +350,16 @@ export class ServiceRuntime {
     return this.slots.get(depKey);
   }
 
-  private injectCtx(instance: Service, ServiceClass: typeof Service): void {
-    const deps =
-      ((ServiceClass as any).deps as Record<string, DepEntry> | undefined) ??
-      {};
-    const ctx: Record<string, Service | undefined> = {};
+  private injectCtx(
+    instance: Service,
+    ServiceClass: ServiceConstructor,
+  ): void {
+    const deps = ServiceClass.deps ?? {};
+    const ctx: Record<string, Service> = {};
     for (const [name, entry] of Object.entries(deps)) {
-      const { key, optional: isOptional } = resolveDep(entry);
+      const key = resolveDepKey(entry);
       const slot = this.resolveDepSlot(key);
       if (!slot || slot.status !== "ready" || !slot.instance) {
-        if (isOptional) {
-          ctx[name] = undefined;
-          continue;
-        }
         throw new Error(
           `Dependency "${key}" not ready for "${ServiceClass.key}"`,
         );
@@ -309,11 +372,9 @@ export class ServiceRuntime {
   private rebuildDependentsIndex(): void {
     const next = new Map<string, Set<string>>();
     for (const [slotKey, ServiceClass] of this.definitions) {
-      const deps =
-        ((ServiceClass as any).deps as Record<string, DepEntry> | undefined) ??
-        {};
+      const deps = ServiceClass.deps ?? {};
       for (const entry of Object.values(deps)) {
-        const { key: depKey } = resolveDep(entry);
+        const depKey = resolveDepKey(entry);
         const dependents = next.get(depKey) ?? new Set<string>();
         dependents.add(slotKey);
         next.set(depKey, dependents);
@@ -337,14 +398,11 @@ export class ServiceRuntime {
     return [...affected].filter((key) => this.definitions.has(key));
   }
 
-  private listMissingDeps(ServiceClass: typeof Service): string[] {
-    const deps =
-      ((ServiceClass as any).deps as Record<string, DepEntry> | undefined) ??
-      {};
+  private listMissingDeps(ServiceClass: ServiceConstructor): string[] {
+    const deps = ServiceClass.deps ?? {};
     const missing: string[] = [];
     for (const entry of Object.values(deps)) {
-      const { key, optional: isOptional } = resolveDep(entry);
-      if (isOptional) continue;
+      const key = resolveDepKey(entry);
       const slot = this.resolveDepSlot(key);
       if (!slot || slot.status !== "ready" || !slot.instance) {
         missing.push(key);
@@ -353,7 +411,10 @@ export class ServiceRuntime {
     return missing;
   }
 
-  private ensureSlot(key: string, ServiceClass: typeof Service): ServiceSlot {
+  private ensureSlot(
+    key: string,
+    ServiceClass: ServiceConstructor,
+  ): ServiceSlot {
     const existing = this.slots.get(key);
     if (existing) return existing;
     const slot: ServiceSlot = {
@@ -414,6 +475,8 @@ export class ServiceRuntime {
     this.definitions.delete(key);
     await this.teardownService(key, { removeSlot: true });
     this.rebuildDependentsIndex();
+    // Notify subscribers that the service is gone before dependents reconcile.
+    this.fireSubscribers(key);
     await this.scheduleReconcile([key]);
   }
 
@@ -451,7 +514,7 @@ export class ServiceRuntime {
     const affectedKeys = this.getAffectedKeys(changedKeys);
     if (affectedKeys.length === 0) return;
 
-    const affected = new Map<string, typeof Service>();
+    const affected = new Map<string, ServiceConstructor>();
     for (const key of affectedKeys) {
       const ServiceClass = this.definitions.get(key);
       if (ServiceClass) {
@@ -461,21 +524,33 @@ export class ServiceRuntime {
 
     const levels = this.topologicalLevels(affected);
 
-    // Phase 1: clean up all affected in REVERSE topo order (dependents before dependencies)
+    // Snapshot which keys were previously ready so reconcileKey can gate the
+    // "waiting on deps" log (Phase 1 nulls out the instance, erasing that signal).
+    const wasReady = new Set<string>();
+    for (const key of affectedKeys) {
+      if (this.slots.get(key)?.status === "ready") wasReady.add(key);
+    }
+
+    // Phase 1: tear down all affected in REVERSE topo order (dependents before
+    // dependencies). Full teardown — not just setup-cleanup — so each service
+    // gets a fresh instance in Phase 2. We deliberately do NOT carry instance
+    // state across reconciles: there is no migration hook, so reusing a stale
+    // instance with a swapped prototype is a correctness footgun.
     for (const level of [...levels].reverse()) {
       await Promise.all(
-        level.map(async (key) => {
-          const slot = this.slots.get(key);
-          if (slot?.instance) {
-            await slot.instance.__cleanupAllSetups("reload");
-          }
-        }),
+        level.map((key) => this.teardownService(key, { reason: "reload" })),
       );
     }
 
     // Phase 2: re-evaluate in forward topo order (dependencies before dependents)
     for (const level of levels) {
-      await Promise.all(level.map((key) => this.reconcileKey(key)));
+      await Promise.all(level.map((key) => this.reconcileKey(key, wasReady)));
+    }
+
+    // Notify per-service subscribers (`runtime.get(ref, cb)`) with the new
+    // instance — or `undefined` if the slot ended up not-ready.
+    for (const key of affectedKeys) {
+      this.fireSubscribers(key);
     }
 
     if (affectedKeys.length > 0) {
@@ -489,7 +564,10 @@ export class ServiceRuntime {
     }
   }
 
-  private async reconcileKey(key: string): Promise<void> {
+  private async reconcileKey(
+    key: string,
+    wasReady: ReadonlySet<string>,
+  ): Promise<void> {
     const ServiceClass = this.definitions.get(key);
     if (!ServiceClass) return;
 
@@ -498,29 +576,21 @@ export class ServiceRuntime {
 
     const missingDeps = this.listMissingDeps(ServiceClass);
     if (missingDeps.length > 0) {
-      const shouldLog = slot.instance !== null || slot.status !== "blocked";
       await this.teardownService(key, { reason: "reload" });
-      if (shouldLog) {
+      if (wasReady.has(key)) {
         console.log(`[hot] ${key} waiting on: ${missingDeps.join(", ")}`);
       }
       return;
     }
 
-    let instance = slot.instance;
-    if (!instance) {
-      instance = new (ServiceClass as any)() as Service;
-      slot.instance = instance;
-    } else {
-      Object.setPrototypeOf(instance, ServiceClass.prototype);
-    }
-
+    const instance = new (ServiceClass as any)();
+    slot.instance = instance;
     slot.status = "evaluating";
     slot.error = null;
 
     try {
-      await instance!.__cleanupAllSetups("reload");
-      this.injectCtx(instance!, ServiceClass);
-      await instance!.evaluate();
+      this.injectCtx(instance, ServiceClass);
+      await instance.evaluate();
       slot.status = "ready";
     } catch (e) {
       slot.status = "failed";
@@ -529,7 +599,9 @@ export class ServiceRuntime {
     }
   }
 
-  private topologicalLevels(services: Map<string, typeof Service>): string[][] {
+  private topologicalLevels(
+    services: Map<string, ServiceConstructor>,
+  ): string[][] {
     const keys = new Set(services.keys());
     const inDegree = new Map<string, number>();
     const dependents = new Map<string, string[]>();
@@ -540,17 +612,13 @@ export class ServiceRuntime {
     }
 
     for (const [slotKey, ServiceClass] of services) {
-      const deps =
-        ((ServiceClass as any).deps as Record<string, DepEntry> | undefined) ??
-        {};
+      const deps = ServiceClass.deps ?? {};
       let degree = 0;
       for (const entry of Object.values(deps)) {
-        const { key: depKey, optional: isOptional } = resolveDep(entry);
+        const depKey = resolveDepKey(entry);
         if (keys.has(depKey)) {
           degree++;
           dependents.get(depKey)!.push(slotKey);
-        } else if (isOptional) {
-          continue;
         }
       }
       inDegree.set(slotKey, degree);
@@ -775,7 +843,10 @@ export function getPlugin(name: string): PluginRecord | undefined {
  * (`view-registry`, `vite-plugins`, `setup-gate`'s splash window) read
  * via `getAppEntrypoint()` / `getSplashPath()`.
  */
-export function registerAppEntrypoint(rendererDir: string, splashPath: string): void {
+export function registerAppEntrypoint(
+  rendererDir: string,
+  splashPath: string,
+): void {
   const reg = getPluginRegistry();
   reg.appEntrypoint = rendererDir;
   reg.splashPath = splashPath;

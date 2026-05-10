@@ -114,21 +114,14 @@ function resolveRegistryDir(opts: {
   const appRoot = findAppRoot(manifestDir)
   if (appRoot) return path.join(appRoot, "types")
 
-  console.error(
-    `zen link: could not determine target types directory for ${opts.manifestPath}.`,
+  throw new Error(
+    `zen link: could not determine target types directory for ${opts.manifestPath}.\n` +
+      `         Try one of:\n` +
+      `         - run from inside an app dir (with a zenbu.config.ts),\n` +
+      `         - add a "devAppPath" field to ${path.basename(opts.manifestPath)} pointing at the host app,\n` +
+      `         - create a tsconfig.local.json with a "#registry/*" path mapping,\n` +
+      `         - or pass --registry <dir>.`,
   )
-  console.error(`         Try one of:`)
-  console.error(
-    `         - run from inside an app dir (with a zenbu.config.ts),`,
-  )
-  console.error(
-    `         - add a "devAppPath" field to ${path.basename(opts.manifestPath)} pointing at the host app,`,
-  )
-  console.error(
-    `         - create a tsconfig.local.json with a "#registry/*" path mapping,`,
-  )
-  console.error(`         - or pass --registry <dir>.`)
-  process.exit(1)
 }
 
 function expandGlob(baseDir: string, pattern: string): string[] {
@@ -153,22 +146,22 @@ function expandGlob(baseDir: string, pattern: string): string[] {
 
 function discoverServices(baseDir: string, serviceGlobs: string[]): ServiceEntry[] {
   const entries: ServiceEntry[] = []
-  // Matches either form:
-  //   export class Foo extends Service { ... }
-  //   export class Foo extends serviceWithDeps({ ... }) { ... }
-  // The dep-bag form is the canonical pattern; the bare form remains valid
-  // for services that don't declare deps.
-  const classRe = /export\s+class\s+(\w+)\s+extends\s+(?:Service\b|serviceWithDeps\s*\()/
-  const keyRe = /static\s+key\s*=\s*["']([^"']+)["']/
+  // Matches the canonical service shape and pulls out both the class name
+  // and the key from the same regex:
+  //   export class Foo extends Service.create({
+  //     key: "foo",
+  //     ...
+  //   })
+  const classKeyRe =
+    /export\s+class\s+(\w+)\s+extends\s+Service\.create\s*\(\s*\{[\s\S]*?\bkey\s*:\s*["']([^"']+)["']/
   for (const glob of serviceGlobs) {
     for (const filePath of expandGlob(baseDir, glob)) {
       const content = fs.readFileSync(filePath, "utf8")
-      const classMatch = content.match(classRe)
-      const keyMatch = content.match(keyRe)
-      if (classMatch && keyMatch) {
+      const match = content.match(classKeyRe)
+      if (match) {
         entries.push({
-          className: classMatch[1]!,
-          key: keyMatch[1]!,
+          className: match[1]!,
+          key: match[2]!,
           filePath,
         })
       }
@@ -502,29 +495,34 @@ type RegistryState = ReturnType<typeof readExistingRegistry>
  * export is a `definePlugin({...})`). Resolved upstream by `loadConfig` so
  * we just consume the resolved record here.
  */
-function linkResolvedPlugin(plugin: ResolvedPlugin, existing: RegistryState): void {
-  console.log(`Linking types "${plugin.name}" from ${plugin.dir}`)
+function linkResolvedPlugin(
+  plugin: ResolvedPlugin,
+  existing: RegistryState,
+  opts: { quiet: boolean },
+): void {
+  const log = opts.quiet ? () => {} : (msg: string) => console.log(msg)
+  log(`Linking types "${plugin.name}" from ${plugin.dir}`)
 
   const serviceGlobs = plugin.services.map((abs) =>
     path.relative(plugin.dir, abs).split(path.sep).join("/"),
   )
   const serviceEntries = discoverServices(plugin.dir, serviceGlobs)
-  console.log(`  Found ${serviceEntries.length} service(s)`)
+  log(`  Found ${serviceEntries.length} service(s)`)
 
   const schemaEntry: SchemaEntry | null = plugin.schemaPath
     ? { name: plugin.name, schemaPath: plugin.schemaPath }
     : null
-  if (schemaEntry) console.log(`  Schema: ${schemaEntry.schemaPath}`)
+  if (schemaEntry) log(`  Schema: ${schemaEntry.schemaPath}`)
 
   const preloadEntry: PreloadEntry | null = plugin.preloadPath
     ? { name: plugin.name, preloadPath: plugin.preloadPath }
     : null
-  if (preloadEntry) console.log(`  Preload: ${preloadEntry.preloadPath}`)
+  if (preloadEntry) log(`  Preload: ${preloadEntry.preloadPath}`)
 
   const eventsEntry: EventsEntry | null = plugin.eventsPath
     ? { name: plugin.name, eventsPath: plugin.eventsPath }
     : null
-  if (eventsEntry) console.log(`  Events: ${eventsEntry.eventsPath}`)
+  if (eventsEntry) log(`  Events: ${eventsEntry.eventsPath}`)
 
   existing.services.set(plugin.name, serviceEntries)
   if (schemaEntry) existing.schemas.set(plugin.name, schemaEntry)
@@ -540,29 +538,34 @@ function linkResolvedPlugin(plugin: ResolvedPlugin, existing: RegistryState): vo
  * Used by `pnpm link:types` inside core to bake its own services/registry
  * types without going through a `zenbu.config.ts`.
  */
-function linkTypesConfig(jsonPath: string, existing: RegistryState): void {
+function linkTypesConfig(
+  jsonPath: string,
+  existing: RegistryState,
+  opts: { quiet: boolean },
+): void {
+  const log = opts.quiet ? () => {} : (msg: string) => console.log(msg)
   const manifest = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as LinkConfig
   const pluginName = manifest.name
   const baseDir = path.dirname(jsonPath)
-  console.log(`Linking types "${pluginName}" from ${baseDir}`)
+  log(`Linking types "${pluginName}" from ${baseDir}`)
 
   const serviceEntries = discoverServices(baseDir, manifest.services ?? [])
-  console.log(`  Found ${serviceEntries.length} service(s)`)
+  log(`  Found ${serviceEntries.length} service(s)`)
 
   const schemaEntry: SchemaEntry | null = manifest.schema
     ? { name: pluginName, schemaPath: path.resolve(baseDir, manifest.schema) }
     : null
-  if (schemaEntry) console.log(`  Schema: ${schemaEntry.schemaPath}`)
+  if (schemaEntry) log(`  Schema: ${schemaEntry.schemaPath}`)
 
   const preloadEntry: PreloadEntry | null = manifest.preload
     ? { name: pluginName, preloadPath: path.resolve(baseDir, manifest.preload) }
     : null
-  if (preloadEntry) console.log(`  Preload: ${preloadEntry.preloadPath}`)
+  if (preloadEntry) log(`  Preload: ${preloadEntry.preloadPath}`)
 
   const eventsEntry: EventsEntry | null = manifest.events
     ? { name: pluginName, eventsPath: path.resolve(baseDir, manifest.events) }
     : null
-  if (eventsEntry) console.log(`  Events: ${eventsEntry.eventsPath}`)
+  if (eventsEntry) log(`  Events: ${eventsEntry.eventsPath}`)
 
   existing.services.set(pluginName, serviceEntries)
   if (schemaEntry) existing.schemas.set(pluginName, schemaEntry)
@@ -599,6 +602,7 @@ function linkTypesConfig(jsonPath: string, existing: RegistryState): void {
 function writePluginTsconfigLocal(
   pluginDir: string,
   registryDir: string,
+  opts: { quiet: boolean },
 ): void {
   const ownTsconfig = path.join(pluginDir, "tsconfig.json")
   if (!fs.existsSync(ownTsconfig)) {
@@ -640,7 +644,66 @@ function writePluginTsconfigLocal(
   } catch {}
   if (prev === next) return
   fs.writeFileSync(target, next)
-  console.log(`  Wrote ${target}`)
+  if (!opts.quiet) console.log(`  Wrote ${target}`)
+}
+
+export type LinkProjectResult = {
+  registryDir: string
+  resolvedConfigPath: string
+  /**
+   * External plugin source files (`zenbu.plugin.ts` paths) that the loader
+   * imported to resolve the plugin set. Watchers that want to relink on
+   * config edits should treat these as relevant.
+   */
+  pluginSourceFiles: string[]
+  resolved: Awaited<ReturnType<typeof loadConfig>>["resolved"]
+}
+
+/**
+ * Programmatic variant of `zen link` for the host-project flow. Throws on
+ * any error instead of `process.exit`. Used by:
+ *   - `runLink` (CLI entry)
+ *   - `link-watcher.ts` (file watcher used by `zen dev`)
+ *
+ * `quiet: true` suppresses the per-step console output the CLI emits — the
+ * watcher uses this so the dev terminal stays clean across rapid edits.
+ */
+export async function linkProject(
+  projectDir: string,
+  opts: { registryOverride?: string | null; quiet?: boolean } = {},
+): Promise<LinkProjectResult> {
+  const log = opts.quiet ? () => {} : (msg: string) => console.log(msg)
+  const { resolved, pluginSourceFiles } = await loadConfig(projectDir)
+
+  const registryDir = resolveRegistryDir({
+    manifestPath: resolved.configPath,
+    manifest: {},
+    registryOverride: opts.registryOverride ?? null,
+  })
+  log(`Registry: ${registryDir}`)
+
+  fs.mkdirSync(registryDir, { recursive: true })
+  const existing = readExistingRegistry(registryDir)
+  for (const plugin of resolved.plugins) {
+    linkResolvedPlugin(plugin, existing, { quiet: !!opts.quiet })
+  }
+
+  writeRegistryFiles(registryDir, existing, { quiet: !!opts.quiet })
+
+  // Bootstrap each plugin's per-install tsconfig.local.json so its source
+  // can `#registry/*`-import the same types we just wrote. The host app's
+  // own dir is skipped (it owns the registry and aliases `#registry/*`
+  // directly in its primary tsconfig).
+  for (const plugin of resolved.plugins) {
+    writePluginTsconfigLocal(plugin.dir, registryDir, { quiet: !!opts.quiet })
+  }
+
+  return {
+    registryDir,
+    resolvedConfigPath: resolved.configPath,
+    pluginSourceFiles,
+    resolved,
+  }
 }
 
 export async function runLink(argv: string[]) {
@@ -652,17 +715,22 @@ export async function runLink(argv: string[]) {
   if (typesConfigArg) {
     const typeConfigPath = path.resolve(typesConfigArg)
     const rootManifest = JSON.parse(fs.readFileSync(typeConfigPath, "utf8")) as LinkConfig
-    const registryDir = resolveRegistryDir({
-      manifestPath: typeConfigPath,
-      manifest: rootManifest,
-      registryOverride,
-    })
-    console.log(`Registry: ${registryDir}`)
-    fs.mkdirSync(registryDir, { recursive: true })
-    const existing = readExistingRegistry(registryDir)
-    linkTypesConfig(typeConfigPath, existing)
-    writeRegistryFiles(registryDir, existing)
-    console.log("Done.")
+    try {
+      const registryDir = resolveRegistryDir({
+        manifestPath: typeConfigPath,
+        manifest: rootManifest,
+        registryOverride,
+      })
+      console.log(`Registry: ${registryDir}`)
+      fs.mkdirSync(registryDir, { recursive: true })
+      const existing = readExistingRegistry(registryDir)
+      linkTypesConfig(typeConfigPath, existing, { quiet: false })
+      writeRegistryFiles(registryDir, existing, { quiet: false })
+      console.log("Done.")
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : err)
+      process.exit(1)
+    }
     return
   }
 
@@ -680,35 +748,20 @@ export async function runLink(argv: string[]) {
     process.exit(1)
   }
 
-  const { resolved } = await loadConfig(projectDir)
-
-  const registryDir = resolveRegistryDir({
-    manifestPath: resolved.configPath,
-    manifest: {},
-    registryOverride,
-  })
-  console.log(`Registry: ${registryDir}`)
-
-  fs.mkdirSync(registryDir, { recursive: true })
-  const existing = readExistingRegistry(registryDir)
-  for (const plugin of resolved.plugins) {
-    linkResolvedPlugin(plugin, existing)
+  try {
+    await linkProject(projectDir, { registryOverride })
+    console.log("Done.")
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : err)
+    process.exit(1)
   }
-
-  writeRegistryFiles(registryDir, existing)
-
-  // Bootstrap each plugin's per-install tsconfig.local.json so its source
-  // can `#registry/*`-import the same types we just wrote. The host app's
-  // own dir is skipped (it owns the registry and aliases `#registry/*`
-  // directly in its primary tsconfig).
-  for (const plugin of resolved.plugins) {
-    writePluginTsconfigLocal(plugin.dir, registryDir)
-  }
-
-  console.log("Done.")
 }
 
-function writeRegistryFiles(registryDir: string, existing: RegistryState): void {
+function writeRegistryFiles(
+  registryDir: string,
+  existing: RegistryState,
+  opts: { quiet: boolean },
+): void {
   const writes: Array<[string, string]> = [
     ["services.ts", generateServicesFile(registryDir, existing.services)],
     ["db-sections.ts", generateDbSectionsFile(registryDir, existing.schemas)],
@@ -718,7 +771,14 @@ function writeRegistryFiles(registryDir: string, existing: RegistryState): void 
   ]
   for (const [name, body] of writes) {
     const target = path.join(registryDir, name)
+    // Skip writes when content is identical so downstream watchers (Vite,
+    // tsc --watch, the IDE) don't see spurious mtime changes that trigger
+    // unrelated reloads. Critical for the dev-mode link watcher: it can
+    // fire dozens of times during a refactor and most produce no diff.
+    let prev: string | null = null
+    try { prev = fs.readFileSync(target, "utf8") } catch {}
+    if (prev === body) continue
     fs.writeFileSync(target, body)
-    console.log(`  Wrote ${target}`)
+    if (!opts.quiet) console.log(`  Wrote ${target}`)
   }
 }

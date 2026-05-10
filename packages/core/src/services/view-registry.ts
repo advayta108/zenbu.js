@@ -19,11 +19,10 @@ interface ViewEntry {
   };
 }
 
-export class ViewRegistryService extends Service {
-  static key = "view-registry";
-  static deps = { reloader: ReloaderService, db: DbService };
-  declare ctx: { reloader: ReloaderService; db: DbService };
-
+export class ViewRegistryService extends Service.create({
+  key: "view-registry",
+  deps: { reloader: ReloaderService, db: DbService },
+}) {
   private views = new Map<string, ViewEntry>();
   private manifestIcons = new Map<string, string>();
 

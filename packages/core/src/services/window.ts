@@ -1,5 +1,6 @@
 import {
   WebContentsView,
+  app,
   clipboard,
   dialog,
   shell,
@@ -8,12 +9,13 @@ import {
 } from "electron";
 import electronContextMenu from "electron-context-menu";
 import { URLSearchParams } from "node:url";
-import { runtime, serviceWithDeps } from "../runtime";
+import { runtime, Service } from "../runtime";
 import { BaseWindowService, MAIN_WINDOW_ID } from "./base-window";
 import { ViewRegistryService } from "./view-registry";
 import { HttpService } from "./http";
 import { RendererHostService } from "./renderer-host";
 import { createLogger } from "../shared/log";
+import { entrypointBgColor } from "../shared/zenbu-bg";
 
 const log = createLogger("window");
 
@@ -35,14 +37,15 @@ function queryString(query?: Record<string, string | number | boolean | null | u
   return encoded ? `?${encoded}` : "";
 }
 
-export class WindowService extends serviceWithDeps({
-  baseWindow: BaseWindowService,
-  viewRegistry: ViewRegistryService,
-  http: HttpService,
-  rendererHost: RendererHostService,
+export class WindowService extends Service.create({
+  key: "window",
+  deps: {
+    baseWindow: BaseWindowService,
+    viewRegistry: ViewRegistryService,
+    http: HttpService,
+    rendererHost: RendererHostService,
+  },
 }) {
-  static key = "window";
-
   private mounted = new Map<string, MountedView>();
 
   evaluate() {
@@ -59,6 +62,30 @@ export class WindowService extends serviceWithDeps({
           mounted.view.webContents.close();
         }
         this.mounted.clear();
+      };
+    });
+
+    // Re-open the entrypoint when the user clicks the dock / taskbar icon
+    // with no windows open. Electron emits `activate` on every focus
+    // (dock click on macOS, taskbar reactivation on Win/Linux), so we
+    // gate on "no live BaseWindow currently exists" — otherwise an
+    // already-running app would spawn a duplicate window every time the
+    // user tabs back in.
+    //
+    // The entrypoint view type is the framework-registered alias `"app"`
+    // (see RendererHostService), not anything the user plugin tracks —
+    // so this is purely "open the canonical entrypoint", no last-value
+    // bookkeeping.
+    this.setup("activate-reopens-entrypoint", () => {
+      const onActivate = () => {
+        if (this.ctx.baseWindow.windows.size > 0) return;
+        this.openView({ type: "app" }).catch((err) => {
+          log.error("activate-reopens-entrypoint: openView failed:", err);
+        });
+      };
+      app.on("activate", onActivate);
+      return () => {
+        app.removeListener("activate", onActivate);
       };
     });
   }
@@ -101,7 +128,7 @@ export class WindowService extends serviceWithDeps({
         ...args.view?.webPreferences,
       },
     });
-    view.setBackgroundColor(args.view?.backgroundColor ?? "#F4F4F4");
+    view.setBackgroundColor(args.view?.backgroundColor ?? entrypointBgColor());
     win.contentView.addChildView(view);
 
     // Right-click → standard browser context menu with "Inspect Element" so

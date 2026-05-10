@@ -60,4 +60,22 @@ export default defineConfig([
     outDir: "dist",
     outExtensions: () => ({ js: ".mjs" }),
   },
+  {
+    // Sandboxed Electron preloads MUST be CommonJS — Electron disables
+    // ESM in sandboxed contexts. Built into a separate bundle so the rest
+    // of dist stays ESM.
+    entry: {
+      "installing-preload": "src/installing-preload.ts",
+    },
+    format: "cjs",
+    platform: "node",
+    target: "node20",
+    deps: {
+      neverBundle: ["electron"],
+    },
+    clean: false,
+    dts: false,
+    outDir: "dist",
+    outExtensions: () => ({ js: ".cjs" }),
+  },
 ]);

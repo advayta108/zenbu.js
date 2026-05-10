@@ -2,6 +2,7 @@ import { BaseWindow } from "electron"
 import { nanoid } from "nanoid"
 import { Service, runtime } from "../runtime"
 import { createLogger } from "../shared/log"
+import { entrypointBgColor } from "../shared/zenbu-bg"
 import { DbService } from "./db"
 
 const log = createLogger("base-window")
@@ -10,11 +11,10 @@ export const MAIN_WINDOW_ID = "main"
 type WindowBounds = { x: number; y: number; width: number; height: number }
 type BootWindow = { windowId: string; win: BaseWindow }
 
-export class BaseWindowService extends Service {
-  static key = "base-window"
-  static deps = { db: DbService }
-  declare ctx: { db: DbService }
-
+export class BaseWindowService extends Service.create({
+  key: "base-window",
+  deps: { db: DbService },
+}) {
   windows = new Map<string, BaseWindow>()
   // The kernel shell spawns a BaseWindow with a loading view before plugin
   // evaluation starts, then publishes it here. On first `evaluate` we adopt
@@ -54,7 +54,12 @@ export class BaseWindowService extends Service {
       //   y = (36 - 12) / 2 = 12
       // x mirrors macOS Finder/Safari (~20 px inset from window edge).
       trafficLightPosition: { x: 14, y: 10 },
-      backgroundColor: "#F4F4F4",
+      // Mirror whatever color the renderer's `index.html` declares via
+      // `<meta name="zenbu-bg">`. Without this, the window paints
+      // `#F4F4F4` for the few frames between BaseWindow creation and
+      // the WebContentsView's first paint — visible as a white flash
+      // on dark-themed apps.
+      backgroundColor: entrypointBgColor(),
       // 
     })
     this.windows.set(windowId, win)

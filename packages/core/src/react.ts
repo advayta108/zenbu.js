@@ -193,14 +193,24 @@ export function ZenbuProvider({
             return;
           }
 
+          // View type is encoded in the URL by `WindowService.openView`. It
+          // can land in either of two places — a `/views/<type>/` path
+          // segment (used by plugins that mount a multi-page Vite layout) or
+          // a `?type=<name>` query param (the default route). Mirrors
+          // `resolveType()` in `vite-plugins.ts` so the two parsers can't
+          // drift apart.
           const viewMatch = window.location.pathname.match(/^\/views\/([^/]+)\//);
-          const viewType = viewMatch ? viewMatch[1] : null;
+          const viewType =
+            viewMatch?.[1] ??
+            new URLSearchParams(window.location.search).get("type");
           let unsubReload: (() => void) | null = null;
           if (viewType) {
             const adviceReload = (events as any)?.advice?.reload;
             if (adviceReload?.subscribe) {
               unsubReload = adviceReload.subscribe((data: { type?: string }) => {
-                if (data?.type === viewType) location.reload();
+                if (data?.type === "*" || data?.type === viewType) {
+                  location.reload();
+                }
               });
             }
           }

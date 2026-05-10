@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  subscribe as watcherSubscribe,
+  type AsyncSubscription,
+} from "@parcel/watcher";
 import type { WebSocket } from "ws";
 import { createDb, type Db, type SectionConfig } from "@zenbu/kyju";
 import type {
@@ -12,7 +16,7 @@ import type {
 import type * as Effect from "effect/Effect";
 import { createRouter, dbStringify, dbParse } from "@zenbu/kyju/transport";
 import { loadMigrationsFromDir } from "@zenbu/kyju/loader";
-import { Service, runtime, getPlugins } from "../runtime";
+import { Service, runtime, getPlugins, subscribeConfig } from "../runtime";
 import type { ResolvedDbRoot } from "../registry";
 import { schema as coreSchema } from "../schema";
 import { addDb, resolveDbPath } from "../shared/db-registry";
@@ -305,11 +309,10 @@ export async function discoverSections(): Promise<SectionConfig[]> {
   return sections;
 }
 
-export class DbService extends Service {
-  static key = "db";
-  static deps = { http: HttpService };
-  declare ctx: { http: HttpService };
-
+export class DbService extends Service.create({
+  key: "db",
+  deps: { http: HttpService },
+}) {
   db: Db | null = null;
   dbRouter: ReturnType<typeof createRouter> | null = null;
   private sectionsHash = "";
@@ -434,6 +437,154 @@ export class DbService extends Service {
     // case) would race against the abandoned writer.
     this.setup("kyju-close-on-cleanup", () => async () => {
       await this.close();
+    });
+
+    // Watch each plugin's migrations directory so `zen db generate` —
+    // which writes a fresh file plus updates `meta/_journal.json` — kicks
+    // DbService into a re-evaluate. Edits to *existing* migration files
+    // are already covered by dynohot's per-file dep tracking; we only
+    // care about adds/removes here, plus journal churn (which fires on
+    // every generate even when paths look unchanged due to atomic
+    // rename-replace writes).
+    this.setup("migrations-watcher", () => {
+      const subs: AsyncSubscription[] = [];
+      let closed = false;
+      let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+      let inFlight: Promise<void> | null = null;
+      let queued = false;
+
+      const triggerReload = async () => {
+        if (closed) return;
+        if (inFlight) {
+          queued = true;
+          return;
+        }
+        inFlight = runtime.reload("db").catch((err) => {
+          log.error("migrations-watcher reload failed:", err);
+        });
+        try {
+          await inFlight;
+        } finally {
+          inFlight = null;
+          if (queued && !closed) {
+            queued = false;
+            scheduleReload();
+          }
+        }
+      };
+
+      const scheduleReload = () => {
+        if (closed) return;
+        if (pendingTimer) clearTimeout(pendingTimer);
+        pendingTimer = setTimeout(() => {
+          pendingTimer = null;
+          void triggerReload();
+        }, 100);
+      };
+
+      void (async () => {
+        for (const plugin of getPlugins()) {
+          const migPath = plugin.migrationsPath;
+          if (!migPath) continue;
+          let isDir = false;
+          try {
+            isDir = (await fs.stat(migPath)).isDirectory();
+          } catch {
+            // Missing dir is fine — plugin hasn't generated migrations
+            // yet. The first generate creates the dir; the next time
+            // DbService re-evaluates (e.g. on a schema edit) this
+            // watcher gets installed.
+            continue;
+          }
+          if (!isDir) continue;
+
+          const journalPath = path.join(migPath, "meta", "_journal.json");
+
+          try {
+            const sub = await watcherSubscribe(migPath, (err, events) => {
+              if (err || closed) return;
+              for (const event of events) {
+                if (event.path === journalPath) {
+                  scheduleReload();
+                  return;
+                }
+                if (path.dirname(event.path) !== migPath) continue;
+                if (event.type === "update") continue;
+                const ext = path.extname(event.path);
+                if (ext === ".ts" || ext === ".js" || ext === ".mjs") {
+                  scheduleReload();
+                  return;
+                }
+              }
+            });
+            if (closed) {
+              await sub.unsubscribe().catch(() => {});
+              return;
+            }
+            subs.push(sub);
+          } catch (err) {
+            log.error(
+              `migrations-watcher subscribe failed for ${plugin.name}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
+      })().catch((err) => {
+        log.error("migrations-watcher setup failed:", err);
+      });
+
+      return async () => {
+        closed = true;
+        if (pendingTimer) {
+          clearTimeout(pendingTimer);
+          pendingTimer = null;
+        }
+        const toClose = subs.splice(0);
+        await Promise.all(
+          toClose.map((s) => s.unsubscribe().catch(() => {})),
+        );
+      };
+    });
+
+    // Pick up plugin-set changes from `zenbu.config.ts` (a plugin
+    // added, removed, or its schema/migrations paths swapped). The
+    // plugin barrel auto-re-imports new plugins' service files via
+    // dynohot, but DbService doesn't have an ESM dep on the plugin
+    // registry — `discoverSections` reads `getPlugins()` at evaluate-
+    // time only. Without this watcher, a freshly added plugin's
+    // schema/migrations would never be wired into the DB until some
+    // other change (e.g. editing an existing schema file) happened to
+    // trigger a DbService re-evaluate.
+    //
+    // Hash on `{ name, schemaPath, migrationsPath }` so we react to
+    // both adds/removes and to a plugin pointing at a different
+    // schema/migrations path. Initial subscribe fires synchronously
+    // with the current snapshot — the hash dedup makes that a no-op.
+    this.setup("plugin-set-watcher", () => {
+      const fingerprint = (snap: { plugins: Array<{ name: string; schemaPath?: string; migrationsPath?: string }> }) =>
+        JSON.stringify(
+          [...snap.plugins]
+            .map((p) => ({
+              name: p.name,
+              schemaPath: p.schemaPath ?? null,
+              migrationsPath: p.migrationsPath ?? null,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        );
+      let lastHash: string | null = null;
+      return subscribeConfig((snap) => {
+        const hash = fingerprint(snap);
+        if (lastHash === null) {
+          lastHash = hash;
+          return;
+        }
+        if (hash === lastHash) return;
+        lastHash = hash;
+        void runtime.reload("db").catch((err) => {
+          log.error("plugin-set-watcher reload failed:", err);
+        });
+      });
     });
 
     this.setup("ws-transport", () => {

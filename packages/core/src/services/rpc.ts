@@ -14,11 +14,10 @@ type EmitProxy<T> = {
     : (data: T[K]) => void;
 };
 
-export class RpcService extends Service {
-  static key = "rpc";
-  static deps = { http: HttpService };
-  declare ctx: { http: HttpService };
-
+export class RpcService extends Service.create({
+  key: "rpc",
+  deps: { http: HttpService },
+}) {
   // `ResolvedEvents` reads `ZenbuRegister["events"]` (populated by
   // `zen link`-generated `zenbu-register.ts`), falling back to `CoreEvents`.
   // This is what makes `service.ctx.rpc.emit.<plugin-namespace>.<event>(data)`

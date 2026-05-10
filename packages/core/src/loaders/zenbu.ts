@@ -46,6 +46,13 @@ const stats = {
 let resolvedPayload: RegistryPayload | null = null;
 let resolvedPluginSourceFiles: string[] = [];
 /**
+ * Set of absolute service file paths derived from the resolved payload.
+ * Used by the `file://` branch in `load()` to decide which user files
+ * should have `runtime.register(...)` auto-injected. Refreshed alongside
+ * `resolvedPayload` whenever the loader picks up a new config snapshot.
+ */
+let serviceFileSet: Set<string> = new Set();
+/**
  * Number of times we've materialized the plugin root since boot. 
  */
 let pluginsRootInvocations = 0;
@@ -54,6 +61,7 @@ export function initialize(data?: InitializeData): void {
   if (data?.payload) {
     resolvedPayload = data.payload;
     resolvedPluginSourceFiles = data.pluginSourceFiles ?? [];
+    serviceFileSet = collectServiceFiles(data.payload);
   }
   if (data?.tracePort) {
     tracePort = data.tracePort;
@@ -95,6 +103,115 @@ function buildSource(imports: string[]): string {
   return imports
     .map((specifier) => `import ${JSON.stringify(specifier)}\n`)
     .join("");
+}
+
+/**
+ * Matches the canonical service declaration shape after the upstream HMR
+ * loader (dynohot) has transformed the module. Dynohot strips the
+ * `export` keyword and minifies the source, so the regex must not
+ * require `export` and must tolerate a non-whitespace separator (e.g.
+ * `;class Foo extends Service.create(...)`). The `\b` boundary still
+ * rejects `subclass Foo` matches inside identifiers/comments.
+ *
+ *     export class FooService extends Service.create({ ... }) { ... }
+ *     ;class FooService extends Service.create({...}) {...}        // post-dynohot
+ *
+ * `zen link` runs on the original on-disk source (pre-dynohot), so it
+ * keeps the `export` requirement in `discoverServices` to avoid matching
+ * non-exported helper classes.
+ */
+const SERVICE_CLASS_RE =
+  /\bclass\s+(\w+)\s+extends\s+Service\.create\s*\(/g;
+
+/**
+ * Decode the loader's `source` payload (which Node permits as string,
+ * Buffer, ArrayBuffer, or any TypedArray) into a plain UTF-8 string.
+ */
+function decodeSource(source: unknown): string {
+  if (typeof source === "string") return source;
+  if (source instanceof Uint8Array) return Buffer.from(source).toString("utf8");
+  if (source instanceof ArrayBuffer)
+    return Buffer.from(source).toString("utf8");
+  return String(source);
+}
+
+/**
+ * Tail-append a `runtime.register(<Class>, import.meta)` call to the
+ * loader result so user service files don't have to carry the boilerplate.
+ *
+ * - Idempotent: if the source already contains `runtime.register(`
+ *   (manual migration leftover, or a user choosing to register
+ *   explicitly), we leave it untouched.
+ * - Errors loudly when zero or multiple service classes are found, since
+ *   the runtime's HMR model is "one slot per import.meta".
+ * - The runtime singleton imported here resolves through the loader's
+ *   own `@zenbujs/core` short-circuit in `resolve()`, so the registered
+ *   class lands in the same registry the rest of the framework reads.
+ */
+function appendAutoRegister(downstream: unknown, filePath: string): unknown {
+  if (!downstream || typeof downstream !== "object") return downstream;
+  const result = downstream as {
+    format?: string;
+    source?: unknown;
+    shortCircuit?: boolean;
+  };
+  if (result.format !== "module") return downstream;
+  if (result.source == null) return downstream;
+
+  const source = decodeSource(result.source);
+
+  if (/\bruntime\s*\.\s*register\s*\(/.test(source)) {
+    return { ...result, source };
+  }
+
+  SERVICE_CLASS_RE.lastIndex = 0;
+  const matches = [...source.matchAll(SERVICE_CLASS_RE)];
+  if (matches.length === 0) {
+    throw new Error(
+      `[zenbu-loader] auto-register: no \`class <Name> extends Service.create({ ... })\` found in ${filePath}.\n` +
+        `         Either rewrite the class to use Service.create or add an explicit \`runtime.register(<Class>, import.meta)\`.`,
+    );
+  }
+  if (matches.length > 1) {
+    const names = matches.map((m) => m[1]).join(", ");
+    throw new Error(
+      `[zenbu-loader] auto-register: ${matches.length} service classes (${names}) in ${filePath}.\n` +
+        `         The HMR model is one service per file; split into separate files.`,
+    );
+  }
+
+  const className = matches[0]![1]!;
+  const tail =
+    `\n;import { runtime as __zenbu_runtime__ } from "@zenbujs/core/runtime";` +
+    `\n__zenbu_runtime__.register(${className}, import.meta);\n`;
+
+  return { ...result, source: source + tail };
+}
+
+/**
+ * Expand each plugin's `services` glob list into a flat set of absolute
+ * file paths. Consulted by the `file://` branch in `load()` to decide
+ * whether to auto-inject `runtime.register(...)` for the loaded module.
+ *
+ * Glob expansion uses the same `expandGlob` (and therefore the same
+ * `fs.readdirSync` snapshot) that `buildPluginBarrel` uses, so the set
+ * stays in lockstep with what the barrel actually imports.
+ */
+function collectServiceFiles(payload: RegistryPayload): Set<string> {
+  const set = new Set<string>();
+  for (const plugin of payload.plugins) {
+    for (const entry of plugin.services) {
+      const resolved = path.isAbsolute(entry)
+        ? entry
+        : path.resolve(plugin.dir, entry);
+      if (resolved.includes("*")) {
+        for (const f of expandGlob(resolved)) set.add(f);
+      } else {
+        set.add(resolved);
+      }
+    }
+  }
+  return set;
 }
 
 // =============================================================================
@@ -191,6 +308,7 @@ function getResolvedConfig(configPath: string): {
   const fresh = resolveConfigViaSubprocess(projectDir);
   resolvedPayload = fresh.payload;
   resolvedPluginSourceFiles = fresh.pluginSourceFiles;
+  serviceFileSet = collectServiceFiles(fresh.payload);
   return fresh;
 }
 
@@ -278,8 +396,8 @@ function buildPluginBarrel(plugin: ResolvedPluginRecord): {
  * that package's `exports` field manually, instead of going through Node's
  * usual node_modules walk-up — that walk would pick up a plugin-local
  * `@zenbujs/core` (devDep) before reaching the real one. Rewriting in the
- * loader keeps `runtime.register`, `serviceWithDeps`, and the `Service`
- * class identity unique across every plugin's main-process code.
+ * loader keeps `runtime.register` and the `Service` class identity unique
+ * across every plugin's main-process code.
  */
 type ExportEntry =
   | string
@@ -433,6 +551,30 @@ function loadImpl(
       source,
       shortCircuit: true,
     } satisfies LoaderResult;
+  }
+
+  // ─── Auto-inject `runtime.register(<Class>, import.meta)` ───
+  // For any user file the resolved config classified as a service, we
+  // tail-append the registration call so the user's class declaration
+  // alone is enough — no `runtime.register` import or `import.meta` leak
+  // in the user-facing surface. We run AFTER `nextLoad` (tsx) so we
+  // append to the already-stripped JS source, not the original TS.
+  if (url.startsWith("file://")) {
+    let filePath: string;
+    try {
+      filePath = fileURLToPath(url);
+    } catch {
+      filePath = "";
+    }
+    if (filePath && serviceFileSet.has(filePath)) {
+      const downstream = nextLoad(url, context);
+      if (downstream && typeof (downstream as PromiseLike<unknown>).then === "function") {
+        return Promise.resolve(downstream).then((r) =>
+          appendAutoRegister(r, filePath),
+        );
+      }
+      return appendAutoRegister(downstream, filePath);
+    }
   }
 
   // ─── Per-plugin barrel: imports the plugin's service files ───

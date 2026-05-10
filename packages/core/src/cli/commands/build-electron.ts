@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 
 import { loadConfig } from "../lib/load-config"
 import { provisionToolchain } from "../lib/toolchain"
+import type { PackageManagerSpec } from "../lib/build-config"
 
 interface BuildElectronFlags {
   config?: string
@@ -29,6 +30,20 @@ interface AppConfigJson {
   branch: string
   version: string
   host: string
+  packageManager: PackageManagerSpec
+  /**
+   * Path (relative to the .app's `Resources/` dir) of the staged
+   * `installing.html`. Set when the user shipped one in their
+   * `<uiEntrypoint>/installing.html`. Read by [launcher.ts] to spawn
+   * the install-progress window before clone + first install.
+   */
+  installingHtml?: string
+  /**
+   * Path (relative to the .app's `Resources/` dir) of the framework's
+   * built-in preload that exposes `window.zenbuInstall`. Always set when
+   * `installingHtml` is set.
+   */
+  installingPreload?: string
 }
 
 interface ElectronBuilderConfig {
@@ -137,28 +152,30 @@ function resolveCoreVersion(): string {
 }
 
 /**
- * Find the bundled `launcher.mjs` shipped inside `@zenbujs/core/dist/`. We
- * resolve it through Node's resolution from the user's project so that the
- * launcher matches the version of `@zenbujs/core` actually installed in the
- * app's `node_modules` (which is what runs in the bundled .app).
+ * Find a sibling file inside `@zenbujs/core/dist/`. Resolved through
+ * Node's resolution from the user's project so the artifact matches the
+ * `@zenbujs/core` actually installed in their `node_modules` (which is
+ * what runs in the bundled .app). Falls back to walking up from this
+ * file's location for the in-monorepo dev case.
  */
-function resolveLauncher(projectDir: string): string {
+function resolveCoreDistFile(projectDir: string, fileName: string): string {
   const localRequire = createRequire(path.join(projectDir, "package.json"))
   try {
     const pkgPath = localRequire.resolve("@zenbujs/core/package.json")
-    const launcher = path.join(path.dirname(pkgPath), "dist", "launcher.mjs")
-    if (fs.existsSync(launcher)) return launcher
+    const candidate = path.join(path.dirname(pkgPath), "dist", fileName)
+    if (fs.existsSync(candidate)) return candidate
   } catch {}
-  // Fallback: same directory as our compiled CLI bin (when running from the
-  // monorepo's tsdown output, dist/cli/build-electron.mjs sits next to
-  // dist/launcher.mjs).
   const here = fileURLToPath(import.meta.url)
-  const candidate = path.resolve(path.dirname(here), "..", "launcher.mjs")
+  const candidate = path.resolve(path.dirname(here), "..", fileName)
   if (fs.existsSync(candidate)) return candidate
   throw new Error(
-    "zen build:electron: cannot locate `@zenbujs/core/dist/launcher.mjs`. " +
+    `zen build:electron: cannot locate \`@zenbujs/core/dist/${fileName}\`. ` +
       "Make sure @zenbujs/core is installed in this project.",
   )
+}
+
+function resolveLauncher(projectDir: string): string {
+  return resolveCoreDistFile(projectDir, "launcher.mjs")
 }
 
 function resolveElectronBuilder(projectDir: string): string {
@@ -277,7 +294,7 @@ function mergeElectronBuilderConfig(
     appDir: string
     output: string
     bundleFiles: string[]
-    extraResource: { from: string; to: string }
+    extraResources: Array<{ from: string; to: string }>
   },
 ): ElectronBuilderConfig {
   const merged: ElectronBuilderConfig = { ...userConfig }
@@ -290,7 +307,7 @@ function mergeElectronBuilderConfig(
   const userExtra = Array.isArray(userConfig.extraResources)
     ? (userConfig.extraResources as Array<{ from: string; to: string } | string>)
     : []
-  merged.extraResources = [...userExtra, overlay.extraResource]
+  merged.extraResources = [...userExtra, ...overlay.extraResources]
   if (userConfig.npmRebuild !== false) merged.npmRebuild = false
   if (userConfig.asar === undefined) merged.asar = false
   return merged
@@ -299,6 +316,26 @@ function mergeElectronBuilderConfig(
 async function copyFile(src: string, dest: string): Promise<void> {
   await fsp.mkdir(path.dirname(dest), { recursive: true })
   await fsp.copyFile(src, dest)
+}
+
+/**
+ * Stage the user's `installing.html` plus the framework's built-in
+ * `installing-preload.cjs` into the bundle dir. The launcher loads both
+ * from the .app's `Resources/` (next to `toolchain/`) before the user's
+ * source has been cloned. Only the two canonical files; sibling assets
+ * (CSS, fonts, images referenced from installing.html) are the user's
+ * responsibility via their own `electron-builder.json#extraResources`.
+ */
+async function stageInstallingArtifacts(args: {
+  projectDir: string
+  installingSrc: string
+  installingHtmlOut: string
+  installingPreloadOut: string
+}): Promise<true> {
+  await copyFile(args.installingSrc, args.installingHtmlOut)
+  const preloadSrc = resolveCoreDistFile(args.projectDir, "installing-preload.cjs")
+  await copyFile(preloadSrc, args.installingPreloadOut)
+  return true
 }
 
 export async function runBuildElectron(argv: string[]): Promise<void> {
@@ -343,22 +380,44 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
   const bundlePkgOut = path.join(bundleDir, "package.json")
   const appConfigOut = path.join(bundleDir, "app-config.json")
   const mergedConfigPath = path.join(bundleDir, "electron-builder.merged.json")
+  const installingHtmlOut = path.join(bundleDir, "installing.html")
+  const installingPreloadOut = path.join(bundleDir, "installing-preload.cjs")
 
   const sourceSha = currentSourceSha(projectDir)
+
+  const packageManager = config.packageManager
+  const pmLabel = `${packageManager.type}@${packageManager.version}`
 
   console.log(`\n  zen build:electron`)
   console.log(`    name:    ${appName}`)
   console.log(`    version: ${appVersion}`)
   console.log(`    source:  ${sourceSha === "uncommitted" ? "uncommitted" : sourceSha.slice(0, 7)}`)
   console.log(`    mirror:  ${mirrorTarget} (${mirrorBranch})`)
+  console.log(`    pm:      ${pmLabel}`)
   console.log(`    bundle:  ${bundleDir}`)
 
   console.log("  → staging launcher.mjs")
   const launcherSrc = resolveLauncher(projectDir)
   await copyFile(launcherSrc, launcherOut)
 
-  console.log("  → provisioning bundled toolchain (bun + pnpm)")
-  await provisionToolchain(toolchainDir)
+  // Stage the optional installing.html + the framework's built-in preload.
+  // Only the canonical files; sibling assets (CSS, images, fonts) are the
+  // user's responsibility via their own electron-builder.json#extraResources.
+  const stagedInstalling = resolved.installingPath
+    ? await stageInstallingArtifacts({
+        projectDir,
+        installingSrc: resolved.installingPath,
+        installingHtmlOut,
+        installingPreloadOut,
+      })
+    : null
+  if (stagedInstalling) {
+    console.log(`  → staging installing.html (${path.relative(projectDir, resolved.installingPath!)})`)
+    console.log(`  → staging installing-preload.cjs`)
+  }
+
+  console.log(`  → provisioning bundled toolchain (bun + ${pmLabel})`)
+  await provisionToolchain(toolchainDir, { packageManager })
 
   console.log("  → writing bundle package.json + app-config.json")
   const host = resolveCoreVersion()
@@ -378,6 +437,13 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
     branch: mirrorBranch,
     version: appVersion,
     host,
+    packageManager,
+    ...(stagedInstalling
+      ? {
+          installingHtml: "installing.html",
+          installingPreload: "installing-preload.cjs",
+        }
+      : {}),
   }
   await fsp.writeFile(appConfigOut, JSON.stringify(appConfig, null, 2) + "\n")
 
@@ -392,6 +458,16 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
     ? userOutput
     : path.resolve(projectDir, userOutput)
 
+  const overlayExtraResources: Array<{ from: string; to: string }> = [
+    { from: toolchainDir, to: "toolchain" },
+  ]
+  if (stagedInstalling) {
+    overlayExtraResources.push(
+      { from: installingHtmlOut, to: "installing.html" },
+      { from: installingPreloadOut, to: "installing-preload.cjs" },
+    )
+  }
+
   const merged = mergeElectronBuilderConfig(userConfig, {
     appDir: bundleDir,
     output: resolvedOutput,
@@ -403,10 +479,7 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
       "!**/node_modules",
       "!**/node_modules/**",
     ],
-    extraResource: {
-      from: toolchainDir,
-      to: "toolchain",
-    },
+    extraResources: overlayExtraResources,
   })
   await fsp.writeFile(mergedConfigPath, JSON.stringify(merged, null, 2) + "\n")
 
@@ -415,6 +488,10 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
   console.log(`      directories.output = ${resolvedOutput}`)
   console.log(`      files              = [launcher + app-config + bundle pkg]`)
   console.log(`      extraResources    += { from: <bundle>/toolchain, to: toolchain }`)
+  if (stagedInstalling) {
+    console.log(`      extraResources    += { from: installing.html, to: installing.html }`)
+    console.log(`      extraResources    += { from: installing-preload.cjs, to: installing-preload.cjs }`)
+  }
   console.log(`      asar               = ${merged.asar !== undefined ? merged.asar : "(unset)"}`)
   console.log(`      npmRebuild         = false`)
 

@@ -1,3 +1,6 @@
+/**
+ * this file is in a really hacky state needs to be fixed
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,11 +9,13 @@ import { register as registerLoaderImpl, createRequire } from "node:module";
 function registerLoader(specifier: string, opts?: { data?: unknown }) {
   // `node:module#register` typings don't include the `data` field in older
   // @types/node, so we cast at the boundary.
-  return (registerLoaderImpl as unknown as (
-    specifier: string,
-    parentURL?: string | URL,
-    options?: { data?: unknown },
-  ) => unknown)(specifier, undefined, opts);
+  return (
+    registerLoaderImpl as unknown as (
+      specifier: string,
+      parentURL?: string | URL,
+      options?: { data?: unknown },
+    ) => unknown
+  )(specifier, undefined, opts);
 }
 import { pathToFileURL } from "node:url";
 import { register as registerTsx } from "tsx/esm/api";
@@ -29,7 +34,10 @@ type ElectronEvent = { preventDefault(): void };
 type ElectronApp = {
   getAppPath(): string;
   whenReady(): Promise<void>;
-  on(event: "before-quit", listener: (event: ElectronEvent) => void): void;
+  on(
+    event: "before-quit" | "window-all-closed",
+    listener: (event: ElectronEvent) => void,
+  ): void;
   quit(): void;
   exit(code?: number): void;
 };
@@ -47,6 +55,30 @@ type PluginController = {
 };
 
 const verbose = process.env.ZENBU_VERBOSE === "1";
+
+/**
+ * Suppress `@babel/generator`'s "[BABEL] Note: The code generator has
+ * deoptimised the styling of <file> as it exceeds the max of 500KB" notice.
+ * It's hardcoded as `console.error` in @babel/generator's printer with no
+ * opt-out (https://github.com/babel/babel/issues/7569). Vite's
+ * `@vitejs/plugin-react` runs Babel for fast-refresh on prebundled deps
+ * caches, hitting this for `react-dom_client.js` and similar large chunks
+ * on every dev boot. We filter the one specific message at the
+ * `console.error` boundary so the rest of console.error stays useful.
+ *
+ * Patched once at module init, before any Vite dev server has started.
+ */
+const _origConsoleError = console.error.bind(console);
+console.error = (...args: unknown[]): void => {
+  if (
+    args.length > 0 &&
+    typeof args[0] === "string" &&
+    args[0].startsWith("[BABEL] Note: The code generator has deoptimised")
+  ) {
+    return;
+  }
+  _origConsoleError(...args);
+};
 
 function isPluginModule(value: unknown): value is PluginModule {
   return (
@@ -106,7 +138,9 @@ function resolveConfigPath(projectRoot: string): string {
     if (fs.existsSync(candidate)) return candidate;
   }
   throw new Error(
-    `No zenbu config found at ${projectRoot}. Expected one of: ${candidates.join(", ")}`,
+    `No zenbu config found at ${projectRoot}. Expected one of: ${candidates.join(
+      ", ",
+    )}`,
   );
 }
 
@@ -151,93 +185,186 @@ function readSplashBgColor(splashPath: string): string {
   return "#F4F4F4";
 }
 
+type ElectronWindowing = {
+  BaseWindow: new (opts: Record<string, unknown>) => {
+    contentView: {
+      addChildView(view: unknown): void;
+      removeChildView(view: unknown): void;
+      readonly children: unknown[];
+    };
+    getContentBounds(): { width: number; height: number };
+    show(): void;
+    setBackgroundColor(color: string): void;
+    on(event: string, cb: (...args: unknown[]) => void): void;
+  };
+  WebContentsView: new (opts?: Record<string, unknown>) => {
+    webContents: {
+      loadFile(path: string): Promise<void>;
+      close(): void;
+    };
+    setBounds(bounds: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }): void;
+  };
+};
+
 /**
- * Spawn the splash window before any plugin service evaluates. The window
- * is created HIDDEN, the splash HTML is loaded into a `WebContentsView`,
- * we wait for `loadFile` to resolve (= did-finish-load), then `win.show()`
- * — by the time the OS composites the window, the splash pixels are already
- * there. No white-frame flash.
+ * Spawn the splash window as early as possible OR adopt the launcher's
+ * pre-existing installing window. The window is created with `show: true`
+ * and its `backgroundColor` set up front so the OS composites a colored
+ * frame on the next vsync — no waiting for `did-finish-load` before any
+ * pixels reach the screen. Splash content paints into the WebContentsView
+ * a frame or two later, replacing the flat color.
  *
- * `BaseWindowService.evaluate()` adopts this window from
+ * If the launcher already opened an installing window
+ * (`globalThis.__zenbu_boot_windows__` is non-empty), we reuse that
+ * BaseWindow and just swap its child WebContentsView from installing.html
+ * to splash.html. The titlebar / window chrome stays continuous.
+ *
+ * `BaseWindowService.evaluate()` adopts the resulting window from
  * `globalThis.__zenbu_boot_windows__` instead of creating a new one, so
  * `WindowService.openView` can swap the splash content view for the
  * Vite-served renderer in-place when the renderer is ready.
  */
-async function spawnSplashWindow(): Promise<void> {
-  const slot = globalThis as unknown as {
-    __zenbu_main_resolved_config__?: {
-      payload?: { splashPath?: string };
-    };
-    __zenbu_boot_windows__?: BootWindow[];
-  };
-  const splashPath = slot.__zenbu_main_resolved_config__?.payload?.splashPath;
+async function spawnSplashWindow(
+  splashPath: string | undefined,
+): Promise<void> {
   if (!splashPath || !fs.existsSync(splashPath)) {
     if (verbose) {
-      console.log("[setup-gate] no splash.html resolved; skipping splash window");
+      console.log(
+        "[setup-gate] no splash.html resolved; skipping splash window",
+      );
     }
     return;
   }
 
-  const electron = (await import("electron")) as unknown as {
-    BaseWindow: new (opts: Record<string, unknown>) => {
-      contentView: { addChildView(view: unknown): void };
-      getContentBounds(): { width: number; height: number };
-      show(): void;
-      on(event: string, cb: (...args: unknown[]) => void): void;
-    };
-    WebContentsView: new (opts?: Record<string, unknown>) => {
-      webContents: {
-        loadFile(path: string): Promise<void>;
-      };
-      setBounds(bounds: { x: number; y: number; width: number; height: number }): void;
-    };
+  const slot = globalThis as unknown as {
+    __zenbu_boot_windows__?: BootWindow[];
   };
+  const electron = (await import("electron")) as unknown as ElectronWindowing;
   const backgroundColor = readSplashBgColor(splashPath);
-  const win = new electron.BaseWindow({
-    width: 1100,
-    height: 750,
-    show: false, // create hidden — we'll show after the splash has painted
-    titleBarStyle: "hidden",
-    trafficLightPosition: { x: 14, y: 10 },
-    backgroundColor,
-  });
-  const splashView = new electron.WebContentsView({
-    // Render even while the parent window is hidden so by the time we
-    // call show() the GPU has already composited the splash frame.
-    webPreferences: { paintWhenInitiallyHidden: true },
-  });
+  // Only adopt the launcher's "main" window. Anything else in the slot
+  // (legacy code, plugins) is ignored — we'd rather have a momentary
+  // second window than swap content on a window we don't own.
+  const existing = slot.__zenbu_boot_windows__?.find(
+    (b) => b.windowId === "main",
+  );
+
+  type WindowingWindow = InstanceType<ElectronWindowing["BaseWindow"]>;
+  let win: WindowingWindow;
+  if (existing) {
+    win = existing.win as WindowingWindow;
+    // Update the BaseWindow's bg color to splash's so the brief gap
+    // between removing the installing view and the splash WebContentsView
+    // painting shows splash's intended color, not installing's.
+    try {
+      win.setBackgroundColor(backgroundColor);
+    } catch {}
+    // Tear down the installing window's child view(s); we'll re-fill with
+    // the splash view below.
+    for (const child of [...win.contentView.children]) {
+      try {
+        win.contentView.removeChildView(child);
+      } catch {}
+      const wc = (child as { webContents?: { close(): void } }).webContents;
+      try {
+        wc?.close();
+      } catch {}
+    }
+    if (verbose) {
+      console.log(
+        "[setup-gate] adopting existing installing window for splash",
+      );
+    }
+  } else {
+    win = new electron.BaseWindow({
+      width: 1100,
+      height: 750,
+      titleBarStyle: "hidden",
+      trafficLightPosition: { x: 14, y: 10 },
+      backgroundColor,
+    });
+  }
+
+  const splashView = new electron.WebContentsView();
   win.contentView.addChildView(splashView);
   const bounds = win.getContentBounds();
-  splashView.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height });
+  splashView.setBounds({
+    x: 0,
+    y: 0,
+    width: bounds.width,
+    height: bounds.height,
+  });
 
-  // Wait for the splash to finish loading before showing, with a hard cap
-  // so a broken splash doesn't strand the user with no window forever.
+  /**
+   * human note: this is a bad solution we should have an invariant verifying program state
+   * but its fine for now
+   */
+  // We cap at 1500ms so a broken splash (404, JS error, etc.) doesn't
+  // strand boot — the BaseWindow's backgroundColor already makes a
+  // visible frame appear in that case.
   await Promise.race([
     splashView.webContents.loadFile(splashPath).catch(() => {}),
     new Promise<void>((resolve) => setTimeout(resolve, 1500)),
   ]);
-  win.show();
 
-  const boot: BootWindow = { windowId: "main", win };
-  slot.__zenbu_boot_windows__ = [...(slot.__zenbu_boot_windows__ ?? []), boot];
+  if (!existing) {
+    const boot: BootWindow = { windowId: "main", win };
+    slot.__zenbu_boot_windows__ = [
+      ...(slot.__zenbu_boot_windows__ ?? []),
+      boot,
+    ];
+  }
 
   if (verbose) {
-    console.log("[setup-gate] splash window shown with", splashPath, "bg=", backgroundColor);
+    console.log(
+      "[setup-gate] splash window shown with",
+      splashPath,
+      "bg=",
+      backgroundColor,
+    );
   }
 }
 
-async function registerLoaders(tsconfig: string | false, projectRoot: string): Promise<void> {
-  // tsx must be registered BEFORE we resolve zenbu.config.ts (which is
-  // typescript). We register tsx first, then load the config, then register
-  // our zenbu loader. Node 22+ runs loader hooks in a worker thread, so the
-  // resolved config is passed across the worker boundary via `register()`'s
-  // `data` argument — a process-global stash on the main thread is not
-  // visible to the loader.
+type LoaderData = {
+  payload: {
+    plugins: Array<{
+      name: string;
+      dir: string;
+      services: string[];
+      schemaPath?: string;
+      migrationsPath?: string;
+      preloadPath?: string;
+      eventsPath?: string;
+      icons?: Record<string, string>;
+    }>;
+    appEntrypoint: string;
+    splashPath: string;
+    installingPath?: string;
+  };
+  pluginSourceFiles: string[];
+};
+
+/**
+ * Phase 1 of loader setup: register tsx + read the user's `zenbu.config.ts`.
+ * This is split out from the rest of the loader registration so the splash
+ * window can be spawned the moment `splashPath` is known, instead of
+ * waiting for advice + dynohot to register too. tsx must run with the
+ * project's tsconfig because user code (config + plugins) may rely on
+ * non-default TS settings (paths, jsx, etc.).
+ */
+async function loadConfigPhase(
+  tsconfig: string | false,
+  projectRoot: string,
+): Promise<LoaderData> {
   registerTsx({ tsconfig });
 
   const { loadConfig } = await import("./cli/lib/load-config");
   const { resolved, pluginSourceFiles } = await loadConfig(projectRoot);
-  const loaderData = {
+  const loaderData: LoaderData = {
     payload: {
       plugins: resolved.plugins.map((p) => ({
         name: p.name,
@@ -251,12 +378,27 @@ async function registerLoaders(tsconfig: string | false, projectRoot: string): P
       })),
       appEntrypoint: resolved.uiEntrypointPath,
       splashPath: resolved.splashPath,
+      installingPath: resolved.installingPath,
     },
     pluginSourceFiles,
   };
-  ;(globalThis as unknown as { __zenbu_main_resolved_config__?: typeof loaderData })
-    .__zenbu_main_resolved_config__ = loaderData;
+  (
+    globalThis as unknown as { __zenbu_main_resolved_config__?: LoaderData }
+  ).__zenbu_main_resolved_config__ = loaderData;
+  return loaderData;
+}
 
+/**
+ * Phase 2 of loader setup: register the zenbu loader, advice, and dynohot.
+ * Runs AFTER the splash window is on screen so the user sees pixels while
+ * advice patches install and dynohot's worker spawns. Node 22+ runs loader
+ * hooks in a worker thread; the resolved config crosses the boundary via
+ * `register()`'s `data` argument.
+ */
+async function registerLoadersPhase(
+  projectRoot: string,
+  loaderData: LoaderData,
+): Promise<void> {
   registerLoader(import.meta.resolve("@zenbujs/core/loaders/zenbu"), {
     data: loaderData,
   });
@@ -280,8 +422,18 @@ async function registerLoaders(tsconfig: string | false, projectRoot: string): P
 }
 
 export async function setupGate(): Promise<void> {
+  // Always-on minimal startup logging. One line per major completed step
+  // with elapsed-since-start, so a scrollback shows where boot time goes
+  // without needing ZENBU_VERBOSE=1.
+  const t0 = Date.now();
+  const ms = (): string => `+${Date.now() - t0}ms`;
+  const step = (label: string): void => {
+    console.log(`[zenbu] ${label} (${ms()})`);
+  };
+
   const app = loadElectronApp();
   await app.whenReady();
+  step("electron ready");
   bootstrapEnv();
 
   // Install shutdown handling before loaders can create native watchers.
@@ -316,13 +468,20 @@ export async function setupGate(): Promise<void> {
     event.preventDefault();
     void shutdown(0);
   });
+  /**
+   * i think we probably want to expose this in an editable form to the user
+   */
+  app.on("window-all-closed", () => {});
   process.on("SIGINT", () => void shutdown(0));
   process.on("SIGTERM", () => void shutdown(0));
 
   const autoQuitReadyMs = envMs("ZENBU_AUTO_QUIT_AFTER_READY_MS");
   if (autoQuitReadyMs != null) {
     if (verbose) {
-      console.log("[setup-gate] auto-quit after ready scheduled:", autoQuitReadyMs);
+      console.log(
+        "[setup-gate] auto-quit after ready scheduled:",
+        autoQuitReadyMs,
+      );
     }
     setTimeout(() => app.quit(), autoQuitReadyMs).unref();
   }
@@ -361,21 +520,44 @@ export async function setupGate(): Promise<void> {
     console.log("[setup-gate] config:", configPath);
   }
 
-  await registerLoaders(tsconfig, projectRoot);
-  if (shuttingDown) return;
-
-  // Pop a splash window NOW (we have an entrypoint resolved). Plugin
-  // services + Vite take 1-2s to boot; without this the dock icon
-  // bounces with no window. BaseWindowService adopts the splash window
-  // on first evaluate and hands it off to WindowService.openView, which
-  // swaps the splash WebContentsView for the Vite-served renderer.
+  // Pop the splash as early as possible. Only `loadConfig` is needed to
+  // know `splashPath`; advice + dynohot registration is deferred until
+  // after the window is on screen so the user sees pixels while those
+  // run. BaseWindowService adopts the splash window on first evaluate
+  // and hands it off to WindowService.openView, which swaps the splash
+  // WebContentsView for the Vite-served renderer.
+  let loaderData: LoaderData;
   try {
-    await spawnSplashWindow();
+    loaderData = await loadConfigPhase(tsconfig, projectRoot);
   } catch (err) {
     if (shuttingDown) return;
     throw err;
   }
   if (shuttingDown) return;
+  step(`config loaded (${loaderData.payload.plugins.length} plugins)`);
+
+  try {
+    // spawnSplashWindow now awaits the splash's did-finish-load (with a
+    // 1500ms cap), so by the time it returns the splash content is
+    // loaded into the renderer process AND the main thread has yielded
+    // long enough for AppKit to composite the window. No artificial
+    // setImmediate / setTimeout yield needed.
+    await spawnSplashWindow(loaderData.payload.splashPath);
+  } catch (err) {
+    if (shuttingDown) return;
+    throw err;
+  }
+  if (shuttingDown) return;
+  step("splash shown");
+
+  try {
+    await registerLoadersPhase(projectRoot, loaderData);
+  } catch (err) {
+    if (shuttingDown) return;
+    throw err;
+  }
+  if (shuttingDown) return;
+  step("loaders registered");
 
   try {
     const { defaultServices } = await import("./services/default");
@@ -402,11 +584,13 @@ export async function setupGate(): Promise<void> {
     }
   }
   if (shuttingDown) return;
+  step("plugins evaluated");
 
   const runtime = (
     globalThis as { __zenbu_service_runtime__?: { whenIdle(): Promise<void> } }
   ).__zenbu_service_runtime__;
   await runtime?.whenIdle();
+  step("ready");
 
   const autoQuitMs = envMs("ZENBU_AUTO_QUIT_AFTER_IDLE_MS");
   if (autoQuitMs != null) {

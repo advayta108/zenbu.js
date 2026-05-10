@@ -27,6 +27,7 @@ export default defineConfig({
   // `zen build:electron` (signed .app via electron-builder). Set
   // `mirror.target` to "<owner>/<repo>" before shipping.
   build: defineBuildConfig({
+    // {{packageManager}}
     source: ".",
     out: ".zenbu/build/source",
     include: [

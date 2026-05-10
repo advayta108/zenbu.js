@@ -3,17 +3,52 @@
 // `defineBuildConfig(...)`, or imports just the helpers when they want to
 // extract build into a separate file.
 
-export interface TransformInput {
-  path: string
-  code: string
+export interface BuildContext {
+  /** Absolute path to the source root (`build.source` resolved). */
+  sourceDir: string
+  /** Absolute path to the staging output dir (`build.out` resolved). */
+  outDir: string
+  /** Git HEAD of the source repo at build time, or `"uncommitted"`. */
+  sourceSha: string
+  /** Absolute path to the `zenbu.config.ts` driving this build. */
+  configPath: string
 }
 
-export interface TransformOutput {
-  code?: string
-  drop?: boolean
+export interface EmitContext extends BuildContext {
+  /**
+   * Write an additional file into `outDir`. Relative paths only — anything
+   * absolute or escaping `outDir` (via `..`) throws. Emitted files
+   * participate in the build's `.sha` content hash.
+   */
+  emit(relPath: string, contents: string | Uint8Array): void
 }
 
-export type Transform = (file: TransformInput) => TransformOutput | null | undefined | void
+export interface BuildPlugin {
+  name: string
+  /**
+   * Called once per text file after `include`/`ignore` filtering, before
+   * the file is written to `outDir`. Plugins run in declaration order;
+   * each plugin's return value (if any) feeds the next.
+   *
+   * Return:
+   *   - a string  → use it as the new contents
+   *   - `null`    → drop the file (short-circuits remaining plugins)
+   *   - `void`    → leave contents unchanged
+   *
+   * Binary files (anything outside the small text-extension allow-list)
+   * are not visible to `transform` — they're copied byte-for-byte.
+   */
+  transform?(
+    file: { path: string; contents: string },
+    ctx: BuildContext,
+  ): string | null | void | Promise<string | null | void>
+  /**
+   * Called once after every source file is written. Use `ctx.emit(...)` to
+   * write additional files (build manifests, generated artifacts, etc.)
+   * into `outDir`. Plugins run in declaration order.
+   */
+  done?(ctx: EmitContext): void | Promise<void>
+}
 
 export interface MirrorConfig {
   target: string
@@ -24,34 +59,86 @@ export interface BundleConfig {
   extraResources?: string[]
 }
 
+/**
+ * Which package manager the produced .app should bundle and use to install
+ * the cloned source's dependencies on first launch.
+ *
+ * Exactly one PM per .app. The `version` is honored verbatim across all four
+ * variants: it drives the download URL at build time and is recorded in
+ * `app-config.json` so the launcher knows which CI-mode codepath to take.
+ *
+ * `bun` is not special at the API layer — but internally the runtime bun and
+ * the PM bun are collapsed into a single binary at the user's chosen
+ * version (so picking bun yields one binary in the bundle, not two).
+ */
+export type PackageManagerSpec =
+  | { type: "pnpm"; version: string }
+  | { type: "npm"; version: string }
+  | { type: "yarn"; version: string }
+  | { type: "bun"; version: string }
+
+/**
+ * Soft default when the user omits `build.packageManager` entirely. Existing
+ * apps scaffolded before this field existed pick this up. The version
+ * tracks whatever pnpm we'd otherwise have hardcoded in the toolchain.
+ */
+export const DEFAULT_PACKAGE_MANAGER: PackageManagerSpec = {
+  type: "pnpm",
+  version: "10.33.0",
+}
+
 export interface BuildConfig {
   source?: string
   out?: string
   include: string[]
   ignore?: string[]
-  transforms?: Transform[]
+  plugins?: BuildPlugin[]
   mirror?: MirrorConfig
   bundle?: BundleConfig
+  packageManager?: PackageManagerSpec
 }
 
 export function defineBuildConfig(config: BuildConfig): BuildConfig {
   return config
 }
 
-export type ResolvedBuildConfig = Required<Omit<BuildConfig, "mirror" | "bundle">> & {
+export type ResolvedBuildConfig = Required<
+  Omit<BuildConfig, "mirror" | "bundle">
+> & {
   mirror?: MirrorConfig
   bundle?: BundleConfig
+  packageManager: PackageManagerSpec
+}
+
+function validatePackageManager(spec: PackageManagerSpec): PackageManagerSpec {
+  const allowed = ["pnpm", "npm", "yarn", "bun"] as const
+  if (!allowed.includes(spec.type as (typeof allowed)[number])) {
+    throw new Error(
+      `zenbu build.packageManager: unknown type "${(spec as { type: string }).type}". ` +
+        `Expected one of: ${allowed.join(", ")}.`,
+    )
+  }
+  if (typeof spec.version !== "string" || spec.version.trim().length === 0) {
+    throw new Error(
+      `zenbu build.packageManager.${spec.type}: \`version\` is required and must be a non-empty string.`,
+    )
+  }
+  return spec
 }
 
 export function resolveBuildConfig(config: BuildConfig): ResolvedBuildConfig {
+  const packageManager = validatePackageManager(
+    config.packageManager ?? DEFAULT_PACKAGE_MANAGER,
+  )
   return {
     source: config.source ?? ".",
     out: config.out ?? ".zenbu/build/source",
     include: config.include,
     ignore: config.ignore ?? [],
-    transforms: config.transforms ?? [],
+    plugins: config.plugins ?? [],
     mirror: config.mirror,
     bundle: config.bundle,
+    packageManager,
   }
 }
 
@@ -161,6 +248,15 @@ export interface ResolvedConfig {
    * between Electron `whenReady` and the renderer's first paint.
    */
   splashPath: string
+  /**
+   * Absolute path to `installing.html` inside the entrypoint directory, if
+   * the user provided one. Optional. Production launcher loads this raw
+   * during clone + first install (before the user's source even exists in
+   * the apps-dir). Receives IPC progress events via the framework's
+   * built-in `installing-preload.cjs`. Not used in dev mode — `pnpm dev`
+   * doesn't clone or install.
+   */
+  installingPath?: string
   plugins: ResolvedPlugin[]
   /** Resolved build config; defaults filled in even when user omits. */
   build: ResolvedBuildConfig

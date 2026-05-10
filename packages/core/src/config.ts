@@ -19,12 +19,11 @@ export {
   type ResolvedBuildConfig,
   type BundleConfig,
   type MirrorConfig,
-  type Transform,
-  type TransformInput,
-  type TransformOutput,
+  type BuildPlugin,
+  type BuildContext,
+  type EmitContext,
+  type PackageManagerSpec,
 } from "./cli/lib/build-config"
-
-export { dropFiles, stripIfDisabled } from "./cli/lib/transforms"
 
 // Live-config API. Read the resolved config in main-process code, or
 // subscribe to changes for code that needs to react to plugin

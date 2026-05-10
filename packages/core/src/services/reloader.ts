@@ -163,10 +163,7 @@ export interface ReloaderEntry {
   viteServer: ViteDevServer
 }
 
-export class ReloaderService extends Service {
-  static key = "reloader"
-  static deps = {}
-
+export class ReloaderService extends Service.create({ key: "reloader" }) {
   private servers = new Map<string, ReloaderEntry>()
 
   async create(id: string, root: string, configFile?: string | false): Promise<ReloaderEntry> {

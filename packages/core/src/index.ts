@@ -1,6 +1,6 @@
 export { setupGate } from "./setup-gate";
 export { bootstrapEnv } from "./env-bootstrap";
-export { optional, runtime, Service, ServiceRuntime, serviceWithDeps } from "./runtime";
+export { runtime, Service, ServiceRuntime } from "./runtime";
 export type { CleanupReason } from "./runtime";
 export type {
   CoreDbSections,

@@ -52,11 +52,10 @@ async function resolveRendererRoot(): Promise<{
   return { rendererRoot, configFile };
 }
 
-export class RendererHostService extends Service {
-  static key = "renderer-host";
-  static deps = { reloader: ReloaderService, viewRegistry: ViewRegistryService };
-  declare ctx: { reloader: ReloaderService; viewRegistry: ViewRegistryService };
-
+export class RendererHostService extends Service.create({
+  key: "renderer-host",
+  deps: { reloader: ReloaderService, viewRegistry: ViewRegistryService },
+}) {
   url = "";
   port = 0;
 

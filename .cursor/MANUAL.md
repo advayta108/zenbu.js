@@ -73,32 +73,59 @@ Dispatcher: [`packages/core/src/cli/bin.ts`](packages/core/src/cli/bin.ts).
 2. Electron's `package.json#main` resolves to
    `node_modules/@zenbujs/core/dist/setup-gate.mjs`.
 3. [`setup-gate.ts`](packages/core/src/setup-gate.ts):
-   - Resolves `zenbu.config.ts` via `loadConfig`.
-   - Spawns the splash window (`splash.html` raw).
-   - Registers tsx + zenbu loader + advice + dynohot.
+   - Resolves `zenbu.config.ts` via `loadConfig` (`loadConfigPhase`).
+   - Spawns the splash window (`splash.html` raw) — happens BEFORE
+     advice + dynohot register so a colored window appears within a
+     frame of `app.whenReady` instead of waiting for the loader chain.
+     The BaseWindow is created `show: true` with its `backgroundColor`
+     already set; splash content paints into the WebContentsView a
+     frame or two later.
+   - Registers the zenbu loader + advice + dynohot
+     (`registerLoadersPhase`) — runs with the splash window already on
+     screen.
    - Imports `zenbu:plugins?config=<path>` (virtual URL).
 4. The zenbu loader ([`loaders/zenbu.ts`](packages/core/src/loaders/zenbu.ts))
    emits a barrel that:
    - Calls `runtime.replacePlugins([...])` and `runtime.registerAppEntrypoint(dir, splash)`.
    - Imports each plugin's service files.
-5. Services register via `runtime.register(ServiceClass, import.meta)` and
-   evaluate in dependency order. `BaseWindowService` adopts the splash
-   window. `WindowService.openView` swaps the splash WebContentsView for
-   the Vite-served renderer when ready.
+5. Services register automatically — the zenbu loader tail-appends
+   `runtime.register(<Class>, import.meta)` to any file the resolved
+   config classified as a service, so user code never types `import.meta`
+   or imports `runtime`. Detection uses the same regex as `zen link`:
+   one `export class <Name>Service extends Service[.withDeps(...)]` per
+   file. The append is skipped if the source already contains
+   `runtime.register(` (escape hatch for intermediate base classes or
+   any case the regex misses). Core's own services in
+   `@zenbujs/core/services/*` aren't in the user config glob, so they
+   keep an explicit `runtime.register(...)` call. Implementation:
+   `appendAutoRegister` in [`loaders/zenbu.ts`](packages/core/src/loaders/zenbu.ts).
+   Services then evaluate in dependency order. `BaseWindowService`
+   adopts the splash window. `WindowService.openView` swaps the splash
+   WebContentsView for the Vite-served renderer when ready.
 
 ## Boot flow (production .app)
 
 1. `package.json#main` is `launcher.mjs` ([`packages/core/src/launcher.ts`](packages/core/src/launcher.ts)).
-2. Launcher reads `app-config.json` (mirror URL, branch).
-3. First launch: `isomorphic-git.clone` from mirror into
+2. Launcher reads `app-config.json` (mirror URL, branch, installing.html
+   path if staged).
+3. If `app-config.json#installingHtml` is set (the user shipped
+   `<uiEntrypoint>/installing.html`), launcher pops a `BaseWindow` +
+   `WebContentsView` with that HTML before clone + install. Progress
+   events are emitted to the page via the framework's built-in preload —
+   see "Installing window" below.
+4. First launch: `isomorphic-git.clone` from mirror into
    `~/.zenbu/apps/<name>/`. Subsequent launches: `git fetch` + fast-forward
    if working tree clean.
-4. Launcher runs bundled `pnpm install` (binary at
+5. Launcher runs bundled `pnpm install` (binary at
    `Resources/toolchain/pnpm`). Toolchain is provisioned at build time —
    see [`cli/lib/toolchain.ts`](packages/core/src/cli/lib/toolchain.ts).
-5. Launcher dynamic-imports the apps-dir's
+6. Launcher hands the installing window (if any) off to setup-gate via
+   `globalThis.__zenbu_boot_windows__`.
+7. Launcher dynamic-imports the apps-dir's
    `node_modules/@zenbujs/core/dist/setup-gate.mjs`. From here the dev
-   flow takes over.
+   flow takes over. `spawnSplashWindow` adopts the handed-off window and
+   swaps its child WebContentsView from `installing.html` to
+   `splash.html` in place — no second-window flash.
 
 ## Hot reload
 
@@ -230,6 +257,51 @@ pixels arrive. Default is `#F4F4F4` when the meta tag is missing.
 
 Implementation: `spawnSplashWindow` + `readSplashBgColor` in
 [`packages/core/src/setup-gate.ts`](packages/core/src/setup-gate.ts).
+
+## Installing window
+
+The production launcher ([`packages/core/src/launcher.ts`](packages/core/src/launcher.ts))
+shows a window during clone + first install when the user shipped
+`<uiEntrypoint>/installing.html`. Optional — apps without it just see a
+dock bounce while the launcher works. Dev mode is unaffected
+(`pnpm dev` doesn't clone or install).
+
+How it's wired:
+
+- `<uiEntrypoint>/installing.html` is auto-detected by `loadConfig` (see
+  `installingPath` in [`load-config.ts`](packages/core/src/cli/lib/load-config.ts)).
+  The user does NOT specify a path — convention only.
+- `zen build:electron` copies it into the bundle, copies the framework's
+  built-in preload from `@zenbujs/core/dist/installing-preload.cjs`, and
+  appends both as `extraResources` (next to `toolchain/`). Records the
+  paths in `app-config.json#installingHtml` / `installingPreload`.
+- Sibling assets (CSS, fonts, images referenced from the HTML) are the
+  user's responsibility via their own `electron-builder.json#extraResources`.
+  The framework only stages the canonical pair.
+
+Page-side IPC API (exposed by the built-in preload):
+
+```js
+const off = window.zenbuInstall.on("step",     (p) => { /* p.id, p.label */ })
+window.zenbuInstall.on("message",  (p) => { /* p.text */ })
+window.zenbuInstall.on("progress", (p) => { /* p.phase, p.loaded, p.total, p.ratio */ })
+window.zenbuInstall.on("done",     (p) => { /* p.id */ })
+window.zenbuInstall.on("error",    (p) => { /* p.id, p.message */ })
+window.zenbuInstall.off("step", cb)
+```
+
+Step ids: `"clone" | "fetch" | "install" | "handoff"`. Progress is
+best-effort: clone/fetch use `isomorphic-git`'s `onProgress`; install
+parses pnpm's `Progress: resolved X, reused Y, downloaded Z` and a
+generic `N/M` fallback. When no progress can be parsed, only `message`
+events fire.
+
+Background color: same `<meta name="zenbu-bg" content="#xxx">`
+convention as splash. Default `#F4F4F4`.
+
+Implementation: `maybeOpenInstallingWindow` + `spawnInstall`'s
+per-line teeing in [`launcher.ts`](packages/core/src/launcher.ts);
+preload at [`installing-preload.ts`](packages/core/src/installing-preload.ts).
 
 ## Code-signing & notarization (macOS)
 

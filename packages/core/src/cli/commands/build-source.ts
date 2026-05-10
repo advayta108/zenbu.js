@@ -3,7 +3,12 @@ import fsp from "node:fs/promises"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { loadConfig } from "../lib/load-config"
-import type { ResolvedBuildConfig, Transform, TransformInput } from "../lib/build-config"
+import type {
+  BuildContext,
+  BuildPlugin,
+  EmitContext,
+  ResolvedBuildConfig,
+} from "../lib/build-config"
 import { hashDir } from "../lib/mirror-sync"
 
 function resolveProjectDir(): string {
@@ -64,22 +69,48 @@ async function collectFiles(
   return [...seen].sort()
 }
 
-async function applyTransforms(
-  input: TransformInput,
-  transforms: Transform[],
-): Promise<{ code: string; drop: boolean }> {
-  let code = input.code
-  let drop = false
-  for (const transform of transforms) {
-    const result = await transform({ path: input.path, code })
-    if (!result) continue
-    if (result.drop) {
-      drop = true
-      break
-    }
-    if (typeof result.code === "string") code = result.code
+/**
+ * Run every plugin's `transform` in declaration order. A `null` return drops
+ * the file and short-circuits remaining plugins. A string replaces the
+ * working contents and feeds the next plugin. `void` leaves contents alone.
+ */
+async function runTransform(
+  filePath: string,
+  initialContents: string,
+  plugins: BuildPlugin[],
+  ctx: BuildContext,
+): Promise<{ contents: string; drop: boolean }> {
+  let contents = initialContents
+  for (const plugin of plugins) {
+    if (!plugin.transform) continue
+    const result = await plugin.transform({ path: filePath, contents }, ctx)
+    if (result === null) return { contents, drop: true }
+    if (typeof result === "string") contents = result
   }
-  return { code, drop }
+  return { contents, drop: false }
+}
+
+function makeEmit(outDir: string, recordWrite: (rel: string) => void): EmitContext["emit"] {
+  return (relPath, contents) => {
+    if (typeof relPath !== "string" || relPath.length === 0) {
+      throw new Error(`emit: relPath must be a non-empty string, got ${typeof relPath}`)
+    }
+    if (path.isAbsolute(relPath)) {
+      throw new Error(`emit: relPath must be relative, got absolute path "${relPath}"`)
+    }
+    const normalized = path.posix.normalize(relPath.split(path.sep).join("/"))
+    if (normalized.startsWith("../") || normalized === "..") {
+      throw new Error(`emit: relPath must not escape outDir, got "${relPath}"`)
+    }
+    const dst = path.join(outDir, normalized)
+    fs.mkdirSync(path.dirname(dst), { recursive: true })
+    if (typeof contents === "string") {
+      fs.writeFileSync(dst, contents)
+    } else {
+      fs.writeFileSync(dst, contents)
+    }
+    recordWrite(normalized)
+  }
 }
 
 export async function runBuildSource(argv: string[]): Promise<void> {
@@ -107,31 +138,53 @@ export async function runBuildSource(argv: string[]): Promise<void> {
     process.exit(1)
   }
 
+  const sourceSha = resolveSourceHead(projectDir)
+
+  const ctx: BuildContext = {
+    sourceDir,
+    outDir,
+    sourceSha,
+    configPath: resolved.configPath,
+  }
+
   let written = 0
   let dropped = 0
+  let emitted = 0
   for (const rel of files) {
     const src = path.join(sourceDir, rel)
     const dst = path.join(outDir, rel)
     const isText = isLikelyText(src)
-    if (config.transforms.length === 0 || !isText) {
+    if (config.plugins.length === 0 || !isText) {
       await fsp.mkdir(path.dirname(dst), { recursive: true })
       await fsp.copyFile(src, dst)
       written += 1
       continue
     }
 
-    const code = await fsp.readFile(src, "utf8")
-    const { code: nextCode, drop } = await applyTransforms({ path: rel, code }, config.transforms)
+    const initial = await fsp.readFile(src, "utf8")
+    const { contents, drop } = await runTransform(rel, initial, config.plugins, ctx)
     if (drop) {
       dropped += 1
       continue
     }
     await fsp.mkdir(path.dirname(dst), { recursive: true })
-    await fsp.writeFile(dst, nextCode)
+    await fsp.writeFile(dst, contents)
     written += 1
   }
 
-  const sourceSha = resolveSourceHead(projectDir)
+  if (config.plugins.length > 0) {
+    const emitCtx: EmitContext = {
+      ...ctx,
+      emit: makeEmit(outDir, () => {
+        emitted += 1
+      }),
+    }
+    for (const plugin of config.plugins) {
+      if (!plugin.done) continue
+      await plugin.done(emitCtx)
+    }
+  }
+
   const contentHash = await hashDir(outDir)
   const meta = {
     sourceSha,
@@ -139,10 +192,12 @@ export async function runBuildSource(argv: string[]): Promise<void> {
     builtAt: new Date().toISOString(),
     files: written,
     dropped,
+    emitted,
   }
   await fsp.writeFile(path.join(outDir, ".sha"), JSON.stringify(meta, null, 2) + "\n")
 
-  console.log(`\n  ✓ ${written} file(s) written, ${dropped} dropped by transforms`)
+  const emittedSuffix = emitted > 0 ? `, ${emitted} emitted by plugins` : ""
+  console.log(`\n  ✓ ${written} file(s) written, ${dropped} dropped${emittedSuffix}`)
   console.log(`    source HEAD: ${sourceSha === "uncommitted" ? sourceSha : sourceSha.slice(0, 7)}\n`)
 }
 

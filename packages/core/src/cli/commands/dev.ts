@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process"
 import { existsSync, statSync } from "node:fs"
 import path, { resolve as resolvePath } from "node:path"
+import { startLinkWatcher, type LinkWatcherHandle } from "../lib/link-watcher"
 
 type DevArgs = {
   projectDir: string
   detach: boolean
   verbose: boolean
+  watch: boolean
 }
 
 /**
@@ -23,14 +25,16 @@ function parseArgs(argv: string[]): DevArgs {
   let pathArg: string | undefined
   let detach = false
   let verbose = false
+  let watch = true
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!
     if (arg === "--detach") detach = true
     else if (arg === "--verbose" || arg === "-v") verbose = true
+    else if (arg === "--no-watch") watch = false
     else if (!arg.startsWith("-") && pathArg == null) pathArg = arg
     else {
       console.error(`zen dev: unknown flag "${arg}"`)
-      console.error(`valid: zen dev [path] [--detach] [--verbose]`)
+      console.error(`valid: zen dev [path] [--detach] [--verbose] [--no-watch]`)
       process.exit(1)
     }
   }
@@ -53,7 +57,7 @@ function parseArgs(argv: string[]): DevArgs {
     process.exit(1)
   }
 
-  return { projectDir, detach, verbose }
+  return { projectDir, detach, verbose, watch }
 }
 
 function resolveLocalElectron(projectDir: string): string {
@@ -86,10 +90,32 @@ function ensureSetupGate(projectDir: string): void {
 }
 
 export async function runDev(argv: string[]) {
-  const { projectDir, detach, verbose } = parseArgs(argv)
+  const { projectDir, detach, verbose, watch } = parseArgs(argv)
   if (verbose) console.error("[zen dev] launching:", projectDir)
   const electron = resolveLocalElectron(projectDir)
   ensureSetupGate(projectDir)
+
+  // Start the link watcher in parallel with Electron so registry types
+  // stay fresh while the user edits services / `zenbu.config.ts`. The
+  // watcher does an initial blocking link before subscribing, so types
+  // are guaranteed up-to-date by the time Electron's main entry runs.
+  // `--detach` skips this: detached `pnpm dev` returns immediately and
+  // the user's terminal isn't around to host the watcher process.
+  let watcher: LinkWatcherHandle | null = null
+  if (watch && !detach) {
+    try {
+      watcher = await startLinkWatcher(projectDir, { verbose })
+    } catch (err) {
+      // Defensive: if the watcher itself can't even start (e.g.
+      // @parcel/watcher native binding mismatch), don't take dev down.
+      console.error(
+        `[zen dev] link watcher disabled: ${
+          err instanceof Error ? err.message : err
+        }`,
+      )
+    }
+  }
+
   // Pass the project directory as the app path. Electron then resolves
   // `package.json#main` from there (which points at
   // `node_modules/@zenbujs/core/dist/setup-gate.mjs`). Passing the
@@ -110,7 +136,8 @@ export async function runDev(argv: string[]) {
   const child = spawn(electron, electronArgs, { cwd: projectDir, stdio: "inherit" })
   process.on("SIGINT", () => child.kill("SIGINT"))
   process.on("SIGTERM", () => child.kill("SIGTERM"))
-  child.on("exit", (code, signal) => {
+  child.on("exit", async (code, signal) => {
+    if (watcher) await watcher.close().catch(() => {})
     process.exit(code ?? (signal ? 1 : 0))
   })
 }

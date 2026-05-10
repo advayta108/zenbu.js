@@ -2,18 +2,18 @@
 // create-zenbu-app — scaffold a new Zenbu app from the bundled template.
 //
 // Run via:
-//   npm  create zenbu-app <dir>
-//   pnpm create zenbu-app <dir>
-//   npx  create-zenbu-app  <dir>
+//   npm  create zenbu-app  <dir>
+//   pnpm create zenbu-app  <dir>
+//   yarn create zenbu-app  <dir>
+//   bunx create-zenbu-app  <dir>
 //
-// Behavior is intentionally minimal: copy the template, expand `{{projectName}}`
-// in `.tmpl` files, rename `_gitignore` -> `.gitignore`, run `git init` +
-// initial commit if no `.git` exists, and tell the user to run
-// `pnpm install && pnpm dev` themselves.
+// Behavior: copy the template, expand `{{projectName}}` in `.tmpl` files,
+// rename `_gitignore` -> `.gitignore`, detect which package manager invoked
+// us, seed the new `zenbu.config.ts`'s `build.packageManager` block with
+// that PM + its installed version, run `<pm> install` for the user, then
+// `git init` + initial commit if no `.git` exists.
 //
-// We do NOT run `pnpm install` (let the user do it with their own pnpm), and
-// we do NOT provision any toolchain locally — that work has moved to build
-// time (see `zen build:electron` in `@zenbujs/core`).
+// The auto-install can be opted out with `--no-install`.
 
 import path from "node:path"
 import fs from "node:fs"
@@ -21,20 +21,77 @@ import { fileURLToPath } from "node:url"
 import { spawnSync } from "node:child_process"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-// `template/` ships at the package root (sibling of `dist/`); the published
-// `package.json#files` keeps both. From `dist/index.mjs`, that's `..`.
 const TEMPLATE_DIR = path.resolve(__dirname, "..", "template")
 
 const argv = process.argv.slice(2)
-const flags = new Set(argv.filter((a) => a.startsWith("-")))
+const flagsSet = new Set(argv.filter((a) => a.startsWith("-")))
 const positional = argv.filter((a) => !a.startsWith("-"))
-const yes = flags.has("--yes") || flags.has("-y")
+const yes = flagsSet.has("--yes") || flagsSet.has("-y")
+const noInstall = flagsSet.has("--no-install")
 
 // Internal/dev-only: when set to an absolute path of a local `@zenbujs/core`
 // checkout, the scaffold rewrites `@zenbujs/core` to `link:<path>` before the
-// initial git commit. Not advertised to end users; used by the framework's
-// own e2e tests and `init-local.sh`.
+// initial git commit. Not advertised to end users.
 const ZENBU_LOCAL_CORE = process.env.ZENBU_LOCAL_CORE
+
+// =============================================================================
+//                          package manager detection
+// =============================================================================
+
+type PmType = "pnpm" | "npm" | "yarn" | "bun"
+
+interface DetectedPm {
+  type: PmType
+  version: string
+  /** True when we fell back to a default (no actual detection succeeded). */
+  fallback: boolean
+}
+
+/**
+ * Detect the PM that invoked `create-zenbu-app`. Order:
+ *   1. `process.versions.bun` → bun (covers `bunx create-zenbu-app`).
+ *   2. `npm_config_user_agent` → "<pm>/<version> ..." (set by all of npm,
+ *      pnpm, yarn classic, yarn berry).
+ *   3. Shell out to `<detected-name> --version` if user_agent only carries
+ *      the bare name without a parseable version.
+ *   4. Fallback to pnpm with a hardcoded sane default.
+ */
+function detectPackageManager(): DetectedPm {
+  if (process.versions.bun) {
+    return { type: "bun", version: process.versions.bun, fallback: false }
+  }
+  const ua = process.env.npm_config_user_agent
+  if (ua) {
+    const first = ua.split(" ")[0]
+    if (first) {
+      const slash = first.indexOf("/")
+      const name = (slash >= 0 ? first.slice(0, slash) : first).toLowerCase()
+      const version = slash >= 0 ? first.slice(slash + 1) : ""
+      if (name === "pnpm" || name === "npm" || name === "yarn" || name === "bun") {
+        if (version && /^\d/.test(version)) {
+          return { type: name, version, fallback: false }
+        }
+        const probed = probeVersion(name)
+        if (probed) return { type: name, version: probed, fallback: false }
+      }
+    }
+  }
+  return { type: "pnpm", version: "10.33.0", fallback: true }
+}
+
+function probeVersion(pm: PmType): string | null {
+  const res = spawnSync(pm, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+  if (res.status !== 0) return null
+  const out = (res.stdout ?? "").trim()
+  // pnpm/npm just print the version. yarn classic prints "1.22.22"; yarn
+  // berry prints "4.6.0". bun prints "1.3.12".
+  const match = out.match(/\d+\.\d+\.\d+(?:[-+][\w.]+)?/)
+  return match ? match[0] : null
+}
+
+// =============================================================================
+//                          template rendering helpers
+// =============================================================================
 
 function renderTemplate(value: string, projectName: string): string {
   return value.replace(/\{\{projectName\}\}/g, projectName)
@@ -57,6 +114,22 @@ function copyDirSync(src: string, dest: string, projectName: string): void {
   }
 }
 
+/**
+ * Replace the `// {{packageManager}}` marker in the scaffolded
+ * `zenbu.config.ts` with a real `packageManager: { ... }` line. Idempotent
+ * — running this twice yields the same file.
+ */
+function seedPackageManager(projectDir: string, pm: DetectedPm): void {
+  const configPath = path.join(projectDir, "zenbu.config.ts")
+  if (!fs.existsSync(configPath)) return
+  const original = fs.readFileSync(configPath, "utf8")
+  const literal = `packageManager: { type: "${pm.type}", version: "${pm.version}" },`
+  const replaced = original.replace(/\/\/\s*\{\{packageManager\}\}/, literal)
+  if (replaced !== original) {
+    fs.writeFileSync(configPath, replaced)
+  }
+}
+
 function rewireToLocalCore(projectDir: string, corePath: string): void {
   const pkgPath = path.join(projectDir, "package.json")
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
@@ -76,9 +149,6 @@ function gitInitWithInitialCommit(projectDir: string): void {
 
   spawnSync("git", ["add", "-A"], { cwd: projectDir, stdio: "ignore" })
 
-  // Ensure the initial commit succeeds even if the user has no global git
-  // identity configured. Real commits will use whatever they later set up;
-  // this only seeds the bootstrap commit. User-provided env vars win.
   const commitEnv: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || "create-zenbu-app",
@@ -93,6 +163,25 @@ function gitInitWithInitialCommit(projectDir: string): void {
     { cwd: projectDir, stdio: "ignore", env: commitEnv },
   )
 }
+
+/**
+ * Run `<pm> install` in the freshly-scaffolded project so the user can go
+ * straight to `pnpm dev`/`bun dev`/etc. without the extra step. We run with
+ * the user's globally-installed PM (which is what they used to invoke us in
+ * the first place), so this won't hit the bundled toolchain — that only
+ * matters at the .app's first launch on the consumer's machine.
+ */
+function runInstall(projectDir: string, pm: DetectedPm): boolean {
+  const res = spawnSync(pm.type, ["install"], {
+    cwd: projectDir,
+    stdio: "inherit",
+  })
+  return res.status === 0
+}
+
+// =============================================================================
+//                                    main
+// =============================================================================
 
 function main(): void {
   const projectName = positional[0] ?? "."
@@ -121,7 +210,17 @@ function main(): void {
     }
   }
 
-  console.log(`\nScaffolding Zenbu app in "${displayName}"...\n`)
+  const pm = detectPackageManager()
+
+  console.log(`\nScaffolding Zenbu app in "${displayName}"...`)
+  if (pm.fallback) {
+    console.log(
+      `  → couldn't detect invoking package manager; defaulting to ${pm.type}@${pm.version}.`,
+    )
+  } else {
+    console.log(`  → detected ${pm.type}@${pm.version} as the invoking package manager`)
+  }
+  console.log("")
 
   copyDirSync(TEMPLATE_DIR, projectDir, displayName)
 
@@ -130,10 +229,23 @@ function main(): void {
     fs.renameSync(gi, path.join(projectDir, ".gitignore"))
   }
 
+  seedPackageManager(projectDir, pm)
+
   if (ZENBU_LOCAL_CORE) {
     const corePath = path.resolve(ZENBU_LOCAL_CORE)
     rewireToLocalCore(projectDir, corePath)
     console.log(`  → linked @zenbujs/core -> ${corePath}`)
+  }
+
+  let installed = false
+  if (!noInstall) {
+    console.log(`  → running ${pm.type} install\n`)
+    installed = runInstall(projectDir, pm)
+    if (!installed) {
+      console.warn(
+        `  → ${pm.type} install failed; you can retry manually after the scaffold completes.\n`,
+      )
+    }
   }
 
   if (!fs.existsSync(path.join(projectDir, ".git"))) {
@@ -141,8 +253,13 @@ function main(): void {
   }
 
   const cdHint = projectName === "." ? "" : `cd ${displayName} && `
-  console.log(`Done. Next:\n\n  ${cdHint}pnpm install\n  pnpm dev\n`)
-  console.log(`Note: Zenbu currently requires pnpm 10+.\n`)
+  if (installed) {
+    console.log(`Done. Next:\n\n  ${cdHint}${pm.type} dev\n`)
+  } else {
+    console.log(
+      `Done. Next:\n\n  ${cdHint}${pm.type} install\n  ${pm.type} dev\n`,
+    )
+  }
 }
 
 try {

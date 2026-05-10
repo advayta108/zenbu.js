@@ -15,11 +15,10 @@ type DisconnectedCallback = (id: string) => void
 
 type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => void
 
-export class HttpService extends Service {
-  static key = "http"
-  static deps = { server: ServerService, reloader: ReloaderService }
-  declare ctx: { server: ServerService; reloader: ReloaderService }
-
+export class HttpService extends Service.create({
+  key: "http",
+  deps: { server: ServerService, reloader: ReloaderService },
+}) {
   connectedCallbacks: ConnectedCallback[] = []
   disconnectedCallbacks: DisconnectedCallback[] = []
   activeConnections = new Map<string, WebSocket>()

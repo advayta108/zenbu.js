@@ -8,10 +8,7 @@ const log = createLogger("server")
 
 type UpgradeHandler = (req: http.IncomingMessage, socket: import("stream").Duplex, head: Buffer) => boolean
 
-export class ServerService extends Service {
-  static key = "server"
-  static deps = {}
-
+export class ServerService extends Service.create({ key: "server" }) {
   server: http.Server | null = null
   wss: WebSocketServer | null = null
   port = 0

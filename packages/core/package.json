@@ -86,6 +86,7 @@
     "dev": "tsdown --watch",
     "link:types": "node ./dist/cli/bin.mjs link --types-config ./zenbu-types.config.json --registry ./types",
     "db:generate": "node ./dist/cli/bin.mjs db generate --schema src/schema.ts --migrations ./migrations",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {
@@ -120,6 +121,7 @@
     "@zenbu/zenrpc": "workspace:*",
     "electron": "^42.0.0",
     "tsdown": "^0.21.10",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^3.2.4"
   }
 }

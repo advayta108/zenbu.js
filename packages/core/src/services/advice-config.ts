@@ -81,12 +81,11 @@ function invalidatePrelude(type: string) {
     const coreEntry = reloader.get(APP_RENDERER_RELOADER_ID)
     if (!coreEntry?.viteServer) return
     const graph = coreEntry.viteServer.moduleGraph
-    const invalidateOne = (t: string) => {
-      const prefix = RESOLVED_PREFIX + t
+    const invalidateMatching = (test: (id: string) => boolean) => {
       const ids: string[] = []
       for (const id of graph.idToModuleMap.keys()) {
         if (typeof id !== "string") continue
-        if (id === prefix || id.startsWith(prefix + "?")) ids.push(id)
+        if (test(id)) ids.push(id)
       }
       for (const id of ids) {
         const mod = graph.getModuleById(id)
@@ -94,9 +93,15 @@ function invalidatePrelude(type: string) {
       }
     }
     if (type === "*") {
-      for (const t of getAllTypes()) invalidateOne(t)
+      // A wildcard registration (applies to every view) changes the prelude
+      // content for *every* type, so invalidate every prelude module
+      // currently in the graph rather than scanning a per-type prefix.
+      invalidateMatching((id) => id.startsWith(RESOLVED_PREFIX))
     } else {
-      invalidateOne(type)
+      const prefix = RESOLVED_PREFIX + type
+      invalidateMatching(
+        (id) => id === prefix || id.startsWith(prefix + "?"),
+      )
     }
   } catch {}
 }
@@ -108,11 +113,11 @@ function emitReload(type: string) {
       | { emit: { advice: { reload(payload: { type: string }): void } } }
       | undefined
     if (!rpc) return
-    if (type === "*") {
-      for (const t of getAllTypes()) rpc.emit.advice.reload({ type: t })
-    } else {
-      rpc.emit.advice.reload({ type })
-    }
+    // `"*"` is a sentinel that every connected iframe treats as "reload me
+    // regardless of my view type". Don't fan out over `getAllTypes()` here —
+    // when only a wildcard registration exists the fan-out is empty and the
+    // event silently disappears.
+    rpc.emit.advice.reload({ type })
   } catch {}
 }
 

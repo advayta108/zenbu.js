@@ -1,9 +1,9 @@
 /**
  * Loads and registers all built-in services. Kept separate from
  * `./index.ts` (which statically re-exports the service classes for
- * `serviceWithDeps(...)` consumers) so that `setup-gate` can import it without
- * eagerly loading every service module before `setupGate()` has had a
- * chance to bootstrap env vars and `process.chdir(projectRoot)`.
+ * `Service.withDeps(...)` consumers) so that `setup-gate` can import it
+ * without eagerly loading every service module before `setupGate()` has
+ * had a chance to bootstrap env vars and `process.chdir(projectRoot)`.
  */
 export async function defaultServices(): Promise<void> {
   await import("./server");
