@@ -1,6 +1,5 @@
 import path from "node:path"
-import { fileURLToPath } from "node:url"
-import { runtime, getPlugins } from "../runtime"
+import { runtime } from "../runtime"
 // NOTE: do NOT import ReloaderService / RendererHostService / RpcService at the
 // top of this module. This file is reachable from `services/reloader.ts`
 // through `vite-plugins.ts`, and a top-level circular import means the dep
@@ -19,51 +18,31 @@ export interface ViewAdviceEntry {
 }
 
 /**
- * Find the plugin whose `dir` contains the file at `metaUrl`. The runtime
- * plugin registry (populated by the loader-emitted barrel) is the source
- * of truth; this no longer walks the filesystem looking for
- * `zenbu.plugin.json`. Returns the plugin's dir, used as the anchor for
- * `registerContentScript` / `registerAdvice` relative-path resolution.
+ * Public spec passed to `service.advise({...})`. The plugin root is
+ * resolved automatically from the calling service's slot (stamped by
+ * `runtime.register` at registration time), so plugin code never has to
+ * deal with `import.meta`.
  *
- * Throws if no plugin matches, because a silent fallback to `process.cwd()`
- * would attach a content script to a nonsensical location and you'd debug
- * it by staring at empty iframes.
+ * `modulePath` is normally relative to the plugin root (the folder
+ * containing `zenbu.plugin.json`). Absolute paths are accepted as an
+ * escape hatch.
  */
-function findPluginRoot(metaUrl: string): string {
-  const file = fileURLToPath(metaUrl)
-  let bestMatch: { dir: string; depth: number } | null = null
-  for (const plugin of getPlugins()) {
-    const rel = path.relative(plugin.dir, file)
-    if (rel.startsWith("..") || path.isAbsolute(rel)) continue
-    const depth = plugin.dir.split(path.sep).length
-    if (!bestMatch || depth > bestMatch.depth) {
-      bestMatch = { dir: plugin.dir, depth }
-    }
-  }
-  if (bestMatch) return bestMatch.dir
-  throw new Error(
-    `Could not find owning plugin for ${metaUrl}. ` +
-      `Pass an absolute path, or call this from a file inside a Zenbu plugin.`,
-  )
+export interface AdviceSpec {
+  view: string
+  moduleId: string
+  name: string
+  type: "replace" | "before" | "after" | "around"
+  modulePath: string
+  exportName: string
 }
 
 /**
- * Accepts either an absolute path (used as-is) or a path relative to the
- * caller's plugin root. The `meta` argument is `import.meta` from the calling
- * module; without it we can't compute the plugin root, so relative paths
- * require it.
+ * Public spec passed to `service.contentScript({...})`. Same plugin-root
+ * resolution rules as `AdviceSpec`.
  */
-function resolvePluginPath(
-  modulePath: string,
-  meta?: ImportMeta,
-): string {
-  if (path.isAbsolute(modulePath)) return modulePath
-  if (!meta?.url) {
-    throw new Error(
-      `registerContentScript/registerAdvice: relative path "${modulePath}" requires import.meta as the second argument so we can find the plugin root.`,
-    )
-  }
-  return path.resolve(findPluginRoot(meta.url), modulePath)
+export interface ContentScriptSpec {
+  view: string
+  modulePath: string
 }
 
 const RESOLVED_PREFIX = "\0@advice-prelude/"
@@ -71,6 +50,11 @@ const APP_RENDERER_RELOADER_ID = "app"
 const adviceEntries = new Map<string, ViewAdviceEntry[]>()
 interface ContentScriptEntry { path: string }
 const contentScripts = new Map<string, ContentScriptEntry[]>()
+
+function resolveAgainstPlugin(modulePath: string, pluginDir: string): string {
+  if (path.isAbsolute(modulePath)) return modulePath
+  return path.resolve(pluginDir, modulePath)
+}
 
 function invalidatePrelude(type: string) {
   try {
@@ -110,50 +94,47 @@ function emitReload(type: string) {
   invalidatePrelude(type)
   try {
     const rpc = runtime.getSlot("rpc")?.instance as
-      | { emit: { advice: { reload(payload: { type: string }): void } } }
+      | {
+          emit: {
+            core: { advice: { reload(payload: { type: string }): void } }
+          }
+        }
       | undefined
     if (!rpc) return
     // `"*"` is a sentinel that every connected iframe treats as "reload me
     // regardless of my view type". Don't fan out over `getAllTypes()` here —
     // when only a wildcard registration exists the fan-out is empty and the
     // event silently disappears.
-    rpc.emit.advice.reload({ type })
+    rpc.emit.core.advice.reload({ type })
   } catch {}
 }
 
 // --- Advice ---
 
 /**
- * Public-facing advice spec. `modulePath` is normally a path relative to
- * the plugin root (the folder containing `zenbu.plugin.json`); pass
- * `import.meta` as the second argument so we can resolve it. Absolute
- * paths are also accepted as an escape hatch.
+ * Internal advice registrar. Called by `Service#advise` after the runtime
+ * has resolved the calling plugin's root directory from its service slot.
+ * User code does not call this directly; use `service.advise({...})`
+ * instead.
  */
-export type AdviceSpec = Omit<ViewAdviceEntry, "modulePath"> & {
-  modulePath: string
-}
-
-export function registerAdvice(
-  type: string,
-  entry: AdviceSpec,
-  meta?: ImportMeta,
-): () => void {
+export function addAdvice(pluginDir: string, spec: AdviceSpec): () => void {
+  const { view, ...entry } = spec
   const resolvedEntry: ViewAdviceEntry = {
     ...entry,
-    modulePath: resolvePluginPath(entry.modulePath, meta),
+    modulePath: resolveAgainstPlugin(entry.modulePath, pluginDir),
   }
-  const list = adviceEntries.get(type) ?? []
+  const list = adviceEntries.get(view) ?? []
   list.push(resolvedEntry)
-  adviceEntries.set(type, list)
-  emitReload(type)
+  adviceEntries.set(view, list)
+  emitReload(view)
 
   return () => {
-    const current = adviceEntries.get(type)
+    const current = adviceEntries.get(view)
     if (!current) return
     const idx = current.indexOf(resolvedEntry)
     if (idx >= 0) current.splice(idx, 1)
-    if (current.length === 0) adviceEntries.delete(type)
-    emitReload(type)
+    if (current.length === 0) adviceEntries.delete(view)
+    emitReload(view)
   }
 }
 
@@ -168,34 +149,29 @@ export function getAllAdviceTypes(): string[] {
 // --- Content Scripts ---
 
 /**
- * Register a content script for the given view type. `modulePath` is normally
- * a path relative to the plugin root (the folder with `zenbu.plugin.json`);
- * pass `import.meta` so we can resolve it. Absolute paths are accepted as
- * an escape hatch.
- *
- *   this.setup("inject", () =>
- *     registerContentScript("app", "src/content/clock.tsx", import.meta),
- *   )
+ * Internal content-script registrar. Called by `Service#contentScript`
+ * after the runtime has resolved the calling plugin's root directory.
+ * User code uses `service.contentScript({...})`.
  */
-export function registerContentScript(
-  type: string,
-  modulePath: string,
-  meta?: ImportMeta,
+export function addContentScript(
+  pluginDir: string,
+  spec: ContentScriptSpec,
 ): () => void {
-  const resolvedPath = resolvePluginPath(modulePath, meta)
+  const { view, modulePath } = spec
+  const resolvedPath = resolveAgainstPlugin(modulePath, pluginDir)
   const entry: ContentScriptEntry = { path: resolvedPath }
-  const list = contentScripts.get(type) ?? []
+  const list = contentScripts.get(view) ?? []
   list.push(entry)
-  contentScripts.set(type, list)
-  emitReload(type === "*" ? "*" : type)
+  contentScripts.set(view, list)
+  emitReload(view === "*" ? "*" : view)
 
   return () => {
-    const current = contentScripts.get(type)
+    const current = contentScripts.get(view)
     if (!current) return
     const idx = current.indexOf(entry)
     if (idx >= 0) current.splice(idx, 1)
-    if (current.length === 0) contentScripts.delete(type)
-    emitReload(type === "*" ? "*" : type)
+    if (current.length === 0) contentScripts.delete(view)
+    emitReload(view === "*" ? "*" : view)
   }
 }
 

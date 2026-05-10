@@ -1,68 +1,72 @@
-import fs from "node:fs"
-import fsp from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
-import { execFileSync, spawn } from "node:child_process"
-import { createRequire } from "node:module"
-import { fileURLToPath } from "node:url"
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync, spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
-import { loadConfig } from "../lib/load-config"
-import { provisionToolchain } from "../lib/toolchain"
-import type { PackageManagerSpec } from "../lib/build-config"
+import semver from "semver";
+
+import { loadConfig } from "../lib/load-config";
+import { provisionToolchain } from "../lib/toolchain";
+import type { PackageManagerSpec } from "../lib/build-config";
+import {
+  HOST_VERSION_FILENAME,
+  writeHostVersion,
+} from "../../shared/host-version";
 
 interface BuildElectronFlags {
-  config?: string
-  passthrough: string[]
+  config?: string;
+  passthrough: string[];
 }
 
 interface BundlePackageJson {
-  name: string
-  version: string
-  main: string
-  type: string
-  repository?: { type: "git"; url: string }
-  zenbu?: { host?: string }
+  name: string;
+  version: string;
+  main: string;
+  type: string;
+  repository?: { type: "git"; url: string };
 }
 
 interface AppConfigJson {
-  name: string
-  mirrorUrl: string
-  branch: string
-  version: string
-  host: string
-  packageManager: PackageManagerSpec
+  name: string;
+  mirrorUrl: string;
+  branch: string;
+  version: string;
+  packageManager: PackageManagerSpec;
   /**
    * Path (relative to the .app's `Resources/` dir) of the staged
    * `installing.html`. Set when the user shipped one in their
    * `<uiEntrypoint>/installing.html`. Read by [launcher.ts] to spawn
    * the install-progress window before clone + first install.
    */
-  installingHtml?: string
+  installingHtml?: string;
   /**
    * Path (relative to the .app's `Resources/` dir) of the framework's
    * built-in preload that exposes `window.zenbuInstall`. Always set when
    * `installingHtml` is set.
    */
-  installingPreload?: string
+  installingPreload?: string;
 }
 
 interface ElectronBuilderConfig {
-  appId?: string
-  productName?: string
-  asar?: boolean
+  appId?: string;
+  productName?: string;
+  asar?: boolean;
   directories?: {
-    app?: string
-    output?: string
-    buildResources?: string
-  }
-  files?: unknown
-  extraResources?: unknown
-  mac?: Record<string, unknown>
-  win?: Record<string, unknown>
-  linux?: Record<string, unknown>
-  publish?: unknown
-  npmRebuild?: boolean
-  [key: string]: unknown
+    app?: string;
+    output?: string;
+    buildResources?: string;
+  };
+  files?: unknown;
+  extraResources?: unknown;
+  mac?: Record<string, unknown>;
+  win?: Record<string, unknown>;
+  linux?: Record<string, unknown>;
+  publish?: unknown;
+  npmRebuild?: boolean;
+  [key: string]: unknown;
 }
 
 const ELECTRON_BUILDER_CONFIG_NAMES = [
@@ -73,15 +77,22 @@ const ELECTRON_BUILDER_CONFIG_NAMES = [
   "electron-builder.config.js",
   "electron-builder.config.cjs",
   "electron-builder.config.mjs",
-]
+];
 
 function resolveProjectDir(): string {
-  const cwd = process.cwd()
-  for (const name of ["zenbu.config.ts", "zenbu.config.mts", "zenbu.config.js", "zenbu.config.mjs"]) {
-    if (fs.existsSync(path.join(cwd, name))) return cwd
+  const cwd = process.cwd();
+  for (const name of [
+    "zenbu.config.ts",
+    "zenbu.config.mts",
+    "zenbu.config.js",
+    "zenbu.config.mjs",
+  ]) {
+    if (fs.existsSync(path.join(cwd, name))) return cwd;
   }
-  console.error("zen build:electron: no zenbu.config.ts found in current directory")
-  process.exit(1)
+  console.error(
+    "zen build:electron: no zenbu.config.ts found in current directory",
+  );
+  process.exit(1);
 }
 
 /**
@@ -91,64 +102,48 @@ function resolveProjectDir(): string {
  * as a zen flag (and unknown flags error out).
  */
 function parseFlags(argv: string[]): BuildElectronFlags {
-  const flags: BuildElectronFlags = { passthrough: [] }
-  let sawSeparator = false
+  const flags: BuildElectronFlags = { passthrough: [] };
+  let sawSeparator = false;
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!
+    const arg = argv[i]!;
     if (sawSeparator) {
-      flags.passthrough.push(arg)
-      continue
+      flags.passthrough.push(arg);
+      continue;
     }
     if (arg === "--") {
-      sawSeparator = true
-      continue
+      sawSeparator = true;
+      continue;
     }
-    if (arg === "--config" || arg === "-c") flags.config = argv[++i]
-    else if (arg.startsWith("--config=")) flags.config = arg.slice("--config=".length)
+    if (arg === "--config" || arg === "-c") flags.config = argv[++i];
+    else if (arg.startsWith("--config="))
+      flags.config = arg.slice("--config=".length);
     else {
-      console.error(`zen build:electron: unknown flag "${arg}"`)
-      console.error(`valid: zen build:electron [--config <zenbu.build.ts>] [-- <electron-builder args>]`)
-      process.exit(1)
+      console.error(`zen build:electron: unknown flag "${arg}"`);
+      console.error(
+        `valid: zen build:electron [--config <zenbu.build.ts>] [-- <electron-builder args>]`,
+      );
+      process.exit(1);
     }
   }
-  return flags
+  return flags;
 }
 
 function readJson<T>(filePath: string): T {
-  return JSON.parse(fs.readFileSync(filePath, "utf8")) as T
+  return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
 }
 
 function expandMirrorUrl(target: string): string {
-  if (target.startsWith("http://") || target.startsWith("https://") || target.startsWith("git@")) {
-    return target
+  if (
+    target.startsWith("http://") ||
+    target.startsWith("https://") ||
+    target.startsWith("git@")
+  ) {
+    return target;
   }
   if (/^[\w.-]+\/[\w.-]+$/.test(target)) {
-    return `https://github.com/${target}.git`
+    return `https://github.com/${target}.git`;
   }
-  return target
-}
-
-function resolveCoreVersion(): string {
-  try {
-    const localRequire = createRequire(import.meta.url)
-    const pkgPath = localRequire.resolve("@zenbujs/core/package.json")
-    const pkg = readJson<{ version?: string }>(pkgPath)
-    if (pkg.version) return pkg.version
-  } catch {}
-  try {
-    const here = fileURLToPath(import.meta.url)
-    let dir = path.dirname(here)
-    while (dir !== path.dirname(dir)) {
-      const candidate = path.join(dir, "package.json")
-      if (fs.existsSync(candidate)) {
-        const pkg = readJson<{ name?: string; version?: string }>(candidate)
-        if (pkg.name === "@zenbujs/core" && pkg.version) return pkg.version
-        if (pkg.version) return pkg.version
-      }
-      dir = path.dirname(dir)
-    }
-  } catch {}
-  return "0.0.0"
+  return target;
 }
 
 /**
@@ -159,58 +154,70 @@ function resolveCoreVersion(): string {
  * file's location for the in-monorepo dev case.
  */
 function resolveCoreDistFile(projectDir: string, fileName: string): string {
-  const localRequire = createRequire(path.join(projectDir, "package.json"))
+  const localRequire = createRequire(path.join(projectDir, "package.json"));
   try {
-    const pkgPath = localRequire.resolve("@zenbujs/core/package.json")
-    const candidate = path.join(path.dirname(pkgPath), "dist", fileName)
-    if (fs.existsSync(candidate)) return candidate
+    const pkgPath = localRequire.resolve("@zenbujs/core/package.json");
+    const candidate = path.join(path.dirname(pkgPath), "dist", fileName);
+    if (fs.existsSync(candidate)) return candidate;
   } catch {}
-  const here = fileURLToPath(import.meta.url)
-  const candidate = path.resolve(path.dirname(here), "..", fileName)
-  if (fs.existsSync(candidate)) return candidate
+  const here = fileURLToPath(import.meta.url);
+  const candidate = path.resolve(path.dirname(here), "..", fileName);
+  if (fs.existsSync(candidate)) return candidate;
   throw new Error(
     `zen build:electron: cannot locate \`@zenbujs/core/dist/${fileName}\`. ` +
       "Make sure @zenbujs/core is installed in this project.",
-  )
+  );
 }
 
 function resolveLauncher(projectDir: string): string {
-  return resolveCoreDistFile(projectDir, "launcher.mjs")
+  return resolveCoreDistFile(projectDir, "launcher.mjs");
 }
 
 function resolveElectronBuilder(projectDir: string): string {
   const candidates = [
     path.join(projectDir, "node_modules", ".bin", "electron-builder"),
-    path.join(projectDir, "node_modules", "electron-builder", "out", "cli", "cli.js"),
-  ]
+    path.join(
+      projectDir,
+      "node_modules",
+      "electron-builder",
+      "out",
+      "cli",
+      "cli.js",
+    ),
+  ];
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate
+    if (fs.existsSync(candidate)) return candidate;
   }
   throw new Error(
     "zen build:electron: electron-builder not found in node_modules. " +
       "Add it to devDependencies and run `pnpm install`.",
-  )
+  );
 }
 
-function findElectronBuilderConfig(projectDir: string): { path: string; format: "json" | "other" } | null {
+function findElectronBuilderConfig(
+  projectDir: string,
+): { path: string; format: "json" | "other" } | null {
   for (const name of ELECTRON_BUILDER_CONFIG_NAMES) {
-    const candidate = path.join(projectDir, name)
+    const candidate = path.join(projectDir, name);
     if (fs.existsSync(candidate)) {
-      return { path: candidate, format: name.endsWith(".json") ? "json" : "other" }
+      return {
+        path: candidate,
+        format: name.endsWith(".json") ? "json" : "other",
+      };
     }
   }
-  const pkgPath = path.join(projectDir, "package.json")
+  const pkgPath = path.join(projectDir, "package.json");
   if (fs.existsSync(pkgPath)) {
     try {
-      const pkg = readJson<{ build?: ElectronBuilderConfig }>(pkgPath)
-      if (pkg.build) return { path: pkgPath, format: "json" }
+      const pkg = readJson<{ build?: ElectronBuilderConfig }>(pkgPath);
+      if (pkg.build) return { path: pkgPath, format: "json" };
     } catch {}
   }
-  return null
+  return null;
 }
 
 function readElectronBuilderConfig(projectDir: string): ElectronBuilderConfig {
-  const found = findElectronBuilderConfig(projectDir)
+  const found = findElectronBuilderConfig(projectDir);
   if (!found) {
     throw new Error(
       [
@@ -218,28 +225,30 @@ function readElectronBuilderConfig(projectDir: string): ElectronBuilderConfig {
         "",
         "Create `electron-builder.json` in the project root, e.g.:",
         "",
-        '  {',
+        "  {",
         '    "appId": "dev.you.your-app",',
         '    "productName": "Your App",',
         '    "asar": false,',
         '    "directories": { "output": "dist" },',
         '    "mac": { "category": "public.app-category.developer-tools", "target": ["zip"] }',
-        '  }',
+        "  }",
         "",
       ].join("\n"),
-    )
+    );
   }
   if (found.format !== "json") {
     throw new Error(
-      `zen build:electron: only JSON electron-builder configs are supported right now (got ${path.basename(found.path)}). ` +
+      `zen build:electron: only JSON electron-builder configs are supported right now (got ${path.basename(
+        found.path,
+      )}). ` +
         `Convert to electron-builder.json or move the config under package.json#build.`,
-    )
+    );
   }
   if (path.basename(found.path) === "package.json") {
-    const pkg = readJson<{ build?: ElectronBuilderConfig }>(found.path)
-    return { ...(pkg.build ?? {}) }
+    const pkg = readJson<{ build?: ElectronBuilderConfig }>(found.path);
+    return { ...(pkg.build ?? {}) };
   }
-  return readJson<ElectronBuilderConfig>(found.path)
+  return readJson<ElectronBuilderConfig>(found.path);
 }
 
 function currentSourceSha(projectDir: string): string {
@@ -247,9 +256,9 @@ function currentSourceSha(projectDir: string): string {
     return execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: projectDir,
       encoding: "utf8",
-    }).trim()
+    }).trim();
   } catch {
-    return "uncommitted"
+    return "uncommitted";
   }
 }
 
@@ -260,13 +269,13 @@ async function spawnAsync(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: "inherit", env })
-    child.on("error", reject)
+    const child = spawn(cmd, args, { cwd, stdio: "inherit", env });
+    child.on("error", reject);
     child.on("close", (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`${cmd} exited with code ${code}`))
-    })
-  })
+      if (code === 0) resolve();
+      else reject(new Error(`${cmd} exited with code ${code}`));
+    });
+  });
 }
 
 /**
@@ -291,31 +300,33 @@ async function spawnAsync(
 function mergeElectronBuilderConfig(
   userConfig: ElectronBuilderConfig,
   overlay: {
-    appDir: string
-    output: string
-    bundleFiles: string[]
-    extraResources: Array<{ from: string; to: string }>
+    appDir: string;
+    output: string;
+    bundleFiles: string[];
+    extraResources: Array<{ from: string; to: string }>;
   },
 ): ElectronBuilderConfig {
-  const merged: ElectronBuilderConfig = { ...userConfig }
+  const merged: ElectronBuilderConfig = { ...userConfig };
   merged.directories = {
     ...(userConfig.directories ?? {}),
     app: overlay.appDir,
     output: overlay.output,
-  }
-  merged.files = overlay.bundleFiles
+  };
+  merged.files = overlay.bundleFiles;
   const userExtra = Array.isArray(userConfig.extraResources)
-    ? (userConfig.extraResources as Array<{ from: string; to: string } | string>)
-    : []
-  merged.extraResources = [...userExtra, ...overlay.extraResources]
-  if (userConfig.npmRebuild !== false) merged.npmRebuild = false
-  if (userConfig.asar === undefined) merged.asar = false
-  return merged
+    ? (userConfig.extraResources as Array<
+        { from: string; to: string } | string
+      >)
+    : [];
+  merged.extraResources = [...userExtra, ...overlay.extraResources];
+  if (userConfig.npmRebuild !== false) merged.npmRebuild = false;
+  if (userConfig.asar === undefined) merged.asar = false;
+  return merged;
 }
 
 async function copyFile(src: string, dest: string): Promise<void> {
-  await fsp.mkdir(path.dirname(dest), { recursive: true })
-  await fsp.copyFile(src, dest)
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  await fsp.copyFile(src, dest);
 }
 
 /**
@@ -327,38 +338,41 @@ async function copyFile(src: string, dest: string): Promise<void> {
  * responsibility via their own `electron-builder.json#extraResources`.
  */
 async function stageInstallingArtifacts(args: {
-  projectDir: string
-  installingSrc: string
-  installingHtmlOut: string
-  installingPreloadOut: string
+  projectDir: string;
+  installingSrc: string;
+  installingHtmlOut: string;
+  installingPreloadOut: string;
 }): Promise<true> {
-  await copyFile(args.installingSrc, args.installingHtmlOut)
-  const preloadSrc = resolveCoreDistFile(args.projectDir, "installing-preload.cjs")
-  await copyFile(preloadSrc, args.installingPreloadOut)
-  return true
+  await copyFile(args.installingSrc, args.installingHtmlOut);
+  const preloadSrc = resolveCoreDistFile(
+    args.projectDir,
+    "installing-preload.cjs",
+  );
+  await copyFile(preloadSrc, args.installingPreloadOut);
+  return true;
 }
 
 export async function runBuildElectron(argv: string[]): Promise<void> {
-  const projectDir = resolveProjectDir()
-  const flags = parseFlags(argv)
-  void flags // legacy --config flag is currently a no-op; kept for back-compat
+  const projectDir = resolveProjectDir();
+  const flags = parseFlags(argv);
+  void flags; // legacy --config flag is currently a no-op; kept for back-compat
 
-  const { resolved } = await loadConfig(projectDir)
-  const config = resolved.build
+  const { resolved } = await loadConfig(projectDir);
+  const config = resolved.build;
 
   // The mirror is now strictly required: the launcher clones from it on
   // first run instead of unpacking a bundled seed. Building without one
   // would produce an .app that has no source to run.
-  const mirrorTarget = config.mirror?.target
+  const mirrorTarget = config.mirror?.target;
   if (!mirrorTarget) {
     throw new Error(
       "zen build:electron: `build.mirror.target` is required in zenbu.config.ts. " +
         'Set build: defineBuildConfig({ mirror: { target: "<owner>/<repo>", branch: "main" }, ... }) ' +
         "and run `zen publish:source init` before building.",
-    )
+    );
   }
-  const mirrorBranch = config.mirror?.branch ?? "main"
-  const mirrorUrl = expandMirrorUrl(mirrorTarget)
+  const mirrorBranch = config.mirror?.branch ?? "main";
+  const mirrorUrl = expandMirrorUrl(mirrorTarget);
 
   // Stage the bundle outside the project tree. If we stage inside (e.g.
   // `.zenbu/build/electron/`), electron-builder walks UP looking for
@@ -366,39 +380,67 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
   // into Resources/app/node_modules even though our generated bundle
   // package.json declares no deps. Using os.tmpdir() ends that walk
   // immediately at /tmp.
+  const projectPkgPath = path.join(projectDir, "package.json");
   const projectPkg = readJson<{ name?: string; version?: string }>(
-    path.join(projectDir, "package.json"),
-  )
-  const appName = projectPkg.name ?? path.basename(projectDir)
-  const appVersion = projectPkg.version ?? "0.0.1"
+    projectPkgPath,
+  );
+  const appName = projectPkg.name ?? path.basename(projectDir);
+
+  // `package.json#version` is the .app's host version: it gets baked
+  // into `<bundle>/host.json` and is what each commit's
+  // `package.json#zenbu.host` semver range is checked against at
+  // launch / update. Required + must be a real semver string. We
+  // intentionally don't fall back to a placeholder — silently shipping
+  // an .app with the wrong host version would let it pull source it
+  // can't actually run.
+  const rawAppVersion = projectPkg.version;
+  if (typeof rawAppVersion !== "string" || rawAppVersion.trim().length === 0) {
+    throw new Error(
+      `zen build:electron: ${projectPkgPath} is missing a non-empty \`version\` field. ` +
+        `This value is baked into <bundle>/host.json as the .app's host version — ` +
+        `bump it whenever you ship a new .app build.`,
+    );
+  }
+  const appVersion = rawAppVersion.trim();
+  if (!semver.valid(appVersion)) {
+    throw new Error(
+      `zen build:electron: ${projectPkgPath} \`version\` ("${rawAppVersion}") ` +
+        `is not a valid semver string (expected MAJOR.MINOR.PATCH with optional ` +
+        `prerelease / build metadata).`,
+    );
+  }
 
   const bundleDir = await fsp.mkdtemp(
     path.join(os.tmpdir(), `zenbu-electron-${appName}-`),
-  )
-  const toolchainDir = path.join(bundleDir, "toolchain")
-  const launcherOut = path.join(bundleDir, "launcher.mjs")
-  const bundlePkgOut = path.join(bundleDir, "package.json")
-  const appConfigOut = path.join(bundleDir, "app-config.json")
-  const mergedConfigPath = path.join(bundleDir, "electron-builder.merged.json")
-  const installingHtmlOut = path.join(bundleDir, "installing.html")
-  const installingPreloadOut = path.join(bundleDir, "installing-preload.cjs")
+  );
+  const toolchainDir = path.join(bundleDir, "toolchain");
+  const launcherOut = path.join(bundleDir, "launcher.mjs");
+  const bundlePkgOut = path.join(bundleDir, "package.json");
+  const appConfigOut = path.join(bundleDir, "app-config.json");
+  const mergedConfigPath = path.join(bundleDir, "electron-builder.merged.json");
+  const installingHtmlOut = path.join(bundleDir, "installing.html");
+  const installingPreloadOut = path.join(bundleDir, "installing-preload.cjs");
 
-  const sourceSha = currentSourceSha(projectDir)
+  const sourceSha = currentSourceSha(projectDir);
 
-  const packageManager = config.packageManager
-  const pmLabel = `${packageManager.type}@${packageManager.version}`
+  const packageManager = config.packageManager;
+  const pmLabel = `${packageManager.type}@${packageManager.version}`;
 
-  console.log(`\n  zen build:electron`)
-  console.log(`    name:    ${appName}`)
-  console.log(`    version: ${appVersion}`)
-  console.log(`    source:  ${sourceSha === "uncommitted" ? "uncommitted" : sourceSha.slice(0, 7)}`)
-  console.log(`    mirror:  ${mirrorTarget} (${mirrorBranch})`)
-  console.log(`    pm:      ${pmLabel}`)
-  console.log(`    bundle:  ${bundleDir}`)
+  console.log(`\n  zen build:electron`);
+  console.log(`    name:    ${appName}`);
+  console.log(`    version: ${appVersion}`);
+  console.log(
+    `    source:  ${
+      sourceSha === "uncommitted" ? "uncommitted" : sourceSha.slice(0, 7)
+    }`,
+  );
+  console.log(`    mirror:  ${mirrorTarget} (${mirrorBranch})`);
+  console.log(`    pm:      ${pmLabel}`);
+  console.log(`    bundle:  ${bundleDir}`);
 
-  console.log("  → staging launcher.mjs")
-  const launcherSrc = resolveLauncher(projectDir)
-  await copyFile(launcherSrc, launcherOut)
+  console.log("  → staging launcher.mjs");
+  const launcherSrc = resolveLauncher(projectDir);
+  await copyFile(launcherSrc, launcherOut);
 
   // Stage the optional installing.html + the framework's built-in preload.
   // Only the canonical files; sibling assets (CSS, images, fonts) are the
@@ -410,33 +452,35 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
         installingHtmlOut,
         installingPreloadOut,
       })
-    : null
+    : null;
   if (stagedInstalling) {
-    console.log(`  → staging installing.html (${path.relative(projectDir, resolved.installingPath!)})`)
-    console.log(`  → staging installing-preload.cjs`)
+    console.log(
+      `  → staging installing.html (${path.relative(
+        projectDir,
+        resolved.installingPath!,
+      )})`,
+    );
+    console.log(`  → staging installing-preload.cjs`);
   }
 
-  console.log(`  → provisioning bundled toolchain (bun + ${pmLabel})`)
-  await provisionToolchain(toolchainDir, { packageManager })
+  console.log(`  → provisioning bundled toolchain (bun + ${pmLabel})`);
+  await provisionToolchain(toolchainDir, { packageManager });
 
-  console.log("  → writing bundle package.json + app-config.json")
-  const host = resolveCoreVersion()
+  console.log("  → writing bundle package.json + app-config.json + host.json");
   const bundlePkg: BundlePackageJson = {
     name: appName,
     version: appVersion,
     main: "launcher.mjs",
     type: "module",
-    zenbu: { host },
     repository: { type: "git", url: mirrorUrl },
-  }
-  await fsp.writeFile(bundlePkgOut, JSON.stringify(bundlePkg, null, 2) + "\n")
+  };
+  await fsp.writeFile(bundlePkgOut, JSON.stringify(bundlePkg, null, 2) + "\n");
 
   const appConfig: AppConfigJson = {
     name: appName,
     mirrorUrl,
     branch: mirrorBranch,
     version: appVersion,
-    host,
     packageManager,
     ...(stagedInstalling
       ? {
@@ -444,28 +488,37 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
           installingPreload: "installing-preload.cjs",
         }
       : {}),
-  }
-  await fsp.writeFile(appConfigOut, JSON.stringify(appConfig, null, 2) + "\n")
+  };
+  await fsp.writeFile(appConfigOut, JSON.stringify(appConfig, null, 2) + "\n");
 
-  const userConfig = readElectronBuilderConfig(projectDir)
+  // host.json is the single source of truth for the .app's host version
+  // (read by both the launcher and `UpdaterService` to drive
+  // `package.json#zenbu.host` range checks at clone/fetch/update time).
+  // Lives at the bundle root, separate from app-config.json so its
+  // single purpose stays obvious. The value comes from
+  // `package.json#version` — read here at build time and frozen into
+  // the .app, independent of subsequent `git pull`s of the source.
+  writeHostVersion(bundleDir, appVersion);
+
+  const userConfig = readElectronBuilderConfig(projectDir);
   // Resolve `directories.output` to an absolute path BEFORE we hand it to
   // electron-builder. The user's config likely says `dist` (project-relative),
   // but electron-builder resolves it relative to `directories.app` — which
   // we just rewrote to an os.tmpdir() path. Without this, the .app would
   // land in `<tmpdir>/dist/` instead of the user's project.
-  const userOutput = userConfig.directories?.output ?? "dist"
+  const userOutput = userConfig.directories?.output ?? "dist";
   const resolvedOutput = path.isAbsolute(userOutput)
     ? userOutput
-    : path.resolve(projectDir, userOutput)
+    : path.resolve(projectDir, userOutput);
 
   const overlayExtraResources: Array<{ from: string; to: string }> = [
     { from: toolchainDir, to: "toolchain" },
-  ]
+  ];
   if (stagedInstalling) {
     overlayExtraResources.push(
       { from: installingHtmlOut, to: "installing.html" },
       { from: installingPreloadOut, to: "installing-preload.cjs" },
-    )
+    );
   }
 
   const merged = mergeElectronBuilderConfig(userConfig, {
@@ -474,38 +527,60 @@ export async function runBuildElectron(argv: string[]): Promise<void> {
     bundleFiles: [
       "package.json",
       "app-config.json",
+      HOST_VERSION_FILENAME,
       "launcher.mjs",
       "!node_modules",
       "!**/node_modules",
       "!**/node_modules/**",
     ],
     extraResources: overlayExtraResources,
-  })
-  await fsp.writeFile(mergedConfigPath, JSON.stringify(merged, null, 2) + "\n")
+  });
+  await fsp.writeFile(mergedConfigPath, JSON.stringify(merged, null, 2) + "\n");
 
-  console.log("  → injected into electron-builder config:")
-  console.log(`      directories.app    = ${bundleDir}`)
-  console.log(`      directories.output = ${resolvedOutput}`)
-  console.log(`      files              = [launcher + app-config + bundle pkg]`)
-  console.log(`      extraResources    += { from: <bundle>/toolchain, to: toolchain }`)
+  console.log("  → injected into electron-builder config:");
+  console.log(`      directories.app    = ${bundleDir}`);
+  console.log(`      directories.output = ${resolvedOutput}`);
+  console.log(
+    `      files              = [launcher + app-config + bundle pkg + ${HOST_VERSION_FILENAME}]`,
+  );
+  console.log(
+    `      extraResources    += { from: <bundle>/toolchain, to: toolchain }`,
+  );
   if (stagedInstalling) {
-    console.log(`      extraResources    += { from: installing.html, to: installing.html }`)
-    console.log(`      extraResources    += { from: installing-preload.cjs, to: installing-preload.cjs }`)
+    console.log(
+      `      extraResources    += { from: installing.html, to: installing.html }`,
+    );
+    console.log(
+      `      extraResources    += { from: installing-preload.cjs, to: installing-preload.cjs }`,
+    );
   }
-  console.log(`      asar               = ${merged.asar !== undefined ? merged.asar : "(unset)"}`)
-  console.log(`      npmRebuild         = false`)
+  console.log(
+    `      asar               = ${
+      merged.asar !== undefined ? merged.asar : "(unset)"
+    }`,
+  );
+  console.log(`      npmRebuild         = false`);
 
-  console.log("  → invoking electron-builder")
-  const electronBuilder = resolveElectronBuilder(projectDir)
-  const cliArgs = ["--config", mergedConfigPath, ...flags.passthrough]
-  const env = { ...process.env }
-  if (!env.GH_TOKEN && env.GITHUB_TOKEN) env.GH_TOKEN = env.GITHUB_TOKEN
+  console.log("  → invoking electron-builder");
+  const electronBuilder = resolveElectronBuilder(projectDir);
+  const cliArgs = ["--config", mergedConfigPath, ...flags.passthrough];
+  const env = { ...process.env };
+  if (!env.GH_TOKEN && env.GITHUB_TOKEN) env.GH_TOKEN = env.GITHUB_TOKEN;
 
   if (electronBuilder.endsWith(".js")) {
-    await spawnAsync(process.execPath, [electronBuilder, ...cliArgs], projectDir, env)
+    await spawnAsync(
+      process.execPath,
+      [electronBuilder, ...cliArgs],
+      projectDir,
+      env,
+    );
   } else {
-    await spawnAsync(electronBuilder, cliArgs, projectDir, env)
+    await spawnAsync(electronBuilder, cliArgs, projectDir, env);
   }
 
-  console.log(`\n  ✓ Built ${appName} ${appVersion} at ${path.relative(projectDir, resolvedOutput) || resolvedOutput}\n`)
+  console.log(
+    `\n  ✓ Built ${appName} ${appVersion} at ${
+      path.relative(projectDir, resolvedOutput) || resolvedOutput
+    }\n`,
+  );
 }

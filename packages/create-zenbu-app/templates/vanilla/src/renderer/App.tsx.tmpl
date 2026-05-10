@@ -1,0 +1,83 @@
+import { useDb, useDbClient, useRpc } from "@zenbujs/core/react"
+import { useState } from "react"
+
+function Titlebar() {
+  return (
+    <div
+      className="titlebar"
+      // @ts-expect-error webkit property
+      style={{ WebkitAppRegion: "drag" }}
+    />
+  )
+}
+
+function Home() {
+  const db = useDb()
+  const client = useDbClient()
+  const rpc = useRpc()
+  const [cwd, setCwd] = useState<string | null>(null)
+
+  const issues = db.app.issues
+
+  return (
+    <main className="home">
+      <h1>Welcome to Zenbu</h1>
+      <p className="lede">
+        Edit <code>src/renderer/App.tsx</code> to get started.
+      </p>
+
+      <form
+        className="add-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          const form = e.currentTarget
+          const title = (form.elements.namedItem("title") as HTMLInputElement).value
+          if (!title.trim()) return
+          client.update((db) => {
+            db.app.issues.push({
+              id: crypto.randomUUID(),
+              title,
+              createdAt: Date.now(),
+            })
+          })
+          form.reset()
+        }}
+      >
+        <input name="title" placeholder="New issue title" autoComplete="off" />
+        <button type="submit">+ add</button>
+      </form>
+
+      <div className="issues">
+        {issues.length === 0 ? (
+          <div className="issues-empty">No issues yet — try adding one.</div>
+        ) : (
+          issues.map((issue) => (
+            <div key={issue.id} className="issue">
+              <span>{issue.title}</span>
+              <span className="issue-time">
+                {new Date(issue.createdAt).toLocaleTimeString()}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+
+      <button
+        className="rpc-button"
+        onClick={async () => setCwd(await rpc.repo.getCwd())}
+      >
+        rpc → main process cwd
+      </button>
+      {cwd && <div className="rpc-result">{cwd}</div>}
+    </main>
+  )
+}
+
+export function App() {
+  return (
+    <div className="app">
+      <Titlebar />
+      <Home />
+    </div>
+  )
+}

@@ -1,27 +1,33 @@
 #!/usr/bin/env node
-// create-zenbu-app — scaffold a new Zenbu app from the bundled template.
+// create-zenbu-app — scaffold a new Zenbu app from a bundled template.
 //
 // Run via:
-//   npm  create zenbu-app  <dir>
-//   pnpm create zenbu-app  <dir>
-//   yarn create zenbu-app  <dir>
-//   bunx create-zenbu-app  <dir>
+//   npm  create zenbu-app  [dir]
+//   pnpm create zenbu-app  [dir]
+//   yarn create zenbu-app  [dir]
+//   bunx create-zenbu-app  [dir]
 //
-// Behavior: copy the template, expand `{{projectName}}` in `.tmpl` files,
-// rename `_gitignore` -> `.gitignore`, detect which package manager invoked
-// us, seed the new `zenbu.config.ts`'s `build.packageManager` block with
-// that PM + its installed version, run `<pm> install` for the user, then
-// `git init` + initial commit if no `.git` exists.
+// Behavior: pick a template variant (e.g. with/without Tailwind) either via
+// interactive prompts or `--yes` (take defaults), copy the template, expand
+// `{{projectName}}` in `.tmpl` files, rename `_gitignore` -> `.gitignore`,
+// detect which package manager invoked us, seed the new `zenbu.config.ts`'s
+// `build.packageManager` block with that PM + its installed version, run
+// `<pm> install` for the user, then `git init` + initial commit if no
+// `.git` exists.
 //
-// The auto-install can be opted out with `--no-install`.
+// Flags:
+//   --yes / -y    Accept the default for every prompt (project = cwd, all
+//                 config options at their declared default).
+//   --no-install  Skip the post-copy install step.
 
 import path from "node:path"
 import fs from "node:fs"
 import { fileURLToPath } from "node:url"
 import { spawnSync } from "node:child_process"
+import * as p from "@clack/prompts"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const TEMPLATE_DIR = path.resolve(__dirname, "..", "template")
+const TEMPLATES_DIR = path.resolve(__dirname, "..", "templates")
 
 const argv = process.argv.slice(2)
 const flagsSet = new Set(argv.filter((a) => a.startsWith("-")))
@@ -33,6 +39,51 @@ const noInstall = flagsSet.has("--no-install")
 // checkout, the scaffold rewrites `@zenbujs/core` to `link:<path>` before the
 // initial git commit. Not advertised to end users.
 const ZENBU_LOCAL_CORE = process.env.ZENBU_LOCAL_CORE
+
+// =============================================================================
+//                              config options
+// =============================================================================
+//
+// Each entry describes one user-facing scaffolding choice. To add a new
+// option:
+//   1. Append a `ConfigOption` to `CONFIG_OPTIONS`.
+//   2. Add the corresponding template copies under `templates/<slug>/`.
+//
+// `--yes` short-circuits every `ask()` and uses the declared `default`.
+
+interface ConfigOption<T> {
+  id: string
+  default: T
+  ask: () => Promise<T | symbol>
+  /** Contributes a fragment (or `null`) to the resolved template slug. */
+  slug: (value: T) => string | null
+}
+
+const CONFIG_OPTIONS: ConfigOption<boolean>[] = [
+  {
+    id: "tailwind",
+    default: true,
+    ask: () =>
+      p.confirm({ message: "Use Tailwind CSS?", initialValue: true }) as Promise<
+        boolean | symbol
+      >,
+    slug: (v) => (v ? "tailwind" : null),
+  },
+]
+
+interface ResolvedAnswers {
+  [optionId: string]: unknown
+}
+
+function resolveSlug(answers: ResolvedAnswers): string {
+  const parts: string[] = []
+  for (const opt of CONFIG_OPTIONS) {
+    const value = answers[opt.id] as never
+    const fragment = opt.slug(value)
+    if (fragment) parts.push(fragment)
+  }
+  return parts.length > 0 ? parts.join("-") : "vanilla"
+}
 
 // =============================================================================
 //                          package manager detection
@@ -179,50 +230,119 @@ function runInstall(projectDir: string, pm: DetectedPm): boolean {
   return res.status === 0
 }
 
+/**
+ * Run `<pm> run link` so the scaffold's typegen output (under `types/`) is
+ * present before the initial git commit. Without this, the user's first
+ * `pnpm dev` would generate those files and leave the working tree dirty.
+ */
+function runLink(projectDir: string, pm: DetectedPm): boolean {
+  const res = spawnSync(pm.type, ["run", "link"], {
+    cwd: projectDir,
+    stdio: "inherit",
+  })
+  return res.status === 0
+}
+
+// =============================================================================
+//                              prompts
+// =============================================================================
+
+function bail(reason: string): never {
+  p.cancel(reason)
+  process.exit(1)
+}
+
+function validateProjectName(value: string | undefined): string | undefined {
+  const trimmed = (value ?? "").trim()
+  if (!trimmed) return "Project name is required."
+  if (trimmed === ".") return undefined
+  if (/[\\/]/.test(trimmed)) return "Project name cannot contain slashes."
+  if (/\s/.test(trimmed)) return "Project name cannot contain whitespace."
+  // Mirror npm's rough rules: lowercase-friendly, no leading dot/underscore.
+  if (/^[._]/.test(trimmed)) return "Project name cannot start with '.' or '_'."
+  return undefined
+}
+
+async function promptProjectName(): Promise<string> {
+  const result = await p.text({
+    message: "Project name?",
+    placeholder: "my-zenbu-app",
+    defaultValue: "my-zenbu-app",
+    validate: validateProjectName,
+  })
+  if (p.isCancel(result)) bail("Scaffolding cancelled.")
+  return result as string
+}
+
+async function promptOptions(): Promise<ResolvedAnswers> {
+  const answers: ResolvedAnswers = {}
+  for (const opt of CONFIG_OPTIONS) {
+    const value = await opt.ask()
+    if (p.isCancel(value)) bail("Scaffolding cancelled.")
+    answers[opt.id] = value
+  }
+  return answers
+}
+
+function defaultAnswers(): ResolvedAnswers {
+  const answers: ResolvedAnswers = {}
+  for (const opt of CONFIG_OPTIONS) {
+    answers[opt.id] = opt.default
+  }
+  return answers
+}
+
 // =============================================================================
 //                                    main
 // =============================================================================
 
-function main(): void {
-  const projectName = positional[0] ?? "."
-  if (projectName === "." && !yes) {
-    console.error(
-      "Usage: npm create zenbu-app <project-name>\n" +
-        "       (use --yes to scaffold into the current directory)",
-    )
-    process.exit(1)
+async function main(): Promise<void> {
+  p.intro("create-zenbu-app")
+
+  let projectName: string
+  if (positional[0]) {
+    projectName = positional[0]
+  } else if (yes) {
+    projectName = "."
+  } else {
+    projectName = await promptProjectName()
   }
 
   const projectDir = path.resolve(process.cwd(), projectName)
-  const displayName =
-    projectName === "." ? path.basename(projectDir) : projectName
+  // Always use the basename for templated `{{projectName}}` substitution so
+  // path-style args like `/tmp/foo` don't leak `/` into `package.json#name`
+  // (which npm rejects) or the electron-builder appId.
+  const displayName = path.basename(projectDir)
 
   if (fs.existsSync(projectDir)) {
     const entries = fs.readdirSync(projectDir).filter((e) => e !== ".git")
+    const isDot = projectName === "." || projectDir === process.cwd()
     const allowedExisting =
-      projectName === "." &&
-      fs.existsSync(path.join(projectDir, "package.json"))
+      isDot && fs.existsSync(path.join(projectDir, "package.json"))
     if (entries.length > 0 && !allowedExisting) {
-      console.error(
-        `Error: directory "${projectName}" already exists and is not empty.`,
-      )
-      process.exit(1)
+      bail(`Directory "${projectName}" already exists and is not empty.`)
     }
+  }
+
+  const answers = yes ? defaultAnswers() : await promptOptions()
+  const slug = resolveSlug(answers)
+  const templateDir = path.join(TEMPLATES_DIR, slug)
+  if (!fs.existsSync(templateDir)) {
+    bail(`No template found for configuration "${slug}".`)
   }
 
   const pm = detectPackageManager()
 
-  console.log(`\nScaffolding Zenbu app in "${displayName}"...`)
+  p.log.step(`Scaffolding Zenbu app in "${displayName}" (template: ${slug})`)
   if (pm.fallback) {
-    console.log(
-      `  → couldn't detect invoking package manager; defaulting to ${pm.type}@${pm.version}.`,
+    p.log.info(
+      `couldn't detect invoking package manager; defaulting to ${pm.type}@${pm.version}.`,
     )
   } else {
-    console.log(`  → detected ${pm.type}@${pm.version} as the invoking package manager`)
+    p.log.info(`detected ${pm.type}@${pm.version} as the invoking package manager`)
   }
-  console.log("")
 
-  copyDirSync(TEMPLATE_DIR, projectDir, displayName)
+  copyDirSync(templateDir, projectDir, displayName)
 
   const gi = path.join(projectDir, "_gitignore")
   if (fs.existsSync(gi)) {
@@ -234,16 +354,29 @@ function main(): void {
   if (ZENBU_LOCAL_CORE) {
     const corePath = path.resolve(ZENBU_LOCAL_CORE)
     rewireToLocalCore(projectDir, corePath)
-    console.log(`  → linked @zenbujs/core -> ${corePath}`)
+    p.log.info(`linked @zenbujs/core -> ${corePath}`)
   }
 
   let installed = false
   if (!noInstall) {
-    console.log(`  → running ${pm.type} install\n`)
+    p.log.step(`running ${pm.type} install`)
     installed = runInstall(projectDir, pm)
     if (!installed) {
-      console.warn(
-        `  → ${pm.type} install failed; you can retry manually after the scaffold completes.\n`,
+      p.log.warn(
+        `${pm.type} install failed; you can retry manually after the scaffold completes.`,
+      )
+    }
+  }
+
+  // Run `<pm> run link` after install so the generated `types/` files (which
+  // are tracked, not gitignored) land in the initial commit. Skipping when
+  // install failed since link needs deps resolved.
+  if (installed) {
+    p.log.step(`running ${pm.type} run link`)
+    const linked = runLink(projectDir, pm)
+    if (!linked) {
+      p.log.warn(
+        `${pm.type} run link failed; you can retry manually after the scaffold completes.`,
       )
     }
   }
@@ -253,18 +386,13 @@ function main(): void {
   }
 
   const cdHint = projectName === "." ? "" : `cd ${displayName} && `
-  if (installed) {
-    console.log(`Done. Next:\n\n  ${cdHint}${pm.type} dev\n`)
-  } else {
-    console.log(
-      `Done. Next:\n\n  ${cdHint}${pm.type} install\n  ${pm.type} dev\n`,
-    )
-  }
+  const next = installed
+    ? `${cdHint}${pm.type} dev`
+    : `${cdHint}${pm.type} install\n  ${cdHint}${pm.type} dev`
+  p.outro(`Done. Next:\n\n  ${next}\n`)
 }
 
-try {
-  main()
-} catch (err) {
+main().catch((err) => {
   console.error("\nError:", (err as Error)?.message ?? err)
   process.exit(1)
-}
+})

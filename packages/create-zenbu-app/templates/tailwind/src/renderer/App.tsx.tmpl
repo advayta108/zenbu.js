@@ -1,4 +1,4 @@
-import { ZenbuProvider, useDb, useDbClient, useRpc } from "@zenbujs/core/react"
+import { useDb, useDbClient, useRpc } from "@zenbujs/core/react"
 import { useState } from "react"
 
 function Titlebar() {
@@ -17,7 +17,7 @@ function Home() {
   const rpc = useRpc()
   const [cwd, setCwd] = useState<string | null>(null)
 
-  const issues = db.plugin.app.issues
+  const issues = db.app.issues
 
   return (
     <main className="flex-1 px-8 pb-8 font-sans text-[#e5e5e5]">
@@ -34,7 +34,7 @@ function Home() {
           const title = (form.elements.namedItem("title") as HTMLInputElement).value
           if (!title.trim()) return
           client.update((db) => {
-            db.plugin.app.issues.push({
+            db.app.issues.push({
               id: crypto.randomUUID(),
               title,
               createdAt: Date.now(),
@@ -92,11 +92,9 @@ function Home() {
 
 export function App() {
   return (
-    <ZenbuProvider>
-      <div className="flex flex-col min-h-screen">
-        <Titlebar />
-        <Home />
-      </div>
-    </ZenbuProvider>
+    <div className="flex flex-col min-h-screen">
+      <Titlebar />
+      <Home />
+    </div>
   )
 }

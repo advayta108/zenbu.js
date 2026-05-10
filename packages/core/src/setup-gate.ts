@@ -20,6 +20,10 @@ function registerLoader(specifier: string, opts?: { data?: unknown }) {
 import { pathToFileURL } from "node:url";
 import { register as registerTsx } from "tsx/esm/api";
 import { bootstrapEnv } from "./env-bootstrap";
+import {
+  parseZenbuBgEntries,
+  pickZenbuBgEntry,
+} from "./shared/zenbu-bg-parse";
 
 type PackageJson = {
   name?: string;
@@ -168,19 +172,25 @@ async function closeRegisteredWatchers(): Promise<void> {
 type BootWindow = { windowId: string; win: unknown };
 
 /**
- * Extract the splash's intended background color from a
- * `<meta name="zenbu-bg" content="#xxx">` tag. Used as the BaseWindow's
- * `backgroundColor` so the OS doesn't paint a single white frame before
- * the WebContentsView's pixels reach the screen. Convention only —
- * defaults to `#F4F4F4` when unset.
+ * Extract the splash's intended background color from `<meta name="zenbu-bg">`
+ * tag(s). Used as the BaseWindow's `backgroundColor` so the OS doesn't
+ * paint a single mismatched frame before the WebContentsView's pixels
+ * reach the screen.
+ *
+ * Supports the `media` attribute (mirrors the W3C `theme-color` pattern),
+ * so the splash can declare separate colors per system theme:
+ *
+ *   <meta name="zenbu-bg" content="#fafafa" media="(prefers-color-scheme: light)">
+ *   <meta name="zenbu-bg" content="#09090b" media="(prefers-color-scheme: dark)">
+ *
+ * Defaults to `#F4F4F4` when no tag matches.
  */
-function readSplashBgColor(splashPath: string): string {
+function readSplashBgColor(splashPath: string, dark: boolean): string {
   try {
     const html = fs.readFileSync(splashPath, "utf8");
-    const match = html.match(
-      /<meta\s+name=["']zenbu-bg["']\s+content=["']([^"']+)["']/i,
-    );
-    if (match?.[1]) return match[1];
+    const entries = parseZenbuBgEntries(html);
+    const picked = pickZenbuBgEntry(entries, dark);
+    if (picked) return picked;
   } catch {}
   return "#F4F4F4";
 }
@@ -208,6 +218,9 @@ type ElectronWindowing = {
       width: number;
       height: number;
     }): void;
+  };
+  nativeTheme: {
+    shouldUseDarkColors: boolean;
   };
 };
 
@@ -245,7 +258,10 @@ async function spawnSplashWindow(
     __zenbu_boot_windows__?: BootWindow[];
   };
   const electron = (await import("electron")) as unknown as ElectronWindowing;
-  const backgroundColor = readSplashBgColor(splashPath);
+  const backgroundColor = readSplashBgColor(
+    splashPath,
+    electron.nativeTheme.shouldUseDarkColors,
+  );
   // Only adopt the launcher's "main" window. Anything else in the slot
   // (legacy code, plugins) is ignored — we'd rather have a momentary
   // second window than swap content on a window we don't own.
@@ -364,6 +380,21 @@ async function loadConfigPhase(
 
   const { loadConfig } = await import("./cli/lib/load-config");
   const { resolved, pluginSourceFiles } = await loadConfig(projectRoot);
+  // Auto-link: regenerate `<app>/types/*.ts` so `useRpc()` / `useDb()` /
+  // `useEvents()` resolve against the freshly-installed plugin set on
+  // every launch. Content-addressed writes mean unchanged content is a
+  // no-op (no working-tree mtime bumps that would trip the updater's
+  // dirty-tree check). Non-fatal: link failures shouldn't block boot.
+  try {
+    const { linkProject } = await import("./cli/commands/link");
+    await linkProject(projectRoot, { quiet: true });
+  } catch (err) {
+    console.warn(
+      `[setup-gate] zen link failed (non-fatal): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
   const loaderData: LoaderData = {
     payload: {
       plugins: resolved.plugins.map((p) => ({

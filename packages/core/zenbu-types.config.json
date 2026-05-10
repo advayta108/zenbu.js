@@ -1,7 +1,6 @@
 {
   "name": "core",
-  "services": [
-    "src/services/*.ts"
-  ],
-  "events": "./src/registry.ts"
+  "services": ["src/services/*.ts"],
+  "events": "./src/events.ts",
+  "schema": "./src/schema.ts"
 }

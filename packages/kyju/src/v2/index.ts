@@ -27,6 +27,7 @@ export {
   type SchemaShape,
   type InferSchema,
   type InferRoot,
+  type InferSchemaRoot,
 } from "./db/schema";
 
 export {

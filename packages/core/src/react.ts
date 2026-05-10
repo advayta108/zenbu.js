@@ -45,8 +45,10 @@ import type {
   ResolvedEvents,
 } from "./registry";
 
-type AnyRpc = RouterProxy<Record<string, Record<string, (...args: any[]) => any>>>;
-type AnyEvents = EventProxy<Record<string, unknown>>;
+type AnyRpc = RouterProxy<
+  Record<string, Record<string, Record<string, (...args: any[]) => any>>>
+>;
+type AnyEvents = EventProxy<Record<string, Record<string, unknown>>>;
 type AnyDbClient = ClientProxy<SchemaShape>;
 type Replica = Awaited<ReturnType<typeof connectReplica>>["replica"];
 
@@ -80,7 +82,7 @@ const kyjuReact = createKyjuReact<SchemaShape, RegisteredDbRoot>();
  * Subscribe to a slice of the live DB. The selector's `root` is typed via
  * `ZenbuRegister["db"]`, populated by `zen link`. No generic at the call site.
  *
- *   const count = useDb((root) => root.plugin.app.count)
+ *   const count = useDb((root) => root.app.count)
  */
 export function useDb(): RegisteredDbRoot;
 export function useDb<T>(
@@ -205,7 +207,7 @@ export function ZenbuProvider({
             new URLSearchParams(window.location.search).get("type");
           let unsubReload: (() => void) | null = null;
           if (viewType) {
-            const adviceReload = (events as any)?.advice?.reload;
+            const adviceReload = (events as any)?.core?.advice?.reload;
             if (adviceReload?.subscribe) {
               unsubReload = adviceReload.subscribe((data: { type?: string }) => {
                 if (data?.type === "*" || data?.type === viewType) {
@@ -442,9 +444,9 @@ export function View({
   const url = useDb((root) =>
     (
       root as unknown as {
-        plugin: { core: { lastKnownViewRegistry: Array<{ type: string; url: string }> } };
+        core: { lastKnownViewRegistry: Array<{ type: string; url: string }> };
       }
-    ).plugin.core.lastKnownViewRegistry.find((v) => v.type === type)?.url ?? null,
+    ).core.lastKnownViewRegistry.find((v) => v.type === type)?.url ?? null,
   );
 
   // Snapshot the iframe URL on first commit and never recompute. Changes to

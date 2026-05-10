@@ -3,6 +3,9 @@ import path from "node:path"
 import { DB_CONFIG_JSON, INTERNAL_DIR } from "./paths"
 
 /**
+ * what?
+ */
+/**
  * Persisted at `~/.zenbu/.internal/db.json`. Tracks every DB path the CLI has
  * seen plus an optional default selection. Lives outside any kyju DB on
  * purpose: the registry has to survive a DB switch (the chicken-and-egg).
@@ -43,6 +46,9 @@ export async function loadRegistry(): Promise<DbRegistry> {
   }
   if (!raw || typeof raw !== "object") return { ...DEFAULT_REGISTRY }
   const obj = raw as Record<string, unknown>
+  /**
+   * legacy? no
+   */
 
   // Legacy shape: { dbPath: "..." } — promote to defaultDbPath + single entry.
   if (

@@ -1,0 +1,143 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #111;
+  color: #e5e5e5;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.titlebar {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 12px 0 72px;
+  flex-shrink: 0;
+}
+
+.home {
+  flex: 1;
+  padding: 0 32px 32px;
+  color: #e5e5e5;
+}
+
+.home h1 {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+
+.home .lede {
+  color: #888;
+  margin: 0 0 24px;
+}
+
+.home code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #18181b;
+  border-radius: 12px;
+  padding: 16px;
+  max-width: 28rem;
+  margin-bottom: 24px;
+}
+
+.add-form input {
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: #222;
+  border: 1px solid #333;
+  color: inherit;
+  outline: none;
+  font: inherit;
+}
+
+.add-form input:focus {
+  border-color: #6366f1;
+}
+
+.add-form button {
+  background: #4f46e5;
+  color: white;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: 0;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.add-form button:hover {
+  background: #4338ca;
+}
+
+.issues {
+  max-width: 28rem;
+  margin-bottom: 24px;
+}
+
+.issues-empty {
+  color: #888;
+  font-style: italic;
+}
+
+.issue {
+  margin-bottom: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #222;
+  border: 1px solid #2a2a2a;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.issue-time {
+  font-size: 12px;
+  color: #666;
+}
+
+.rpc-button {
+  background: #27272a;
+  color: inherit;
+  border: 0;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.rpc-button:hover {
+  background: #3f3f46;
+}
+
+.rpc-result {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  background: #232328;
+  color: #b0b0b0;
+  width: fit-content;
+  font-size: 12px;
+}

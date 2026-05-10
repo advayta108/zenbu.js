@@ -1,3 +1,20 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  addAdvice,
+  addContentScript,
+  type AdviceSpec,
+  type ContentScriptSpec,
+} from "./services/advice-config";
+
+/**
+ * The synthetic plugin name used for everything that ships inside
+ * `@zenbujs/core`. Mirrors the `core` DB section so RPC, events, and the
+ * database all use the same top-level namespace.
+ */
+export const CORE_PLUGIN_NAME = "core";
+
 export type CleanupReason = "reload" | "shutdown";
 type SetupCleanup = ((reason: CleanupReason) => void | Promise<void>) | void;
 type SetupFn = () => SetupCleanup;
@@ -25,6 +42,15 @@ interface ServiceSlot {
   instance: Service | null;
   ServiceClass: ServiceConstructor;
   status: "blocked" | "evaluating" | "ready" | "failed";
+  /**
+   * Absolute directory of the plugin that owns this service file, resolved
+   * once at `runtime.register` time from the registering module's
+   * `import.meta.url`. `null` for core-package services that are not
+   * declared inside any plugin (`@zenbujs/core/services/*`). Read by
+   * `Service#advise` / `Service#contentScript` to anchor relative paths
+   * without forcing user code to pass `import.meta`.
+   */
+  pluginDir: string | null;
 }
 
 type AnyServiceClass = (abstract new (...args: any[]) => Service) & {
@@ -101,6 +127,64 @@ export abstract class Service {
   > = new Map();
 
   evaluate(): void | Promise<void> {}
+
+  /**
+   * Register advice (component wrap/replace, function before/after/around)
+   * targeting another plugin's exports. The owning plugin's root directory
+   * is resolved automatically from this service's slot, so relative
+   * `modulePath` values just work.
+   *
+   *   this.setup("wrap-counter", () =>
+   *     this.advise({
+   *       view: "app",
+   *       moduleId: "App.tsx",
+   *       name: "Counter",
+   *       type: "around",
+   *       modulePath: "src/content/wrap-counter.tsx",
+   *       exportName: "WrapCounter",
+   *     }),
+   *   )
+   *
+   * Returns an unregister function — wrap the call in `this.setup(...)`
+   * so cleanup runs on hot reload.
+   */
+  advise(spec: AdviceSpec): () => void {
+    const pluginDir = this.__getPluginDir("advise");
+    return addAdvice(pluginDir, spec);
+  }
+
+  /**
+   * Inject a content script into a view. Same plugin-root resolution
+   * rules as `advise`.
+   *
+   *   this.setup("inject", () =>
+   *     this.injectContentScript({
+   *       view: "*",
+   *       modulePath: "src/content/toolbar.tsx",
+   *     }),
+   *   )
+   */
+  injectContentScript(spec: ContentScriptSpec): () => void {
+    const pluginDir = this.__getPluginDir("injectContentScript");
+    return addContentScript(pluginDir, spec);
+  }
+
+  /** @internal */
+  __getPluginDir(method: string): string {
+    const ctor = this.constructor as { key?: string; name?: string };
+    const key = ctor.key;
+    const slot = key ? runtime.getSlot(key) : undefined;
+    const dir = slot?.pluginDir ?? null;
+    if (!dir) {
+      const label = ctor.name ?? key ?? "<anonymous>";
+      throw new Error(
+        `[runtime] Service "${label}" called this.${method}() but its slot has no pluginDir. ` +
+          `This service was registered from a file outside any plugin's directory; ` +
+          `${method}() is only valid for services declared inside a plugin.`,
+      );
+    }
+    return dir;
+  }
 
   setup(key: string, fn: SetupFn): void {
     const existing = this.__setupCleanups.get(key);
@@ -181,16 +265,23 @@ export class ServiceRuntime {
       );
     }
 
+    const metaUrl = (importMeta as { url?: string } | null | undefined)?.url;
+    const pluginDir = metaUrl ? findOwningPluginDir(metaUrl) : null;
+
     this.definitions.set(slotKey, ServiceClass);
     const slot = this.slots.get(slotKey);
     if (slot) {
       slot.ServiceClass = ServiceClass;
+      // Re-stamp on HMR so a service file moved between plugins (rare, but
+      // possible during refactors) doesn't keep pointing at its old root.
+      slot.pluginDir = pluginDir;
     } else {
       this.slots.set(slotKey, {
         error: null,
         instance: null,
         ServiceClass,
         status: "blocked",
+        pluginDir,
       });
     }
     this.rebuildDependentsIndex();
@@ -316,8 +407,22 @@ export class ServiceRuntime {
     }
   }
 
-  buildRouter(): Record<string, Record<string, (...args: any[]) => any>> {
-    const router: Record<string, Record<string, (...args: any[]) => any>> = {};
+  /**
+   * Build a 3-level router keyed by plugin name → service key → method.
+   * Mirrors how the database is sectioned (`root.<plugin>.<field>`) so a
+   * service's RPC surface lives under its owning plugin's namespace
+   * instead of polluting the top level. Core services bucket under
+   * `"core"` because the core package is registered as a synthetic
+   * plugin (see `getPluginRegistry`).
+   */
+  buildRouter(): Record<
+    string,
+    Record<string, Record<string, (...args: any[]) => any>>
+  > {
+    const router: Record<
+      string,
+      Record<string, Record<string, (...args: any[]) => any>>
+    > = {};
 
     for (const [slotKey, slot] of this.slots) {
       if (slot.status !== "ready" || !slot.instance) continue;
@@ -333,7 +438,11 @@ export class ServiceRuntime {
         methods[name] = (...args: any[]) => instance[name](...args);
       }
 
-      if (Object.keys(methods).length > 0) router[slotKey] = methods;
+      if (Object.keys(methods).length === 0) continue;
+
+      const pluginName = pluginNameForDir(slot.pluginDir);
+      const bucket = (router[pluginName] ??= {});
+      bucket[slotKey] = methods;
     }
     return router;
   }
@@ -422,6 +531,7 @@ export class ServiceRuntime {
       instance: null,
       ServiceClass,
       status: "blocked",
+      pluginDir: null,
     };
     this.slots.set(key, slot);
     return slot;
@@ -770,11 +880,69 @@ function getPluginRegistry(): PluginRegistry {
       splashPath: null,
       subscribers: new Set(),
     };
+    // Seed the synthetic core plugin so any `runtime.register` call from
+    // a core service file (which happens BEFORE the loader-emitted barrel
+    // runs `replacePlugins(...)`) can resolve its `pluginDir` and end up
+    // bucketed under `"core"` in the router.
+    seedCorePlugin(slot.__zenbu_plugin_registry__);
   } else if (!slot.__zenbu_plugin_registry__.subscribers) {
     // HMR'd into an older shape; lazily fill the field.
     slot.__zenbu_plugin_registry__.subscribers = new Set();
   }
   return slot.__zenbu_plugin_registry__;
+}
+
+/**
+ * Walk up from this module's location until we hit the `@zenbujs/core`
+ * package.json. Cached at first call. Same trick as `findCorePackageRoot`
+ * in `services/db.ts`; consolidated here so the runtime can register
+ * itself without round-tripping through a service file.
+ */
+let cachedCorePluginDir: string | null = null;
+function getCorePluginDir(): string {
+  if (cachedCorePluginDir) return cachedCorePluginDir;
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  let dir = here;
+  while (dir !== path.dirname(dir)) {
+    const pkgPath = path.join(dir, "package.json");
+    try {
+      const parsed = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      if (parsed?.name === "@zenbujs/core") {
+        cachedCorePluginDir = dir;
+        return dir;
+      }
+    } catch {
+      // missing/unparseable; keep climbing
+    }
+    dir = path.dirname(dir);
+  }
+  // Fallback: assume runtime.ts is at <core>/src/runtime.ts (or the
+  // built equivalent at <core>/dist/runtime.mjs).
+  cachedCorePluginDir = path.resolve(here, "..");
+  return cachedCorePluginDir;
+}
+
+function seedCorePlugin(reg: PluginRegistry): void {
+  if (reg.plugins.has(CORE_PLUGIN_NAME)) return;
+  reg.plugins.set(CORE_PLUGIN_NAME, {
+    name: CORE_PLUGIN_NAME,
+    dir: getCorePluginDir(),
+    services: [],
+  });
+}
+
+/**
+ * Resolve the plugin namespace that owns a given service slot's
+ * `pluginDir`. Core services (and anything not declared inside a plugin)
+ * fall back to `"core"`. Used by `buildRouter` to nest the runtime
+ * router by plugin name.
+ */
+function pluginNameForDir(dir: string | null): string {
+  if (!dir) return CORE_PLUGIN_NAME;
+  for (const plugin of getPluginRegistry().plugins.values()) {
+    if (plugin.dir === dir) return plugin.name;
+  }
+  return CORE_PLUGIN_NAME;
 }
 
 function snapshotConfig(reg: PluginRegistry): ConfigSnapshot {
@@ -804,6 +972,12 @@ function notifySubscribers(reg: PluginRegistry): void {
  */
 export function registerPlugin(record: PluginRecord): void {
   const reg = getPluginRegistry();
+  if (record.name === CORE_PLUGIN_NAME) {
+    console.warn(
+      `[zenbu] plugin name "${CORE_PLUGIN_NAME}" is reserved for the core package; ignoring registerPlugin`,
+    );
+    return;
+  }
   reg.plugins.set(record.name, record);
   notifySubscribers(reg);
 }
@@ -820,17 +994,59 @@ export function unregisterPlugin(name: string): void {
 
 /**
  * Replace the entire plugin set in one shot. The loader uses this on every
- * barrel regeneration so removed plugins disappear cleanly.
+ * barrel regeneration so removed plugins disappear cleanly. The synthetic
+ * `core` plugin is always reseeded after the clear so user records cannot
+ * accidentally evict it (and a user record named `"core"` is rejected so
+ * the namespace stays unambiguous).
  */
 export function replacePlugins(records: PluginRecord[]): void {
   const reg = getPluginRegistry();
   reg.plugins.clear();
-  for (const record of records) reg.plugins.set(record.name, record);
+  seedCorePlugin(reg);
+  for (const record of records) {
+    if (record.name === CORE_PLUGIN_NAME) {
+      console.warn(
+        `[zenbu] plugin name "${CORE_PLUGIN_NAME}" is reserved for the core package; ignoring user plugin record`,
+      );
+      continue;
+    }
+    reg.plugins.set(record.name, record);
+  }
   notifySubscribers(reg);
 }
 
 export function getPlugins(): PluginRecord[] {
   return [...getPluginRegistry().plugins.values()];
+}
+
+/**
+ * Find the plugin whose `dir` contains the file at `metaUrl`. The plugin
+ * registry (populated by the loader-emitted barrel before any service
+ * file imports) is the source of truth — no filesystem walking. Returns
+ * the plugin's absolute directory, or `null` if the file lives outside
+ * every registered plugin (the framework's own `@zenbujs/core/services/*`
+ * files take this branch and end up with `slot.pluginDir = null`).
+ *
+ * Picks the deepest matching plugin so a nested workspace plugin wins
+ * over its parent.
+ */
+function findOwningPluginDir(metaUrl: string): string | null {
+  let file: string;
+  try {
+    file = fileURLToPath(metaUrl);
+  } catch {
+    return null;
+  }
+  let bestMatch: { dir: string; depth: number } | null = null;
+  for (const plugin of getPluginRegistry().plugins.values()) {
+    const rel = path.relative(plugin.dir, file);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    const depth = plugin.dir.split(path.sep).length;
+    if (!bestMatch || depth > bestMatch.depth) {
+      bestMatch = { dir: plugin.dir, depth };
+    }
+  }
+  return bestMatch?.dir ?? null;
 }
 
 export function getPlugin(name: string): PluginRecord | undefined {

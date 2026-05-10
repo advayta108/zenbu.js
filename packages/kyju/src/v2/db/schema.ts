@@ -61,6 +61,21 @@ export type InferBlobs<T extends SchemaShape> = {
 export type InferSchema<S extends Schema> =
   S extends Schema<infer TShape> ? TShape : never;
 
+/**
+ * Resolve a `createSchema(...)` value to its live root type in one step:
+ *
+ *     const schema = createSchema({ count: z.number().default(0) })
+ *     type Root = InferSchemaRoot<typeof schema>  // { count: number }
+ *
+ * Equivalent to `InferRoot<InferSchema<typeof schema>>`. Provided so plugin
+ * schemas can be one-liners with no auxiliary type aliases — `zen link`
+ * uses this to derive each section's root from the schema module's
+ * default export.
+ */
+export type InferSchemaRoot<S> = S extends Schema<infer TShape>
+  ? InferRoot<TShape>
+  : never;
+
 type NullableSchema<T> = Omit<T, "_zod"> & { _zod: { output: InferFieldType<T> | null } };
 
 type FieldWithDefault<T> = Field<T, false> & {

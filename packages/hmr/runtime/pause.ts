@@ -1,46 +1,8 @@
 /**
- * Runtime file-watcher pause controls.
+ * Pause HMR
  *
- * Dynohot's `FileWatcher` normally fires module-reload callbacks as soon as
- * it sees a watched file's mtime change. Callers that perform MULTI-STEP
- * filesystem mutations (like a plugin-updater doing `git pull` + `pnpm
- * install`) need a window where those intermediate mtime changes don't
- * trigger hot-reloads — the running process's code and its node_modules
- * must stay in sync, and mid-flight reloads see a half-applied state.
- *
- * Usage:
- *
- *     import { pauseWatcherPath } from "dynohot/pause"
- *     const resume = pauseWatcherPath("/path/to/plugin/repo")
- *     try {
- *       // ...git pull, pnpm install, etc...
- *     } finally {
- *       resume()
- *     }
- *
- * Multiple overlapping pauses on the same prefix are reference-counted; a
- * path is unpaused only when every `resume()` function has been called.
- *
- * Semantics: while a path is paused, dynohot's dispatch STILL runs (so it
- * can track that the file's mtime has advanced), but callbacks DO NOT
- * fire. After resume, the next genuine mtime change fires callbacks as
- * normal. If the caller reverts the files back to their original content
- * (e.g. `git reset --hard`), dynohot's watcher will fire once the reverted
- * mtime differs from the absorbed one — giving the service a chance to
- * re-evaluate back to its pre-pause code.
- */
-
-/**
- * The pause registry is stashed on `globalThis` under a well-known symbol
- * rather than as a module-level binding. Dynohot is often loaded through
- * multiple resolver paths in a single process (loader thread via
- * `module.register`, runtime via `hot:runtime?...` with cache-busting
- * query strings from tsx, etc.) and ESM treats each distinct URL as a
- * separate module instance with its own bindings. A plain
- * `const pauseCounts = new Map()` would yield multiple independent Maps —
- * one caller increments its copy, another caller's copy is still empty,
- * and the pause check silently returns `false`. Routing through the
- * single process-wide `globalThis` object dodges that entirely.
+ * This is currently WIP, on resume the changed modules need to get re-evaluated
+ * for the world to be in a valid state
  */
 
 const PAUSE_KEY = Symbol.for("dynohot.fileWatcher.pauseCounts");
@@ -77,10 +39,7 @@ export function isWatcherPathPaused(absolutePath: string): boolean {
 	const pauseCounts = getPauseCounts();
 	if (pauseCounts.size === 0) return false;
 	for (const prefix of pauseCounts.keys()) {
-		if (
-			absolutePath === prefix ||
-			absolutePath.startsWith(prefix + "/")
-		) {
+		if (absolutePath === prefix || absolutePath.startsWith(prefix + "/")) {
 			return true;
 		}
 	}
@@ -136,7 +95,13 @@ export async function closeAllWatchers(): Promise<void> {
 	const set = getClosables();
 	const all = [...set];
 	set.clear();
-	await Promise.allSettled(all.map((w) => {
-		try { return w.close(); } catch { return; }
-	}));
+	await Promise.allSettled(
+		all.map((w) => {
+			try {
+				return w.close();
+			} catch {
+				return;
+			}
+		})
+	);
 }

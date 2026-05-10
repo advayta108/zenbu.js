@@ -1,6 +1,6 @@
 {
   "name": "@zenbujs/core",
-  "version": "0.0.6",
+  "version": "0.0.11",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -41,6 +41,14 @@
     "./registry": {
       "types": "./dist/registry.d.mts",
       "import": "./dist/registry.mjs"
+    },
+    "./registry-generated": {
+      "types": "./dist/registry-generated.d.mts",
+      "import": "./dist/registry-generated.mjs"
+    },
+    "./events": {
+      "types": "./dist/events.d.mts",
+      "import": "./dist/events.mjs"
     },
     "./schema": {
       "types": "./dist/schema.d.mts",
@@ -83,15 +91,17 @@
   ],
   "scripts": {
     "build": "node --max-old-space-size=8192 ./node_modules/tsdown/dist/run.mjs",
+    "prebuild": "pnpm link:types",
     "dev": "tsdown --watch",
-    "link:types": "node ./dist/cli/bin.mjs link --types-config ./zenbu-types.config.json --registry ./types",
+    "link:types": "tsx ./src/cli/bin.ts link --types-config ./zenbu-types.config.json --out ./src/registry-generated.ts --augment-out ./types/zenbu-register.ts",
     "db:generate": "node ./dist/cli/bin.mjs db generate --schema src/schema.ts --migrations ./migrations",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {
     "electron": "^42.0.0",
-    "react": ">=18"
+    "react": ">=18",
+    "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
     "react": {
@@ -107,14 +117,15 @@
     "electron-context-menu": "^4.1.2",
     "isomorphic-git": "^1.37.6",
     "nanoid": "^5.1.6",
+    "semver": "^7.8.0",
     "tsx": "^4.21.0",
     "vite": "^6.0.0",
-    "ws": "^8.18.0",
-    "zod": "^4.3.6"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
+    "@types/semver": "^7.7.1",
     "@types/ws": "^8.18.0",
     "@zenbu/advice": "workspace:*",
     "@zenbu/kyju": "workspace:*",
@@ -122,6 +133,7 @@
     "electron": "^42.0.0",
     "tsdown": "^0.21.10",
     "typescript": "^5.4.5",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "zod": "^4.3.6"
   }
 }

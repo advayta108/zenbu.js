@@ -100,11 +100,11 @@ export const sectionMigrationPlugin = (
             o.op === "remove" && (o.kind === "collection" || o.kind === "blob"),
         );
         for (const op of removeOps) {
-          await (client as any).plugin?.[name]?.[op.key]?.delete?.();
+          await (client as any)[name]?.[op.key]?.delete?.();
         }
 
         const currentRoot = client.readRoot() as Record<string, any>;
-        const sectionData = currentRoot?.plugin?.[name] ?? {};
+        const sectionData = currentRoot?.[name] ?? {};
 
         const apply = (data: Record<string, any>) => applyOperations(data, ops);
 
@@ -116,8 +116,7 @@ export const sectionMigrationPlugin = (
         }
 
         await client.update((r: any) => {
-          if (!r.plugin) r.plugin = {};
-          r.plugin[name] = newSectionData;
+          r[name] = newSectionData;
         });
 
         const addCollectionOps = ops.filter(
@@ -125,7 +124,7 @@ export const sectionMigrationPlugin = (
             o.op === "add" && o.kind === "collection",
         );
         for (const op of addCollectionOps) {
-          await (client as any).plugin?.[name]?.[op.key]?.create?.();
+          await (client as any)[name]?.[op.key]?.create?.();
         }
 
         const addBlobOps = ops.filter(
@@ -133,13 +132,13 @@ export const sectionMigrationPlugin = (
             o.op === "add" && o.kind === "blob",
         );
         for (const op of addBlobOps) {
-          await (client as any).plugin?.[name]?.[op.key]?.create?.(
+          await (client as any)[name]?.[op.key]?.create?.(
             new Uint8Array(0),
           );
         }
 
         if (migration.afterMigrate) {
-          const sectionClient = (client as any).plugin?.[name];
+          const sectionClient = (client as any)[name];
           await migration.afterMigrate({ client: sectionClient });
         }
 

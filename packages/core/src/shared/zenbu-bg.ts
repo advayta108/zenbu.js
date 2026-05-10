@@ -1,13 +1,20 @@
 import fs from "node:fs"
 import path from "node:path"
+import { nativeTheme } from "electron"
 import { getAppEntrypoint } from "../runtime"
-
-const META_RE = /<meta\s+name=["']zenbu-bg["']\s+content=["']([^"']+)["']/i
+import {
+  parseZenbuBgEntries,
+  pickZenbuBgEntry,
+} from "./zenbu-bg-parse"
 
 /**
- * Read the `<meta name="zenbu-bg" content="#xxx">` value from an HTML
- * file. Returns the configured value, or `fallback` when the file is
- * missing, unreadable, or has no `zenbu-bg` meta tag.
+ * Read the `<meta name="zenbu-bg">` color from an HTML file, picking
+ * the variant that matches the current system theme
+ * (`nativeTheme.shouldUseDarkColors`).
+ *
+ * Multiple tags with `media="(prefers-color-scheme: light|dark)"` are
+ * supported (mirrors the W3C `<meta name="theme-color">` pattern). A
+ * tag without `media` is the unconditional fallback.
  *
  * This convention exists because Electron paints a `BaseWindow`'s
  * `backgroundColor` for the brief window between the window appearing
@@ -15,15 +22,18 @@ const META_RE = /<meta\s+name=["']zenbu-bg["']\s+content=["']([^"']+)["']/i
  * compositor — and similarly the view itself flashes its
  * `setBackgroundColor` before any HTML renders. Reading the meta from
  * the same HTML the renderer will paint keeps both colors in sync with
- * whatever theme the renderer is committing to (`#111` for a dark app,
- * `#F4F4F4` for a light one), so the user never sees a single white
- * frame on window open.
+ * whatever theme the renderer is committing to, so the user never sees
+ * a single mismatched frame on window open.
  */
-export function readZenbuBgColor(htmlPath: string, fallback = "#F4F4F4"): string {
+export function readZenbuBgColor(
+  htmlPath: string,
+  fallback = "#F4F4F4",
+): string {
   try {
     const html = fs.readFileSync(htmlPath, "utf8")
-    const match = html.match(META_RE)
-    if (match?.[1]) return match[1]
+    const entries = parseZenbuBgEntries(html)
+    const picked = pickZenbuBgEntry(entries, nativeTheme.shouldUseDarkColors)
+    if (picked) return picked
   } catch {}
   return fallback
 }

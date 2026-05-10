@@ -12,8 +12,6 @@ interface ParcelEvent {
 }
 
 export interface LinkWatcherOptions {
-  /** Pass-through for `--registry <dir>` if the host CLI took one. */
-  registryOverride?: string | null
   /** Print a one-line `[zen dev] relinked` heartbeat to stderr. */
   verbose?: boolean
 }
@@ -86,10 +84,7 @@ export async function startLinkWatcher(
   // loop, errors during typing are expected and intentionally swallowed.
   let initial: LinkProjectResult | null = null
   try {
-    initial = await linkProject(projectDir, {
-      registryOverride: opts.registryOverride ?? null,
-      quiet: true,
-    })
+    initial = await linkProject(projectDir, { quiet: true })
     if (opts.verbose) console.error(`[zen dev] initial link ok`)
   } catch (err) {
     console.error(
@@ -191,10 +186,7 @@ export async function startLinkWatcher(
     if (closed) return
     relinkInFlight = true
     try {
-      const result = await linkProject(projectDir, {
-        registryOverride: opts.registryOverride ?? null,
-        quiet: true,
-      })
+      const result = await linkProject(projectDir, { quiet: true })
       if (opts.verbose) console.error(`[zen dev] relinked`)
       await reconcileSubscriptions(result)
     } catch {

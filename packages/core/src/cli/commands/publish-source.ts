@@ -1,3 +1,7 @@
+/**
+ * fixme: does not survive deletes from .zenbu, we need to 
+ * resync from remote
+ */
 import fs from "node:fs"
 import fsp from "node:fs/promises"
 import path from "node:path"

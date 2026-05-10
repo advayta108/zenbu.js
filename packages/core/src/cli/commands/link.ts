@@ -1,180 +1,38 @@
-import fs from "node:fs"
-import path from "node:path"
-import { loadConfig } from "../lib/load-config"
-import type { ResolvedPlugin } from "../lib/build-config"
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import {
+  loadConfig,
+  loadPluginFromPath,
+  findConfigPath,
+} from "../lib/load-config";
+import type {
+  ResolvedConfig,
+  ResolvedPlugin,
+  ResolvedPluginDependency,
+} from "../lib/build-config";
 
-type ServiceEntry = { className: string; key: string; filePath: string }
-type SchemaEntry = { name: string; schemaPath: string }
-type PreloadEntry = { name: string; preloadPath: string }
-type EventsEntry = { name: string; eventsPath: string }
-type LinkConfig = {
-  name: string
-  services?: string[]
-  schema?: string
-  preload?: string
-  events?: string
-  devAppPath?: string
-}
-
-const CONFIG_NAMES = ["zenbu.config.ts", "zenbu.config.mts", "zenbu.config.js", "zenbu.config.mjs"]
-
-function findProjectDir(from: string): string | null {
-  let dir = path.resolve(from)
-  while (true) {
-    for (const name of CONFIG_NAMES) {
-      if (fs.existsSync(path.join(dir, name))) return dir
-    }
-    const parent = path.dirname(dir)
-    if (parent === dir) return null
-    dir = parent
-  }
-}
-
-function findFileUp(from: string, name: string): string | null {
-  let dir = path.resolve(from)
-  while (true) {
-    const candidate = path.join(dir, name)
-    if (fs.existsSync(candidate)) return candidate
-    const parent = path.dirname(dir)
-    if (parent === dir) return null
-    dir = parent
-  }
-}
-
-/** jsonc-lite: strips // and /* * / comments and trailing commas. */
-function readJsonLoose(filePath: string): any {
-  const raw = fs.readFileSync(filePath, "utf8")
-  const stripped = raw
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1")
-    .replace(/,\s*([\]}])/g, "$1")
-  return JSON.parse(stripped)
-}
-
-/**
- * Extract the `#registry/*` mapping from a tsconfig (typically a
- * gitignored `tsconfig.local.json`) and return the absolute directory it
- * resolves to. Returns null when the alias isn't declared.
- */
-function readRegistryDirFromTsconfig(tsconfigPath: string): string | null {
-  try {
-    const cfg = readJsonLoose(tsconfigPath)
-    const entry = cfg?.compilerOptions?.paths?.["#registry/*"]
-    if (!Array.isArray(entry) || typeof entry[0] !== "string") return null
-    const raw = entry[0] as string
-    const trimmed = raw.replace(/\/\*$/, "")
-    const baseUrl = typeof cfg?.compilerOptions?.baseUrl === "string"
-      ? path.resolve(path.dirname(tsconfigPath), cfg.compilerOptions.baseUrl)
-      : path.dirname(tsconfigPath)
-    return path.resolve(baseUrl, trimmed)
-  } catch {
-    return null
-  }
-}
-
-/**
- * An app root is the nearest ancestor (or self) that contains a
- * `zenbu.config.ts` (or its .mts/.js/.mjs variants). That single file
- * uniquely identifies a Zenbu project root.
- */
-function findAppRoot(from: string): string | null {
-  return findProjectDir(from)
-}
-
-/**
- * Pick the directory `zen link` should write registry types into.
- * Resolution order:
- *   1. `--registry <dir>` flag / `ZENBU_REGISTRY_DIR` env (escape hatch)
- *   2. Nearest `tsconfig.local.json` ancestor's `#registry/*` mapping
- *      (canonical — this is the same path TS uses to resolve the alias)
- *   3. The manifest's `devAppPath` field (dev hint, fallback)
- *   4. Walk up to the host app root and use `<app>/types`
- *   5. Fail with a message that explains the available knobs
- */
-function resolveRegistryDir(opts: {
-  manifestPath: string
-  manifest: { devAppPath?: string }
-  registryOverride: string | null
-}): string {
-  if (opts.registryOverride) return path.resolve(opts.registryOverride)
-  if (process.env.ZENBU_REGISTRY_DIR) return path.resolve(process.env.ZENBU_REGISTRY_DIR)
-
-  const manifestDir = path.dirname(opts.manifestPath)
-
-  const tsconfigLocal = findFileUp(manifestDir, "tsconfig.local.json")
-  if (tsconfigLocal) {
-    const fromTs = readRegistryDirFromTsconfig(tsconfigLocal)
-    if (fromTs) return fromTs
-  }
-
-  if (opts.manifest.devAppPath) {
-    return path.resolve(manifestDir, opts.manifest.devAppPath, "types")
-  }
-
-  const appRoot = findAppRoot(manifestDir)
-  if (appRoot) return path.join(appRoot, "types")
-
-  throw new Error(
-    `zen link: could not determine target types directory for ${opts.manifestPath}.\n` +
-      `         Try one of:\n` +
-      `         - run from inside an app dir (with a zenbu.config.ts),\n` +
-      `         - add a "devAppPath" field to ${path.basename(opts.manifestPath)} pointing at the host app,\n` +
-      `         - create a tsconfig.local.json with a "#registry/*" path mapping,\n` +
-      `         - or pass --registry <dir>.`,
-  )
-}
-
-function expandGlob(baseDir: string, pattern: string): string[] {
-  if (!pattern.includes("*")) {
-    const full = path.resolve(baseDir, pattern)
-    return fs.existsSync(full) ? [full] : []
-  }
-  const dir = path.resolve(baseDir, path.dirname(pattern))
-  const filePattern = path.basename(pattern)
-  const regex = new RegExp(
-    "^" + filePattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$",
-  )
-  try {
-    return fs
-      .readdirSync(dir)
-      .filter((f) => regex.test(f))
-      .map((f) => path.resolve(dir, f))
-  } catch {
-    return []
-  }
-}
-
-function discoverServices(baseDir: string, serviceGlobs: string[]): ServiceEntry[] {
-  const entries: ServiceEntry[] = []
-  // Matches the canonical service shape and pulls out both the class name
-  // and the key from the same regex:
-  //   export class Foo extends Service.create({
-  //     key: "foo",
-  //     ...
-  //   })
-  const classKeyRe =
-    /export\s+class\s+(\w+)\s+extends\s+Service\.create\s*\(\s*\{[\s\S]*?\bkey\s*:\s*["']([^"']+)["']/
-  for (const glob of serviceGlobs) {
-    for (const filePath of expandGlob(baseDir, glob)) {
-      const content = fs.readFileSync(filePath, "utf8")
-      const match = content.match(classKeyRe)
-      if (match) {
-        entries.push({
-          className: match[1]!,
-          key: match[2]!,
-          filePath,
-        })
-      }
-    }
-  }
-  return entries
-}
-
-function relativeFromRegistry(registryDir: string, absPath: string): string {
-  let rel = path.relative(registryDir, absPath)
-  if (!rel.startsWith(".")) rel = "./" + rel
-  return rel.replace(/\.ts$/, "")
-}
+// ================================================================
+// Layout (v2)
+//
+//   <plugin>/types/
+//     own/
+//       services.ts        // SelfServiceMap (this plugin's services only)
+//       db-sections.ts     // SelfDbSection
+//       events.ts          // SelfEvents
+//       preloads.ts        // SelfPreload
+//       index.ts           // export type Own = { services; db; events; preloads }
+//     deps/<other>/        // vendored copy of upstream's own surface + the
+//                          // source files those imports point at
+//       own/{services,db-sections,events,preloads,index}.ts
+//       <upstream-relative-source-paths>/...
+//       .zenbu-vendored.json
+//     zenbu-register.ts    // composite — augments @zenbujs/core/registry
+//
+// All committed; no gitignored shim. Composites import only the local `./own`
+// and `./deps/<other>/own` indices, never another plugin's composite, so the
+// graph is a strict DAG even with mutual `dependsOn`.
+// ================================================================
 
 const SERVICE_BASE_LITERAL = [
   `  | "evaluate"`,
@@ -184,601 +42,1163 @@ const SERVICE_BASE_LITERAL = [
   `  | "__cleanupAllEffects"`,
   `  | "__effectCleanups"`,
   `  | "ctx"`,
-].join("\n")
+].join("\n");
 
-function generateServicesFile(
-  registryDir: string,
-  allServices: Map<string, ServiceEntry[]>,
-): string {
-  const imports: string[] = []
-  const routerEntries: string[] = []
-  const usedNames = new Map<string, number>()
-  function uniqueName(base: string): string {
-    const count = usedNames.get(base) ?? 0
-    usedNames.set(base, count + 1)
-    return count === 0 ? base : `${base}_${count}`
+const EXTRACT_RPC_DECL = [
+  "type ExtractRpcMethods<T> = {",
+  "  [K in Exclude<keyof T, ServiceBase | `_${string}`> as T[K] extends (",
+  "    ...args: any[]",
+  "  ) => any",
+  "    ? K",
+  "    : never]: T[K]",
+  "}",
+].join("\n");
+
+type ServiceEntry = { className: string; key: string; filePath: string };
+
+interface OwnSurface {
+  plugin: ResolvedPlugin;
+  services: ServiceEntry[];
+  schemaPath?: string;
+  eventsPath?: string;
+  preloadPath?: string;
+}
+
+interface WriteOpts {
+  quiet: boolean;
+}
+
+// =============================================================================
+//                                Discovery
+// =============================================================================
+
+function expandGlob(baseDir: string, pattern: string): string[] {
+  if (!pattern.includes("*")) {
+    const full = path.resolve(baseDir, pattern);
+    return fs.existsSync(full) ? [full] : [];
   }
-  for (const [, services] of allServices) {
-    for (const svc of services) {
-      const alias = uniqueName(svc.className)
-      const importPath = relativeFromRegistry(registryDir, svc.filePath)
-      imports.push(
-        `import type { ${svc.className}${alias !== svc.className ? ` as ${alias}` : ""} } from "${importPath}"`,
-      )
-      const quotedKey = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(svc.key)
-        ? svc.key
-        : `"${svc.key}"`
-      routerEntries.push(`  ${quotedKey}: ExtractRpcMethods<${alias}>`)
+  const dir = path.resolve(baseDir, path.dirname(pattern));
+  const filePattern = path.basename(pattern);
+  const regex = new RegExp(
+    "^" + filePattern.replace(/\./g, "\\.").replace(/\*/g, ".*") + "$",
+  );
+  try {
+    return fs
+      .readdirSync(dir)
+      .filter((f) => regex.test(f))
+      .map((f) => path.resolve(dir, f));
+  } catch {
+    return [];
+  }
+}
+
+const SERVICE_CLASS_KEY_RE =
+  /export\s+class\s+(\w+)\s+extends\s+Service\.create\s*\(\s*\{[\s\S]*?\bkey\s*:\s*["']([^"']+)["']/;
+
+function discoverServices(
+  baseDir: string,
+  serviceGlobs: string[],
+): ServiceEntry[] {
+  const entries: ServiceEntry[] = [];
+  for (const glob of serviceGlobs) {
+    for (const filePath of expandGlob(baseDir, glob)) {
+      const content = fs.readFileSync(filePath, "utf8");
+      const match = content.match(SERVICE_CLASS_KEY_RE);
+      if (match) {
+        entries.push({
+          className: match[1]!,
+          key: match[2]!,
+          filePath,
+        });
+      }
     }
+  }
+  return entries;
+}
+
+function discoverOwnSurface(plugin: ResolvedPlugin): OwnSurface {
+  const serviceGlobs = plugin.services.map((abs) =>
+    path.relative(plugin.dir, abs).split(path.sep).join("/"),
+  );
+  return {
+    plugin,
+    services: discoverServices(plugin.dir, serviceGlobs),
+    schemaPath: plugin.schemaPath,
+    eventsPath: plugin.eventsPath,
+    preloadPath: plugin.preloadPath,
+  };
+}
+
+// =============================================================================
+//                                Helpers
+// =============================================================================
+
+function relImport(from: string, to: string): string {
+  let r = path.relative(from, to).split(path.sep).join("/");
+  if (!r.startsWith(".")) r = "./" + r;
+  return r.replace(/\.ts$/, "");
+}
+
+function quoteKey(name: string): string {
+  return /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name) ? name : `"${name}"`;
+}
+
+function sanitizeIdent(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_$]/g, "_");
+}
+
+function sha256(buf: Buffer | string): string {
+  const h = crypto.createHash("sha256");
+  h.update(buf);
+  return h.digest("hex");
+}
+
+function writeIfChanged(
+  target: string,
+  body: string,
+  opts: WriteOpts,
+  label?: string,
+): boolean {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  let prev: string | null = null;
+  try {
+    prev = fs.readFileSync(target, "utf8");
+  } catch {
+    /* missing — we'll write */
+  }
+  if (prev === body) return false;
+  fs.writeFileSync(target, body);
+  if (!opts.quiet) console.log(`  ${label ?? "Wrote"} ${target}`);
+  return true;
+}
+
+function writeBufferIfChanged(
+  target: string,
+  body: Buffer,
+  opts: WriteOpts,
+): boolean {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  let prev: Buffer | null = null;
+  try {
+    prev = fs.readFileSync(target);
+  } catch {}
+  if (prev && prev.equals(body)) return false;
+  fs.writeFileSync(target, body);
+  if (!opts.quiet) console.log(`  Wrote ${target}`);
+  return true;
+}
+
+/** Recursively delete files in `rootDir` that aren't in `expected` (POSIX paths). */
+function pruneStale(
+  rootDir: string,
+  expected: Set<string>,
+  opts: WriteOpts,
+): void {
+  if (!fs.existsSync(rootDir)) return;
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const rel = path
+        .relative(rootDir, full)
+        .split(path.sep)
+        .join("/");
+      if (entry.isDirectory()) {
+        walk(full);
+        try {
+          if (fs.readdirSync(full).length === 0) fs.rmdirSync(full);
+        } catch {}
+      } else if (!expected.has(rel)) {
+        try {
+          fs.rmSync(full);
+          if (!opts.quiet) console.log(`  Pruned ${full}`);
+        } catch {}
+      }
+    }
+  };
+  walk(rootDir);
+}
+
+/** jsonc-lite: strips // and /* * / comments and trailing commas. */
+function readJsonLoose(raw: string): any {
+  const stripped = raw
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1")
+    .replace(/,\s*([\]}])/g, "$1");
+  return JSON.parse(stripped);
+}
+
+// =============================================================================
+//                          Own surface generation
+// =============================================================================
+
+function generateOwnServicesFile(
+  ownDir: string,
+  surface: OwnSurface,
+): string {
+  const imports: string[] = [];
+  const usedNames = new Map<string, number>();
+  const lines: string[] = [];
+  const uniqueName = (base: string): string => {
+    const count = usedNames.get(base) ?? 0;
+    usedNames.set(base, count + 1);
+    return count === 0 ? base : `${base}_${count}`;
+  };
+  for (const svc of surface.services) {
+    const alias = uniqueName(svc.className);
+    imports.push(
+      `import type { ${svc.className}${
+        alias !== svc.className ? ` as ${alias}` : ""
+      } } from "${relImport(ownDir, svc.filePath)}"`,
+    );
+    lines.push(`  ${quoteKey(svc.key)}: ExtractRpcMethods<${alias}>;`);
   }
   return [
     "// Generated by: zen link",
+    "// DO NOT EDIT. Plugin's own service surface (no other plugins, no core).",
     "",
-    `import type { CoreServiceRouter } from "@zenbujs/core/registry"`,
     ...imports,
     "",
     `type ServiceBase =\n${SERVICE_BASE_LITERAL}`,
     "",
-    "type ExtractRpcMethods<T> = {",
-    "  [K in Exclude<keyof T, ServiceBase | `_${string}`> as T[K] extends (",
-    "    ...args: any[]",
-    "  ) => any",
-    "    ? K",
-    "    : never]: T[K]",
+    EXTRACT_RPC_DECL,
+    "",
+    "export type SelfServiceMap = {",
+    ...lines,
     "}",
     "",
-    "export type PluginServiceRouter = {",
-    ...routerEntries.map((e) => e + ";"),
-    "}",
-    "",
-    "export type ServiceRouter = CoreServiceRouter & PluginServiceRouter",
-    "",
-  ].join("\n")
+  ].join("\n");
 }
 
-function generatePreloadsFile(
-  registryDir: string,
-  allPreloads: Map<string, PreloadEntry>,
-): string {
-  const imports: string[] = []
-  const entries: string[] = []
-  const usedAliases = new Map<string, number>()
-  function uniqueAlias(base: string): string {
-    const count = usedAliases.get(base) ?? 0
-    usedAliases.set(base, count + 1)
-    return count === 0 ? base : `${base}${count}`
-  }
-  for (const [, { name, preloadPath }] of allPreloads) {
-    const camel = name.replace(/(^|[-_])(\w)/g, (_m, _p, c: string) =>
-      _p ? c.toUpperCase() : c,
-    )
-    const alias = uniqueAlias(`${camel}Preload`)
-    const importPath = relativeFromRegistry(registryDir, preloadPath)
-    imports.push(`import type { default as ${alias} } from "${importPath}"`)
-    const quotedName = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name)
-      ? name
-      : `"${name}"`
-    entries.push(`  ${quotedName}: Awaited<ReturnType<typeof ${alias}>>`)
+function generateOwnDbFile(ownDir: string, surface: OwnSurface): string {
+  if (!surface.schemaPath) {
+    return [
+      "// Generated by: zen link",
+      "",
+      "export type SelfDbSection = {}",
+      "",
+    ].join("\n");
   }
   return [
     "// Generated by: zen link",
     "",
-    `import type { CorePreloads } from "@zenbujs/core/registry"`,
-    ...imports,
+    `import type { InferSchemaRoot } from "@zenbujs/core/db"`,
+    `import type schema from "${relImport(ownDir, surface.schemaPath)}"`,
     "",
-    "export type PluginPreloads = {",
-    ...entries.map((e) => e + ";"),
-    "}",
+    "export type SelfDbSection = InferSchemaRoot<typeof schema>",
     "",
-    "export type Preloads = CorePreloads & PluginPreloads",
-    "",
-  ].join("\n")
+  ].join("\n");
 }
 
-function generateEventsFile(
-  registryDir: string,
-  allEvents: Map<string, EventsEntry>,
+function generateOwnEventsFile(
+  ownDir: string,
+  surface: OwnSurface,
 ): string {
-  const imports: string[] = []
-  const aliases: string[] = []
-  const usedAliases = new Map<string, number>()
-  function uniqueAlias(base: string): string {
-    const count = usedAliases.get(base) ?? 0
-    usedAliases.set(base, count + 1)
-    return count === 0 ? base : `${base}${count}`
+  if (!surface.eventsPath) {
+    return [
+      "// Generated by: zen link",
+      "",
+      "export type SelfEvents = {}",
+      "",
+    ].join("\n");
   }
-  for (const [, { name, eventsPath }] of allEvents) {
-    const camel = name.replace(/(^|[-_])(\w)/g, (_m, _p, c: string) =>
-      _p ? c.toUpperCase() : c,
-    )
-    const alias = uniqueAlias(`Events_${camel}`)
-    const importPath = relativeFromRegistry(registryDir, eventsPath)
-    imports.push(`import type { Events as ${alias} } from "${importPath}"`)
-    aliases.push(alias)
-  }
-  // Empty case: PluginEvents is the never-key record. Same shape as
-  // zenrpc's `Record<string, never>` default for `TEvents`, so callers
-  // that do `EmitProxy<PluginEvents>` get a no-op proxy with no events.
-  const body =
-    aliases.length === 0
-      ? "Record<string, never>"
-      : aliases.join(" & ")
   return [
     "// Generated by: zen link",
     "",
-    `import type { CoreEvents } from "@zenbujs/core/registry"`,
-    ...imports,
+    `import type { Events } from "${relImport(ownDir, surface.eventsPath)}"`,
     "",
-    "/**",
-    " * Intersection of every plugin's `Events` type. Plugins extend this",
-    " * by declaring `events: \"./path/to/events.ts\"` in their",
-    " * zenbu.plugin.json and exporting `export type Events = { ... }` from",
-    " * that file. Each plugin chooses its own top-level namespace keys",
-    " * (e.g. `pty`, `bottomTerminal`); colliding keys with different payload",
-    " * shapes collapse to `never` at use sites — caught at compile time.",
-    " */",
-    `export type PluginEvents = CoreEvents & ${body}`,
+    "export type SelfEvents = Events",
     "",
-  ].join("\n")
+  ].join("\n");
+}
+
+function generateOwnPreloadsFile(
+  ownDir: string,
+  surface: OwnSurface,
+): string {
+  if (!surface.preloadPath) {
+    return [
+      "// Generated by: zen link",
+      "",
+      "export type SelfPreload = unknown",
+      "",
+    ].join("\n");
+  }
+  return [
+    "// Generated by: zen link",
+    "",
+    `import type { default as preload } from "${relImport(
+      ownDir,
+      surface.preloadPath,
+    )}"`,
+    "",
+    "export type SelfPreload = Awaited<ReturnType<typeof preload>>",
+    "",
+  ].join("\n");
+}
+
+function generateOwnIndexFile(): string {
+  return [
+    "// Generated by: zen link",
+    "",
+    `import type { SelfServiceMap } from "./services"`,
+    `import type { SelfDbSection } from "./db-sections"`,
+    `import type { SelfEvents } from "./events"`,
+    `import type { SelfPreload } from "./preloads"`,
+    "",
+    "export type Own = {",
+    "  services: SelfServiceMap",
+    "  db: SelfDbSection",
+    "  events: SelfEvents",
+    "  preloads: SelfPreload",
+    "}",
+    "",
+  ].join("\n");
+}
+
+function writeOwnSurface(
+  ownDir: string,
+  surface: OwnSurface,
+  opts: WriteOpts,
+): void {
+  fs.mkdirSync(ownDir, { recursive: true });
+  writeIfChanged(
+    path.join(ownDir, "services.ts"),
+    generateOwnServicesFile(ownDir, surface),
+    opts,
+  );
+  writeIfChanged(
+    path.join(ownDir, "db-sections.ts"),
+    generateOwnDbFile(ownDir, surface),
+    opts,
+  );
+  writeIfChanged(
+    path.join(ownDir, "events.ts"),
+    generateOwnEventsFile(ownDir, surface),
+    opts,
+  );
+  writeIfChanged(
+    path.join(ownDir, "preloads.ts"),
+    generateOwnPreloadsFile(ownDir, surface),
+    opts,
+  );
+  writeIfChanged(
+    path.join(ownDir, "index.ts"),
+    generateOwnIndexFile(),
+    opts,
+  );
+}
+
+// =============================================================================
+//                          Vendored deps (copy upstream)
+// =============================================================================
+
+interface VendorSpec {
+  /** Absolute path to copy from (in upstream's tree). */
+  from: string;
+  /** Relative path inside the deps/<name>/ tree. POSIX-style. */
+  to: string;
+}
+
+function planVendorFiles(
+  upstream: ResolvedPlugin,
+  surface: OwnSurface,
+): VendorSpec[] {
+  const out: VendorSpec[] = [];
+  const seen = new Set<string>();
+  const push = (abs: string): void => {
+    if (seen.has(abs)) return;
+    seen.add(abs);
+    const rel = path
+      .relative(upstream.dir, abs)
+      .split(path.sep)
+      .join("/");
+    if (rel.startsWith("..")) {
+      throw new Error(
+        `zen link: refusing to vendor "${rel}" — file ${abs} is outside upstream plugin dir ${upstream.dir}.`,
+      );
+    }
+    out.push({ from: abs, to: rel });
+  };
+  for (const svc of surface.services) push(svc.filePath);
+  if (surface.schemaPath) push(surface.schemaPath);
+  if (surface.eventsPath) push(surface.eventsPath);
+  if (surface.preloadPath) push(surface.preloadPath);
+  return out;
+}
+
+interface VendoredDepResult {
+  /** Absolute path to the vendored deps/<name>/ folder. */
+  depDir: string;
+  /** Relative POSIX path from `consumerDir/types/zenbu-register.ts` to the dep's own/ index. */
+  ownImportFromComposite: string;
+}
+
+function vendorDepInto(args: {
+  consumerDir: string;
+  depName: string;
+  upstream: ResolvedPlugin;
+  manifestFromAbs: string | null;
+  opts: WriteOpts;
+  driftCheckOnly: boolean;
+}): VendoredDepResult {
+  const { consumerDir, depName, upstream, opts, driftCheckOnly } = args;
+  const surface = discoverOwnSurface(upstream);
+  const depDir = path.join(consumerDir, "types", "deps", depName);
+  fs.mkdirSync(depDir, { recursive: true });
+
+  const planned = planVendorFiles(upstream, surface);
+  const expected = new Set<string>();
+  expected.add(".zenbu-vendored.json");
+  for (const o of [
+    "services.ts",
+    "db-sections.ts",
+    "events.ts",
+    "preloads.ts",
+    "index.ts",
+  ]) {
+    expected.add(`own/${o}`);
+  }
+
+  const driftReport: string[] = [];
+  const fileHashes: Record<string, string> = {};
+  for (const f of planned) {
+    expected.add(f.to);
+    const target = path.join(depDir, f.to);
+    const content = fs.readFileSync(f.from);
+    const newHash = sha256(content);
+    fileHashes[f.to] = newHash;
+    if (driftCheckOnly) {
+      let prev: Buffer | null = null;
+      try {
+        prev = fs.readFileSync(target);
+      } catch {}
+      if (!prev || sha256(prev) !== newHash) {
+        driftReport.push(
+          `  drift: ${path.relative(args.consumerDir, target)}`,
+        );
+      }
+      continue;
+    }
+    writeBufferIfChanged(target, content, opts);
+  }
+
+  // Synthesize a vendored own/ surface that imports from the COPIED files.
+  const vendoredOwnDir = path.join(depDir, "own");
+  const remappedSurface: OwnSurface = {
+    plugin: upstream,
+    services: surface.services.map((svc) => ({
+      ...svc,
+      filePath: path.join(
+        depDir,
+        path.relative(upstream.dir, svc.filePath),
+      ),
+    })),
+    schemaPath: surface.schemaPath
+      ? path.join(depDir, path.relative(upstream.dir, surface.schemaPath))
+      : undefined,
+    eventsPath: surface.eventsPath
+      ? path.join(depDir, path.relative(upstream.dir, surface.eventsPath))
+      : undefined,
+    preloadPath: surface.preloadPath
+      ? path.join(depDir, path.relative(upstream.dir, surface.preloadPath))
+      : undefined,
+  };
+  if (!driftCheckOnly) {
+    writeOwnSurface(vendoredOwnDir, remappedSurface, opts);
+  }
+
+  // Drift manifest. `from` is recorded relative to the dep dir for stable
+  // diffs across host moves. Hashes track the actual vendored files.
+  const manifest = {
+    name: depName,
+    upstream:
+      args.manifestFromAbs == null
+        ? null
+        : {
+            from: path
+              .relative(depDir, args.manifestFromAbs)
+              .split(path.sep)
+              .join("/"),
+          },
+    files: fileHashes,
+    linkedAt: new Date().toISOString(),
+  };
+  const manifestBody = JSON.stringify(manifest, null, 2) + "\n";
+  if (!driftCheckOnly) {
+    // Don't bump linkedAt unless something else changed. Read the existing
+    // manifest, swap linkedAt for comparison, and only write if the
+    // content-bearing fields differ.
+    const manifestPath = path.join(depDir, ".zenbu-vendored.json");
+    let prevSemantic: any = null;
+    try {
+      prevSemantic = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      delete prevSemantic.linkedAt;
+    } catch {}
+    const nextSemantic: any = JSON.parse(manifestBody);
+    delete nextSemantic.linkedAt;
+    if (
+      prevSemantic &&
+      JSON.stringify(prevSemantic) === JSON.stringify(nextSemantic)
+    ) {
+      // No semantic change; skip the write so mtimes stay quiet.
+    } else {
+      fs.writeFileSync(manifestPath, manifestBody);
+      if (!opts.quiet) console.log(`  Wrote ${manifestPath}`);
+    }
+    pruneStale(depDir, expected, opts);
+  } else if (driftReport.length > 0) {
+    throw new Error(
+      [
+        `zen link --check: vendored copies under ${depDir} are stale relative to upstream.`,
+        ...driftReport,
+        "  (run \`zen link\` to refresh.)",
+      ].join("\n"),
+    );
+  }
+
+  return {
+    depDir,
+    ownImportFromComposite: relImport(
+      path.join(consumerDir, "types"),
+      path.join(vendoredOwnDir, "index.ts"),
+    ),
+  };
+}
+
+// =============================================================================
+//                          Composite generation
+// =============================================================================
+
+interface CompositeDep {
+  name: string;
+  ownImport: string;
+}
+
+function generateCompositeFile(args: {
+  selfName: string | null;
+  selfOwnImport: string | null;
+  deps: CompositeDep[];
+}): string {
+  const lines: string[] = [
+    "// Generated by: zen link",
+    "// DO NOT EDIT. Composite augmentation (own + vendored deps) for this plugin.",
+    "",
+    `import type {} from "@zenbujs/core/registry"`,
+    `import type { CoreServiceRouter, CoreEvents, CoreDbSections } from "@zenbujs/core/registry-generated"`,
+  ];
+  if (args.selfName && args.selfOwnImport) {
+    lines.push(
+      `import type { Own as Self_${sanitizeIdent(args.selfName)} } from "${args.selfOwnImport}"`,
+    );
+  }
+  for (const d of args.deps) {
+    lines.push(
+      `import type { Own as Dep_${sanitizeIdent(d.name)} } from "${d.ownImport}"`,
+    );
+  }
+  lines.push("");
+
+  const rpcEntries: string[] = [];
+  const evtEntries: string[] = [];
+  const dbEntries: string[] = [];
+  if (args.selfName && args.selfOwnImport) {
+    const k = quoteKey(args.selfName);
+    const a = sanitizeIdent(args.selfName);
+    rpcEntries.push(`      ${k}: Self_${a}["services"];`);
+    evtEntries.push(`      ${k}: Self_${a}["events"];`);
+    dbEntries.push(`      ${k}: Self_${a}["db"];`);
+  }
+  for (const d of args.deps) {
+    const k = quoteKey(d.name);
+    const a = sanitizeIdent(d.name);
+    rpcEntries.push(`      ${k}: Dep_${a}["services"];`);
+    evtEntries.push(`      ${k}: Dep_${a}["events"];`);
+    dbEntries.push(`      ${k}: Dep_${a}["db"];`);
+  }
+
+  lines.push(`declare module "@zenbujs/core/registry" {`);
+  lines.push(`  interface ZenbuRegister {`);
+  lines.push(`    rpc: CoreServiceRouter & {`);
+  if (rpcEntries.length === 0) lines.push(`      // (no plugins)`);
+  lines.push(...rpcEntries);
+  lines.push(`    };`);
+  lines.push(`    events: CoreEvents & {`);
+  if (evtEntries.length === 0) lines.push(`      // (no plugins)`);
+  lines.push(...evtEntries);
+  lines.push(`    };`);
+  lines.push(`    db: CoreDbSections & {`);
+  if (dbEntries.length === 0) lines.push(`      // (no plugins)`);
+  lines.push(...dbEntries);
+  lines.push(`    };`);
+  lines.push(`  }`);
+  lines.push(`}`);
+  lines.push("");
+  lines.push("export {}");
+  lines.push("");
+  return lines.join("\n");
+}
+
+// =============================================================================
+//                          tsconfig.json bootstrap
+// =============================================================================
+
+const REGISTER_INCLUDE = "./types/zenbu-register.ts";
+
+function bootstrapTsconfigJson(pluginDir: string, opts: WriteOpts): void {
+  const tsconfigPath = path.join(pluginDir, "tsconfig.json");
+  if (!fs.existsSync(tsconfigPath)) return;
+  const raw = fs.readFileSync(tsconfigPath, "utf8");
+  let parsed: Record<string, any>;
+  try {
+    parsed = readJsonLoose(raw);
+  } catch {
+    return;
+  }
+  let mutated = false;
+
+  // Drop the legacy v1 escape-hatch shim. The plugin used to extend a
+  // gitignored tsconfig.local.json that injected `#registry/*` + a host
+  // include; v2 wires the plugin's own composite directly here so the
+  // gitignored shim is now redundant.
+  if (parsed.extends === "./tsconfig.local.json") {
+    delete parsed.extends;
+    mutated = true;
+  }
+
+  // Drop the `#registry/*` path mapping if present — the new model never
+  // resolves anything through it.
+  const co = parsed.compilerOptions;
+  if (co && typeof co === "object" && co.paths && typeof co.paths === "object") {
+    if (co.paths["#registry/*"]) {
+      delete co.paths["#registry/*"];
+      if (Object.keys(co.paths).length === 0) delete co.paths;
+      mutated = true;
+    }
+  }
+
+  const include: unknown = parsed.include;
+  const includeArr: string[] = Array.isArray(include) ? [...include] : [];
+  // Already covered by any of: explicit register file, `types`, `./types`,
+  // `types/**` glob, or `./types/zenbu-register.ts` exact match.
+  const alreadyCovers = includeArr.some(
+    (s) =>
+      typeof s === "string" &&
+      (s === REGISTER_INCLUDE ||
+        s === "types" ||
+        s === "./types" ||
+        s === "types/**" ||
+        s === "types/**/*"),
+  );
+  if (!alreadyCovers) {
+    includeArr.push(REGISTER_INCLUDE);
+    parsed.include = includeArr;
+    mutated = true;
+  } else if (!Array.isArray(include)) {
+    parsed.include = includeArr;
+    mutated = true;
+  }
+
+  if (!mutated) return;
+  const next = JSON.stringify(parsed, null, 2) + "\n";
+  if (next === raw) return;
+  fs.writeFileSync(tsconfigPath, next);
+  if (!opts.quiet) console.log(`  Updated ${tsconfigPath}`);
+
+  // Sweep the legacy file; it's no longer consulted.
+  const legacy = path.join(pluginDir, "tsconfig.local.json");
+  if (fs.existsSync(legacy)) {
+    try {
+      fs.rmSync(legacy);
+      if (!opts.quiet) console.log(`  Removed legacy ${legacy}`);
+    } catch {}
+  }
+}
+
+// =============================================================================
+//                          --types-config (core's self-link)
+// =============================================================================
+
+type LinkConfig = {
+  name: string;
+  services?: string[];
+  schema?: string;
+  preload?: string;
+  events?: string;
+};
+
+/**
+ * Generator: `<core>/src/registry-generated.ts` — the publishable
+ * type surface that downstream apps' composite registries import via
+ * `@zenbujs/core/registry-generated`.
+ *
+ * Plugins still depend on `CoreServiceRouter` / `CoreEvents` /
+ * `CoreDbSections` as stable, namespaced exports, so this surface
+ * keeps the v1 shape (it predates the per-plugin own/ layout). v2's
+ * uniformity benefit only matters for user plugins, where every
+ * plugin author can re-link without touching core.
+ */
+function generateCoreSurfaceFile(args: {
+  services: ServiceEntry[];
+  hasEvents: boolean;
+  hasSchema: boolean;
+}): string {
+  const sorted = [...args.services].sort((a, b) =>
+    a.className.localeCompare(b.className),
+  );
+  const importedNames = sorted.map((s) => `  ${s.className},`).join("\n");
+  const routerEntries = sorted
+    .map((s) => `    ${quoteKey(s.key)}: ExtractRpcMethods<${s.className}>;`)
+    .join("\n");
+  const lines: string[] = [
+    "// Generated by: pnpm link:types",
+    "// DO NOT EDIT. Regenerated automatically (also wired into `prebuild`).",
+    "",
+  ];
+  if (sorted.length > 0) {
+    lines.push("import type {");
+    lines.push(importedNames);
+    lines.push(`} from "@zenbujs/core/services"`);
+  }
+  if (args.hasEvents) {
+    lines.push(
+      `import type { Events as Events_core } from "@zenbujs/core/events"`,
+    );
+  }
+  if (args.hasSchema) {
+    lines.push(`import type schema_core from "@zenbujs/core/schema"`);
+    lines.push(`import type { InferSchemaRoot } from "@zenbujs/core/db"`);
+  }
+  lines.push("");
+  lines.push(`type ServiceBase =\n${SERVICE_BASE_LITERAL}`);
+  lines.push("");
+  lines.push(EXTRACT_RPC_DECL);
+  lines.push("");
+  lines.push("export type CoreServiceRouter = {");
+  lines.push("  core: {");
+  if (routerEntries.length > 0) lines.push(routerEntries);
+  lines.push("  };");
+  lines.push("}");
+  lines.push("");
+  lines.push(
+    `export type CoreEvents = { core: ${args.hasEvents ? "Events_core" : "{}"} }`,
+  );
+  lines.push("");
+  lines.push("export type CoreDbSections = {");
+  if (args.hasSchema)
+    lines.push("  core: InferSchemaRoot<typeof schema_core>;");
+  lines.push("}");
+  lines.push("");
+  lines.push("export type CorePreloads = {}");
+  lines.push("");
+  return lines.join("\n");
 }
 
 /**
- * Generate the module-augmentation that wires `DbRoot`, `ServiceRouter`,
- * and `PluginEvents` from the user's registry into `@zenbujs/core/react`'s
- * `ZenbuRegister` interface. With this in place the renderer hooks are
- * fully typed without a single generic at the call site.
+ * Generator: `<core>/types/zenbu-register.ts` — local-only
+ * augmentation that drives core's own typecheck. NOT in
+ * `package.json#files`; never reaches downstream consumers.
  */
-function generateRegisterFile(): string {
+function generateCoreAugmentFile(): string {
   return [
-    "// Generated by: zen link",
+    "// Generated by: pnpm link:types",
+    "// DO NOT EDIT. Local-only augmentation (NOT shipped via package.json#files).",
+    "// Drives core's own typecheck so useRpc()/useEvents()/useDb() resolve",
+    "// to the registered surface inside packages/core/src/.",
     "",
-    `import type { DbRoot } from "./db-sections"`,
-    `import type { ServiceRouter } from "./services"`,
-    `import type { PluginEvents } from "./events"`,
+    `import type {} from "@zenbujs/core/registry"`,
+    `import type {`,
+    `  CoreServiceRouter,`,
+    `  CoreEvents,`,
+    `  CoreDbSections,`,
+    `} from "../src/registry-generated"`,
     "",
     `declare module "@zenbujs/core/registry" {`,
     "  interface ZenbuRegister {",
-    "    db: DbRoot",
-    "    rpc: ServiceRouter",
-    "    events: PluginEvents",
+    "    rpc: CoreServiceRouter",
+    "    events: CoreEvents",
+    "    db: CoreDbSections",
     "  }",
     "}",
     "",
     "export {}",
     "",
-  ].join("\n")
+  ].join("\n");
 }
 
-function generateDbSectionsFile(
-  registryDir: string,
-  allSchemas: Map<string, SchemaEntry>,
-): string {
-  const imports: string[] = []
-  const sectionEntries: string[] = []
-  const usedAliases = new Map<string, number>()
-  function uniqueAlias(base: string): string {
-    const count = usedAliases.get(base) ?? 0
-    usedAliases.set(base, count + 1)
-    return count === 0 ? base : `${base}${count}`
+function writeCoreSurfaceFiles(args: {
+  services: ServiceEntry[];
+  hasEvents: boolean;
+  hasSchema: boolean;
+  surfaceOut: string;
+  augmentOut: string;
+  ownDir: string | null;
+  ownSurface: OwnSurface | null;
+  opts: WriteOpts;
+}): void {
+  writeIfChanged(
+    args.surfaceOut,
+    generateCoreSurfaceFile({
+      services: args.services,
+      hasEvents: args.hasEvents,
+      hasSchema: args.hasSchema,
+    }),
+    args.opts,
+  );
+  writeIfChanged(args.augmentOut, generateCoreAugmentFile(), args.opts);
+  // Mirror v2's per-plugin layout for core itself: emit `core/types/own/*`
+  // alongside the legacy registry-generated.ts. Downstream plugins don't
+  // import from this path (they import the namespaced Core* exports), but
+  // core's own tooling and tests can use it for uniformity.
+  if (args.ownDir && args.ownSurface) {
+    writeOwnSurface(args.ownDir, args.ownSurface, args.opts);
   }
-  for (const [, { name, schemaPath }] of allSchemas) {
-    const pascal =
-      name.replace(/(^|[-_])(\w)/g, (_m, _p, c: string) => c.toUpperCase()) +
-      "Root"
-    const alias = uniqueAlias(pascal)
-    const importPath = relativeFromRegistry(registryDir, schemaPath)
-    imports.push(`import type { SchemaRoot as ${alias} } from "${importPath}"`)
-    const quotedName = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name)
-      ? name
-      : `"${name}"`
-    sectionEntries.push(`  ${quotedName}: ${alias}`)
-  }
-  return [
-    "// Generated by: zen link",
-    "",
-    `import type { CoreDbSections } from "@zenbujs/core/registry"`,
-    ...imports,
-    "",
-    "export type PluginDbSections = {",
-    ...sectionEntries.map((e) => e + ";"),
-    "}",
-    "",
-    "export type DbSections = CoreDbSections & PluginDbSections",
-    "",
-    "export type DbRoot = { plugin: DbSections }",
-    "",
-  ].join("\n")
 }
 
-function readExistingRegistry(registryDir: string): {
-  services: Map<string, ServiceEntry[]>
-  schemas: Map<string, SchemaEntry>
-  preloads: Map<string, PreloadEntry>
-  events: Map<string, EventsEntry>
-} {
-  const services = new Map<string, ServiceEntry[]>()
-  const schemas = new Map<string, SchemaEntry>()
-  const preloads = new Map<string, PreloadEntry>()
-  const events = new Map<string, EventsEntry>()
-
-  const servicesPath = path.join(registryDir, "services.ts")
-  if (fs.existsSync(servicesPath)) {
-    const content = fs.readFileSync(servicesPath, "utf8")
-    const importRe = /import type \{ (\w+)(?:\s+as\s+(\w+))? \} from "([^"]+)"/g
-    const routerRe = /^\s+(?:"([^"]+)"|(\w+)):\s+ExtractRpcMethods<(\w+)>/gm
-    const importMap = new Map<string, { className: string; filePath: string }>()
-    for (const m of content.matchAll(importRe)) {
-      const className = m[1]!
-      const alias = m[2] ?? m[1]!
-      const relPath = m[3]!
-      const absPath = path.resolve(registryDir, relPath) + ".ts"
-      importMap.set(alias, { className, filePath: absPath })
-    }
-    // We don't try to recover plugin ownership from the existing
-    // services.ts here — the new link flow always re-runs from the host
-    // `zenbu.config.ts`, which is the single source of truth. Anything in
-    // `existing.services` that isn't re-asserted by `linkResolvedPlugin`
-    // gets dropped on write. The map is kept around (vs. dropping the
-    // whole branch) so future incremental link strategies have a starting
-    // point.
-    void importMap
-    void routerRe
-  }
-
-  const dbPath = path.join(registryDir, "db-sections.ts")
-  if (fs.existsSync(dbPath)) {
-    const content = fs.readFileSync(dbPath, "utf8")
-    const importRe = /import type \{ SchemaRoot as (\w+) \} from "([^"]+)"/g
-    const sectionRe = /^\s+(?:"([^"]+)"|(\w+)):\s+(\w+)/gm
-    const importMap = new Map<string, string>()
-    for (const m of content.matchAll(importRe)) {
-      const alias = m[1]!
-      const relPath = m[2]!
-      importMap.set(alias, path.resolve(registryDir, relPath) + ".ts")
-    }
-    for (const m of content.matchAll(sectionRe)) {
-      const name = (m[1] ?? m[2])!
-      const alias = m[3]!
-      const schemaPath = importMap.get(alias)
-      if (schemaPath) schemas.set(name, { name, schemaPath })
-    }
-  }
-  const preloadsPath = path.join(registryDir, "preloads.ts")
-  if (fs.existsSync(preloadsPath)) {
-    const content = fs.readFileSync(preloadsPath, "utf8")
-    const importRe = /import type \{ default as (\w+) \} from "([^"]+)"/g
-    const entryRe = /^\s+(?:"([^"]+)"|(\w+)):\s+Awaited<ReturnType<typeof (\w+)>>/gm
-    const importMap = new Map<string, string>()
-    for (const m of content.matchAll(importRe)) {
-      const alias = m[1]!
-      const relPath = m[2]!
-      importMap.set(alias, path.resolve(registryDir, relPath) + ".ts")
-    }
-    for (const m of content.matchAll(entryRe)) {
-      const name = (m[1] ?? m[2])!
-      const alias = m[3]!
-      const preloadPath = importMap.get(alias)
-      if (preloadPath) preloads.set(name, { name, preloadPath })
-    }
-  }
-
-  // Events ownership recovery would also have walked for zenbu.plugin.json.
-  // Same rationale as `services` above: the new flow re-asserts the full set
-  // from zenbu.config.ts, so we don't need to reverse-engineer the existing
-  // file's contents.
-  return { services, schemas, preloads, events }
-}
+// =============================================================================
+//                                Argv parsing
+// =============================================================================
 
 function parseLinkArgs(argv: string[]): {
-  manifestArg: string | null
-  typesConfigArg: string | null
-  registryOverride: string | null
+  manifestArg: string | null;
+  typesConfigArg: string | null;
+  surfaceOutArg: string | null;
+  augmentOutArg: string | null;
+  ownOutArg: string | null;
+  check: boolean;
 } {
-  let manifestArg: string | null = null
-  let typesConfigArg: string | null = null
-  let registryOverride: string | null = null
+  let manifestArg: string | null = null;
+  let typesConfigArg: string | null = null;
+  let surfaceOutArg: string | null = null;
+  let augmentOutArg: string | null = null;
+  let ownOutArg: string | null = null;
+  let check = false;
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!
-    if (arg === "--registry" && i + 1 < argv.length) registryOverride = argv[++i]!
-    else if (arg.startsWith("--registry=")) registryOverride = arg.slice("--registry=".length)
-    else if (arg === "--types-config" && i + 1 < argv.length) typesConfigArg = argv[++i]!
-    else if (arg.startsWith("--types-config=")) typesConfigArg = arg.slice("--types-config=".length)
-    else if (!arg.startsWith("-") && !manifestArg) manifestArg = arg
+    const arg = argv[i]!;
+    if (arg === "--types-config" && i + 1 < argv.length)
+      typesConfigArg = argv[++i]!;
+    else if (arg.startsWith("--types-config="))
+      typesConfigArg = arg.slice("--types-config=".length);
+    else if (arg === "--out" && i + 1 < argv.length) surfaceOutArg = argv[++i]!;
+    else if (arg.startsWith("--out="))
+      surfaceOutArg = arg.slice("--out=".length);
+    else if (arg === "--augment-out" && i + 1 < argv.length)
+      augmentOutArg = argv[++i]!;
+    else if (arg.startsWith("--augment-out="))
+      augmentOutArg = arg.slice("--augment-out=".length);
+    else if (arg === "--own-out" && i + 1 < argv.length)
+      ownOutArg = argv[++i]!;
+    else if (arg.startsWith("--own-out="))
+      ownOutArg = arg.slice("--own-out=".length);
+    else if (arg === "--check") check = true;
+    else if (!arg.startsWith("-") && !manifestArg) manifestArg = arg;
   }
-  return { manifestArg, typesConfigArg, registryOverride }
+  return {
+    manifestArg,
+    typesConfigArg,
+    surfaceOutArg,
+    augmentOutArg,
+    ownOutArg,
+    check,
+  };
 }
 
-type RegistryState = ReturnType<typeof readExistingRegistry>
-
-/**
- * Variant for path-based plugin sources (a `zenbu.plugin.ts` whose default
- * export is a `definePlugin({...})`). Resolved upstream by `loadConfig` so
- * we just consume the resolved record here.
- */
-function linkResolvedPlugin(
-  plugin: ResolvedPlugin,
-  existing: RegistryState,
-  opts: { quiet: boolean },
-): void {
-  const log = opts.quiet ? () => {} : (msg: string) => console.log(msg)
-  log(`Linking types "${plugin.name}" from ${plugin.dir}`)
-
-  const serviceGlobs = plugin.services.map((abs) =>
-    path.relative(plugin.dir, abs).split(path.sep).join("/"),
-  )
-  const serviceEntries = discoverServices(plugin.dir, serviceGlobs)
-  log(`  Found ${serviceEntries.length} service(s)`)
-
-  const schemaEntry: SchemaEntry | null = plugin.schemaPath
-    ? { name: plugin.name, schemaPath: plugin.schemaPath }
-    : null
-  if (schemaEntry) log(`  Schema: ${schemaEntry.schemaPath}`)
-
-  const preloadEntry: PreloadEntry | null = plugin.preloadPath
-    ? { name: plugin.name, preloadPath: plugin.preloadPath }
-    : null
-  if (preloadEntry) log(`  Preload: ${preloadEntry.preloadPath}`)
-
-  const eventsEntry: EventsEntry | null = plugin.eventsPath
-    ? { name: plugin.name, eventsPath: plugin.eventsPath }
-    : null
-  if (eventsEntry) log(`  Events: ${eventsEntry.eventsPath}`)
-
-  existing.services.set(plugin.name, serviceEntries)
-  if (schemaEntry) existing.schemas.set(plugin.name, schemaEntry)
-  if (preloadEntry) existing.preloads.set(plugin.name, preloadEntry)
-  else existing.preloads.delete(plugin.name)
-  if (eventsEntry) existing.events.set(plugin.name, eventsEntry)
-  else existing.events.delete(plugin.name)
-}
-
-/**
- * Variant for the framework-internal `--types-config <path>` flow where the
- * input is a small JSON file (e.g. `packages/core/zenbu-types.config.json`).
- * Used by `pnpm link:types` inside core to bake its own services/registry
- * types without going through a `zenbu.config.ts`.
- */
-function linkTypesConfig(
-  jsonPath: string,
-  existing: RegistryState,
-  opts: { quiet: boolean },
-): void {
-  const log = opts.quiet ? () => {} : (msg: string) => console.log(msg)
-  const manifest = JSON.parse(fs.readFileSync(jsonPath, "utf8")) as LinkConfig
-  const pluginName = manifest.name
-  const baseDir = path.dirname(jsonPath)
-  log(`Linking types "${pluginName}" from ${baseDir}`)
-
-  const serviceEntries = discoverServices(baseDir, manifest.services ?? [])
-  log(`  Found ${serviceEntries.length} service(s)`)
-
-  const schemaEntry: SchemaEntry | null = manifest.schema
-    ? { name: pluginName, schemaPath: path.resolve(baseDir, manifest.schema) }
-    : null
-  if (schemaEntry) log(`  Schema: ${schemaEntry.schemaPath}`)
-
-  const preloadEntry: PreloadEntry | null = manifest.preload
-    ? { name: pluginName, preloadPath: path.resolve(baseDir, manifest.preload) }
-    : null
-  if (preloadEntry) log(`  Preload: ${preloadEntry.preloadPath}`)
-
-  const eventsEntry: EventsEntry | null = manifest.events
-    ? { name: pluginName, eventsPath: path.resolve(baseDir, manifest.events) }
-    : null
-  if (eventsEntry) log(`  Events: ${eventsEntry.eventsPath}`)
-
-  existing.services.set(pluginName, serviceEntries)
-  if (schemaEntry) existing.schemas.set(pluginName, schemaEntry)
-  if (preloadEntry) existing.preloads.set(pluginName, preloadEntry)
-  else existing.preloads.delete(pluginName)
-  if (eventsEntry) existing.events.set(pluginName, eventsEntry)
-  else existing.events.delete(pluginName)
-}
-
-/**
- * Per-install bootstrap for a plugin. The plugin ships a portable
- * `tsconfig.json` with no host-specific paths; this writes a sibling
- * `tsconfig.local.json` (gitignored) that wires `#registry/*` to the host
- * app's `types/` so the plugin can `import type {...} from "#registry/foo"`
- * the same way the host does. Idempotent.
- *
- * This is the only mechanism that knows where the host lives — it has to
- * be regenerated whenever the plugin moves between hosts.
- */
-/**
- * Generate `<plugin>/tsconfig.local.json` — the BASE config that the
- * plugin's committed `tsconfig.json` extends. This file is gitignored and
- * regenerated by every `zen link` so the host-specific bits (the
- * `#registry/*` path mapping and the registry-augmentation include) move
- * with the plugin's host installation.
- *
- * Why this and not `tsconfig.json` itself: the IDE (VSCode/Cursor) walks
- * up looking for `tsconfig.json` and uses only that one. It never picks up
- * a sibling `tsconfig.local.json` on its own. So we keep `tsconfig.json`
- * as the IDE-discovered, plugin-author-edited entry point and have it
- * `"extends": "./tsconfig.local.json"`. The generated file then carries
- * `paths` + `include`, which TS merges into the IDE's resolved program.
- */
-function writePluginTsconfigLocal(
-  pluginDir: string,
-  registryDir: string,
-  opts: { quiet: boolean },
-): void {
-  const ownTsconfig = path.join(pluginDir, "tsconfig.json")
-  if (!fs.existsSync(ownTsconfig)) {
-    // No tsconfig → not a TypeScript project; skip silently.
-    return
-  }
-  // Skip the host app. The host owns the registry directory and wires
-  // `#registry/*` directly in its primary `tsconfig.json`; a sibling
-  // `tsconfig.local.json` would be a redundant second source of truth.
-  for (const name of CONFIG_NAMES) {
-    if (fs.existsSync(path.join(pluginDir, name))) return
-  }
-  const target = path.join(pluginDir, "tsconfig.local.json")
-  let registryRel = path.relative(pluginDir, registryDir)
-  if (!registryRel.startsWith(".")) registryRel = "./" + registryRel
-  const body = {
-    compilerOptions: {
-      paths: {
-        "#registry/*": [`${registryRel}/*`],
-      },
-    },
-    // TS's `extends` does NOT merge `include`/`exclude`/`files`; the
-    // extending config replaces them entirely. So this base needs to
-    // declare *everything* the plugin should typecheck. The committed
-    // `tsconfig.json` deliberately omits `include` for that reason.
-    include: [
-      "src",
-      // Pulls the central `ZenbuRegister` augmentation (DbRoot,
-      // ServiceRouter, PluginEvents) into the plugin's compilation unit
-      // so `useDb` / `useRpc` / `useEvents` and `DbService.client` are
-      // typed against the merged registry, not core-only fallbacks.
-      `${registryRel}/zenbu-register.ts`,
-    ],
-  }
-  const next = JSON.stringify(body, null, 2) + "\n"
-  let prev: string | null = null
-  try {
-    prev = fs.readFileSync(target, "utf8")
-  } catch {}
-  if (prev === next) return
-  fs.writeFileSync(target, next)
-  if (!opts.quiet) console.log(`  Wrote ${target}`)
-}
+// =============================================================================
+//                                linkProject
+// =============================================================================
 
 export type LinkProjectResult = {
-  registryDir: string
-  resolvedConfigPath: string
-  /**
-   * External plugin source files (`zenbu.plugin.ts` paths) that the loader
-   * imported to resolve the plugin set. Watchers that want to relink on
-   * config edits should treat these as relevant.
-   */
-  pluginSourceFiles: string[]
-  resolved: Awaited<ReturnType<typeof loadConfig>>["resolved"]
+  /** Legacy field. Points at the host's primary types directory. */
+  registryDir: string;
+  resolvedConfigPath: string;
+  pluginSourceFiles: string[];
+  resolved: ResolvedConfig;
+};
+
+export interface LinkProjectOpts {
+  quiet?: boolean;
+  /** Throw if any vendored copy is stale relative to its upstream. */
+  check?: boolean;
 }
 
 /**
- * Programmatic variant of `zen link` for the host-project flow. Throws on
- * any error instead of `process.exit`. Used by:
- *   - `runLink` (CLI entry)
+ * Programmatic entrypoint. Used by:
+ *   - `runLink` (CLI)
  *   - `link-watcher.ts` (file watcher used by `zen dev`)
- *
- * `quiet: true` suppresses the per-step console output the CLI emits — the
- * watcher uses this so the dev terminal stays clean across rapid edits.
  */
 export async function linkProject(
   projectDir: string,
-  opts: { registryOverride?: string | null; quiet?: boolean } = {},
+  opts: LinkProjectOpts = {},
 ): Promise<LinkProjectResult> {
-  const log = opts.quiet ? () => {} : (msg: string) => console.log(msg)
-  const { resolved, pluginSourceFiles } = await loadConfig(projectDir)
+  const writeOpts: WriteOpts = { quiet: !!opts.quiet };
+  const log = opts.quiet ? () => {} : (msg: string) => console.log(msg);
+  const { resolved, pluginSourceFiles } = await loadConfig(projectDir);
 
-  const registryDir = resolveRegistryDir({
-    manifestPath: resolved.configPath,
-    manifest: {},
-    registryOverride: opts.registryOverride ?? null,
-  })
-  log(`Registry: ${registryDir}`)
-
-  fs.mkdirSync(registryDir, { recursive: true })
-  const existing = readExistingRegistry(registryDir)
-  for (const plugin of resolved.plugins) {
-    linkResolvedPlugin(plugin, existing, { quiet: !!opts.quiet })
+  // Sanity: the host (zenbu.config.ts dir) is shared by at most one inline
+  // plugin. If multiple inline plugins claim the same `dir`, their generated
+  // own/ surfaces would collide. This is a config-level mistake.
+  const inlinePlugins = resolved.plugins.filter(
+    (p) => p.dir === resolved.projectDir,
+  );
+  if (inlinePlugins.length > 1) {
+    throw new Error(
+      `zen link: ${resolved.configPath} declares ${inlinePlugins.length} inline plugins ` +
+        `(${inlinePlugins.map((p) => `"${p.name}"`).join(", ")}). ` +
+        `Move all but one into separate zenbu.plugin.ts files so each owns its own types/ dir.`,
+    );
   }
 
-  writeRegistryFiles(registryDir, existing, { quiet: !!opts.quiet })
-
-  // Bootstrap each plugin's per-install tsconfig.local.json so its source
-  // can `#registry/*`-import the same types we just wrote. The host app's
-  // own dir is skipped (it owns the registry and aliases `#registry/*`
-  // directly in its primary tsconfig).
+  // 1) Per-plugin own surface.
   for (const plugin of resolved.plugins) {
-    writePluginTsconfigLocal(plugin.dir, registryDir, { quiet: !!opts.quiet })
+    const surface = discoverOwnSurface(plugin);
+    log(`Linking own surface "${plugin.name}" at ${plugin.dir}`);
+    log(`  ${surface.services.length} service(s)`);
+    if (surface.schemaPath) log(`  schema: ${surface.schemaPath}`);
+    if (surface.eventsPath) log(`  events: ${surface.eventsPath}`);
+    if (surface.preloadPath) log(`  preload: ${surface.preloadPath}`);
+    writeOwnSurface(path.join(plugin.dir, "types/own"), surface, writeOpts);
+  }
+
+  // 2) Vendor deps.
+  // Each plugin gets the subset its `dependsOn` declares. The host inline
+  // plugin (if any) gets every other plugin in the resolved set vendored
+  // implicitly — its composite needs to cover the runtime plugin set even
+  // though the user didn't write a `dependsOn` for it.
+  type Vendored = { depName: string; result: VendoredDepResult };
+  const perPluginVendored = new Map<ResolvedPlugin, Vendored[]>();
+
+  for (const plugin of resolved.plugins) {
+    const vendored: Vendored[] = [];
+    const isHost = plugin.dir === resolved.projectDir;
+    if (isHost) {
+      for (const other of resolved.plugins) {
+        if (other === plugin) continue;
+        log(`Vendoring "${other.name}" into host "${plugin.name}"`);
+        vendored.push({
+          depName: other.name,
+          result: vendorDepInto({
+            consumerDir: plugin.dir,
+            depName: other.name,
+            upstream: other,
+            manifestFromAbs: null,
+            opts: writeOpts,
+            driftCheckOnly: !!opts.check,
+          }),
+        });
+      }
+    } else {
+      for (const dep of plugin.dependsOn ?? []) {
+        const upstream = await loadPluginFromPath({
+          fromPath: dep.fromPath,
+          name: dep.name,
+        });
+        log(`Vendoring "${dep.name}" into "${plugin.name}"`);
+        vendored.push({
+          depName: dep.name,
+          result: vendorDepInto({
+            consumerDir: plugin.dir,
+            depName: dep.name,
+            upstream,
+            manifestFromAbs: dep.fromPath,
+            opts: writeOpts,
+            driftCheckOnly: !!opts.check,
+          }),
+        });
+      }
+    }
+    perPluginVendored.set(plugin, vendored);
+
+    // Stale dep dirs: prune any deps/<name>/ folder that's no longer in the
+    // current dependsOn (or, for the host, no longer in plugins:[]).
+    const wantedDepNames = new Set(vendored.map((v) => v.depName));
+    const depsRoot = path.join(plugin.dir, "types/deps");
+    if (fs.existsSync(depsRoot)) {
+      for (const entry of fs.readdirSync(depsRoot)) {
+        if (wantedDepNames.has(entry)) continue;
+        const stale = path.join(depsRoot, entry);
+        try {
+          fs.rmSync(stale, { recursive: true, force: true });
+          if (!writeOpts.quiet) console.log(`  Pruned ${stale}`);
+        } catch {}
+      }
+    }
+  }
+
+  // 3) Composite per plugin.
+  for (const plugin of resolved.plugins) {
+    const compositePath = path.join(plugin.dir, "types/zenbu-register.ts");
+    const compositeDir = path.dirname(compositePath);
+    const selfOwnImport = relImport(
+      compositeDir,
+      path.join(plugin.dir, "types/own/index.ts"),
+    );
+    const vendored = perPluginVendored.get(plugin) ?? [];
+    const deps: CompositeDep[] = vendored.map((v) => ({
+      name: v.depName,
+      ownImport: relImport(
+        compositeDir,
+        path.join(v.result.depDir, "own/index.ts"),
+      ),
+    }));
+    const body = generateCompositeFile({
+      selfName: plugin.name,
+      selfOwnImport,
+      deps,
+    });
+    if (!opts.check) writeIfChanged(compositePath, body, writeOpts);
+  }
+
+  // 4) tsconfig.json bootstrap (idempotent).
+  if (!opts.check) {
+    for (const plugin of resolved.plugins) {
+      bootstrapTsconfigJson(plugin.dir, writeOpts);
+    }
+    if (inlinePlugins.length === 0) {
+      bootstrapTsconfigJson(resolved.projectDir, writeOpts);
+    }
   }
 
   return {
-    registryDir,
+    registryDir: path.join(resolved.projectDir, "types"),
     resolvedConfigPath: resolved.configPath,
     pluginSourceFiles,
     resolved,
+  };
+}
+
+// =============================================================================
+//                                CLI entrypoint
+// =============================================================================
+
+const CONFIG_NAMES = [
+  "zenbu.config.ts",
+  "zenbu.config.mts",
+  "zenbu.config.js",
+  "zenbu.config.mjs",
+];
+
+function findProjectDir(from: string): string | null {
+  let dir = path.resolve(from);
+  while (true) {
+    for (const name of CONFIG_NAMES) {
+      if (fs.existsSync(path.join(dir, name))) return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
   }
 }
 
 export async function runLink(argv: string[]) {
-  const { manifestArg, typesConfigArg, registryOverride } = parseLinkArgs(argv)
+  const args = parseLinkArgs(argv);
 
-  // Framework-internal escape hatch: `--types-config <foo.json>` ingests a
-  // single small JSON manifest (e.g. core's `zenbu-types.config.json`) and
-  // emits registry types for it. Bypasses zenbu.config.ts entirely.
-  if (typesConfigArg) {
-    const typeConfigPath = path.resolve(typesConfigArg)
-    const rootManifest = JSON.parse(fs.readFileSync(typeConfigPath, "utf8")) as LinkConfig
+  // Framework-internal: core's self-link. Bypasses zenbu.config.ts entirely
+  // and emits the publishable `registry-generated.ts` + a local-only
+  // `zenbu-register.ts` augmentation.
+  if (args.typesConfigArg) {
+    const typeConfigPath = path.resolve(args.typesConfigArg);
+    const rootManifest = JSON.parse(
+      fs.readFileSync(typeConfigPath, "utf8"),
+    ) as LinkConfig;
+    const baseDir = path.dirname(typeConfigPath);
+    const surfaceOut = args.surfaceOutArg
+      ? path.resolve(args.surfaceOutArg)
+      : path.join(baseDir, "src", "registry-generated.ts");
+    const augmentOut = args.augmentOutArg
+      ? path.resolve(args.augmentOutArg)
+      : path.join(baseDir, "types", "zenbu-register.ts");
+    const ownOut = args.ownOutArg
+      ? path.resolve(args.ownOutArg)
+      : path.join(baseDir, "types", "own");
+
     try {
-      const registryDir = resolveRegistryDir({
-        manifestPath: typeConfigPath,
-        manifest: rootManifest,
-        registryOverride,
-      })
-      console.log(`Registry: ${registryDir}`)
-      fs.mkdirSync(registryDir, { recursive: true })
-      const existing = readExistingRegistry(registryDir)
-      linkTypesConfig(typeConfigPath, existing, { quiet: false })
-      writeRegistryFiles(registryDir, existing, { quiet: false })
-      console.log("Done.")
+      console.log(`Linking core types from ${baseDir}`);
+      const services = discoverServices(
+        baseDir,
+        rootManifest.services ?? [],
+      );
+      console.log(`  Found ${services.length} service(s)`);
+      const hasEvents = !!rootManifest.events;
+      const hasSchema = !!rootManifest.schema;
+      if (rootManifest.events)
+        console.log(
+          `  Events: ${path.resolve(baseDir, rootManifest.events)}`,
+        );
+      if (rootManifest.schema)
+        console.log(
+          `  Schema: ${path.resolve(baseDir, rootManifest.schema)}`,
+        );
+
+      // Compose a synthetic ResolvedPlugin so the v2 own-surface generator
+      // can write `core/types/own/*` alongside the legacy registry file.
+      const corePlugin: ResolvedPlugin = {
+        name: rootManifest.name,
+        dir: baseDir,
+        services: (rootManifest.services ?? []).map((s) =>
+          path.resolve(baseDir, s),
+        ),
+        schemaPath: rootManifest.schema
+          ? path.resolve(baseDir, rootManifest.schema)
+          : undefined,
+        eventsPath: rootManifest.events
+          ? path.resolve(baseDir, rootManifest.events)
+          : undefined,
+        preloadPath: rootManifest.preload
+          ? path.resolve(baseDir, rootManifest.preload)
+          : undefined,
+      };
+      const ownSurface: OwnSurface = {
+        plugin: corePlugin,
+        services,
+        schemaPath: corePlugin.schemaPath,
+        eventsPath: corePlugin.eventsPath,
+        preloadPath: corePlugin.preloadPath,
+      };
+
+      writeCoreSurfaceFiles({
+        services,
+        hasEvents,
+        hasSchema,
+        surfaceOut,
+        augmentOut,
+        ownDir: ownOut,
+        ownSurface,
+        opts: { quiet: false },
+      });
+      console.log("Done.");
     } catch (err) {
-      console.error(err instanceof Error ? err.message : err)
-      process.exit(1)
+      console.error(err instanceof Error ? err.message : err);
+      process.exit(1);
     }
-    return
+    return;
   }
 
-  // Normal flow: the host project's `zenbu.config.ts` declares the full
-  // plugin set. We expand all plugins (host + auxiliary) and link them
-  // collectively into the same registry directory.
-  const projectDir = manifestArg
-    ? path.resolve(manifestArg)
-    : findProjectDir(process.cwd())
+  // Default: host project link.
+  const projectDir = args.manifestArg
+    ? path.resolve(args.manifestArg)
+    : findProjectDir(process.cwd());
   if (!projectDir) {
     console.error(
       "zen link: could not find zenbu.config.ts in current directory or any parent.",
-    )
-    console.error("          For internal framework types, pass --types-config <path>.")
-    process.exit(1)
+    );
+    console.error(
+      "          For internal framework types, pass --types-config <path>.",
+    );
+    process.exit(1);
   }
 
   try {
-    await linkProject(projectDir, { registryOverride })
-    console.log("Done.")
+    // Validate the host has a config before doing any work.
+    findConfigPath(projectDir);
+    await linkProject(projectDir, { check: args.check });
+    console.log("Done.");
   } catch (err) {
-    console.error(err instanceof Error ? err.message : err)
-    process.exit(1)
-  }
-}
-
-function writeRegistryFiles(
-  registryDir: string,
-  existing: RegistryState,
-  opts: { quiet: boolean },
-): void {
-  const writes: Array<[string, string]> = [
-    ["services.ts", generateServicesFile(registryDir, existing.services)],
-    ["db-sections.ts", generateDbSectionsFile(registryDir, existing.schemas)],
-    ["preloads.ts", generatePreloadsFile(registryDir, existing.preloads)],
-    ["events.ts", generateEventsFile(registryDir, existing.events)],
-    ["zenbu-register.ts", generateRegisterFile()],
-  ]
-  for (const [name, body] of writes) {
-    const target = path.join(registryDir, name)
-    // Skip writes when content is identical so downstream watchers (Vite,
-    // tsc --watch, the IDE) don't see spurious mtime changes that trigger
-    // unrelated reloads. Critical for the dev-mode link watcher: it can
-    // fire dozens of times during a refactor and most produce no diff.
-    let prev: string | null = null
-    try { prev = fs.readFileSync(target, "utf8") } catch {}
-    if (prev === body) continue
-    fs.writeFileSync(target, body)
-    if (!opts.quiet) console.log(`  Wrote ${target}`)
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
   }
 }

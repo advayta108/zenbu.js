@@ -23,16 +23,30 @@
  * at runtime), and `isomorphic-git` (bundled into this file by tsdown — see
  * `packages/core/tsdown.config.ts` `neverBundle: ["electron"]`).
  */
-import { app, BaseWindow, WebContentsView } from "electron"
-import crypto from "node:crypto"
-import { spawn } from "node:child_process"
-import { existsSync } from "node:fs"
-import fs from "node:fs"
-import fsp from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
-import * as git from "isomorphic-git"
-import http from "isomorphic-git/http/node"
+import { app, BaseWindow, WebContentsView, nativeTheme } from "electron";
+import { existsSync } from "node:fs";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import * as git from "isomorphic-git";
+import http from "isomorphic-git/http/node";
+import {
+  type InstallReporter,
+  type InstallStepId,
+  type PackageManagerSpec,
+  type InstallProgress,
+  depsSignature,
+  readDepsSig,
+  runInstall,
+  writeDepsSig,
+} from "./shared/pm-install";
+import { readHostVersion } from "./shared/host-version";
+import { resolveTargetSha } from "./shared/range-resolver";
+import {
+  parseZenbuBgEntries,
+  pickZenbuBgEntry,
+} from "./shared/zenbu-bg-parse";
 
 // =============================================================================
 //                          stdio + logging safety net
@@ -48,65 +62,76 @@ import http from "isomorphic-git/http/node"
 // call the captured reference forever. The reliable fix is to patch the
 // underlying *streams* (`process.stdout.write`, `process.stderr.write`) so
 // even the captured-original `console.error` flows through our try/catch.
-const _logDir = path.join(os.homedir(), ".zenbu", ".internal")
-fs.mkdirSync(_logDir, { recursive: true })
-const _logStream = fs.createWriteStream(path.join(_logDir, "launcher.log"), { flags: "a" })
-_logStream.write(`\n=== launcher ${new Date().toISOString()} pid=${process.pid} ===\n`)
+/**
+ * fixme this is nonsense
+ */
+const _logDir = path.join(os.homedir(), ".zenbu", ".internal");
+fs.mkdirSync(_logDir, { recursive: true });
+const _logStream = fs.createWriteStream(path.join(_logDir, "launcher.log"), {
+  flags: "a",
+});
+_logStream.write(
+  `\n=== launcher ${new Date().toISOString()} pid=${process.pid} ===\n`,
+);
 
-function silenceStream(stream: NodeJS.WriteStream | undefined, prefix: string): void {
-  if (!stream) return
-  const original = stream.write.bind(stream)
+function silenceStream(
+  stream: NodeJS.WriteStream | undefined,
+  prefix: string,
+): void {
+  if (!stream) return;
+  const original = stream.write.bind(stream);
   const safeWrite = ((
     chunk: string | Uint8Array,
     encodingOrCb?: BufferEncoding | ((err?: Error | null) => void),
     cb?: (err?: Error | null) => void,
   ): boolean => {
     try {
-      const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")
-      _logStream.write(prefix + text)
+      const text =
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      _logStream.write(prefix + text);
     } catch {}
     try {
-      return original(chunk as never, encodingOrCb as never, cb as never)
+      return original(chunk as never, encodingOrCb as never, cb as never);
     } catch {
-      return true
+      return true;
     }
-  }) as NodeJS.WriteStream["write"]
-  ;(stream as unknown as { write: NodeJS.WriteStream["write"] }).write = safeWrite
-  stream.on("error", () => {})
+  }) as NodeJS.WriteStream["write"];
+  (stream as unknown as { write: NodeJS.WriteStream["write"] }).write =
+    safeWrite;
+  stream.on("error", () => {});
 }
 
-silenceStream(process.stdout, "")
-silenceStream(process.stderr, "[ERR] ")
+silenceStream(process.stdout, "");
+silenceStream(process.stderr, "[ERR] ");
 
 process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
-  try { _logStream.write("[UNCAUGHT] " + (err.stack ?? err.message ?? String(err)) + "\n") } catch {}
-  if (err.code === "EPIPE") return
-})
+  try {
+    _logStream.write(
+      "[UNCAUGHT] " + (err.stack ?? err.message ?? String(err)) + "\n",
+    );
+  } catch {}
+  if (err.code === "EPIPE") return;
+});
 process.on("unhandledRejection", (reason: unknown) => {
   try {
-    const err = reason as NodeJS.ErrnoException | undefined
-    _logStream.write("[UNHANDLED] " + (err?.stack ?? err?.message ?? String(reason)) + "\n")
+    const err = reason as NodeJS.ErrnoException | undefined;
+    _logStream.write(
+      "[UNHANDLED] " + (err?.stack ?? err?.message ?? String(reason)) + "\n",
+    );
   } catch {}
-})
-
-type PackageManagerSpec =
-  | { type: "pnpm"; version: string }
-  | { type: "npm"; version: string }
-  | { type: "yarn"; version: string }
-  | { type: "bun"; version: string }
+});
 
 interface AppConfig {
-  name: string
-  mirrorUrl?: string
-  branch?: string
-  version?: string
-  host?: string
+  name: string;
+  mirrorUrl?: string;
+  branch?: string;
+  version?: string;
   /**
    * Which PM to use for first-launch install. Older bundles built before
    * this field existed get an implicit pnpm@10.33.0 (matches the previous
    * hardcoded behavior).
    */
-  packageManager?: PackageManagerSpec
+  packageManager?: PackageManagerSpec;
   /**
    * Path (relative to the .app's `Resources/`) of the staged
    * `installing.html`, when the user shipped one. When set, the launcher
@@ -114,40 +139,22 @@ interface AppConfig {
    * IPC progress events to it. Older bundles without this field get the
    * old "no window during install" behavior (just a dock bounce).
    */
-  installingHtml?: string
+  installingHtml?: string;
   /**
    * Path (relative to `Resources/`) of the framework's built-in preload
    * that exposes `window.zenbuInstall`. Always set when `installingHtml`
    * is set.
    */
-  installingPreload?: string
+  installingPreload?: string;
 }
 
 const LEGACY_PACKAGE_MANAGER: PackageManagerSpec = {
   type: "pnpm",
   version: "10.33.0",
-}
+};
 
-function lockfileFor(type: PackageManagerSpec["type"]): string {
-  switch (type) {
-    case "pnpm":
-      return "pnpm-lock.yaml"
-    case "npm":
-      return "package-lock.json"
-    case "yarn":
-      return "yarn.lock"
-    case "bun":
-      return "bun.lock"
-  }
-}
-
-function isYarnBerry(version: string): boolean {
-  const major = parseInt(version.split(".")[0] ?? "", 10)
-  return Number.isFinite(major) && major >= 2
-}
-
-const APP_PATH = app.getAppPath()
-const RESOURCES_PATH = path.dirname(APP_PATH)
+const APP_PATH = app.getAppPath();
+const RESOURCES_PATH = path.dirname(APP_PATH);
 
 // =============================================================================
 //                          installing.html window
@@ -169,60 +176,62 @@ const RESOURCES_PATH = path.dirname(APP_PATH)
 // via `globalThis.__zenbu_boot_windows__`; setup-gate's `spawnSplashWindow`
 // adopts it and swaps the WebContentsView in place for splash content.
 
-type InstallStepId = "clone" | "fetch" | "install" | "handoff"
-type InstallEvent = "step" | "message" | "progress" | "done" | "error"
+type InstallEvent = "step" | "message" | "progress" | "done" | "error";
 
-interface ProgressPayload {
-  phase?: string
-  loaded?: number
-  total?: number
-  ratio?: number
-}
+type ProgressPayload = InstallProgress;
 
-interface Installer {
-  emit(event: InstallEvent, payload: unknown): void
-  step(id: InstallStepId, label: string): void
-  done(id: InstallStepId): void
-  message(text: string): void
-  progress(payload: ProgressPayload): void
-  fail(err: unknown, id?: InstallStepId): void
+interface Installer extends InstallReporter {
+  emit(event: InstallEvent, payload: unknown): void;
+  step(id: InstallStepId, label: string): void;
+  done(id: InstallStepId): void;
+  message(text: string): void;
+  progress(payload: ProgressPayload): void;
+  fail(err: unknown, id?: InstallStepId): void;
   /** Currently-active step id, or null before any step has been emitted. */
-  readonly currentStep: InstallStepId | null
+  readonly currentStep: InstallStepId | null;
   /**
    * Hand the BaseWindow off to setup-gate via globalThis.__zenbu_boot_windows__,
    * so setup-gate's spawnSplashWindow can adopt it and swap content in
    * place (no second window flash).
    */
-  handoff(): void
+  handoff(): void;
 }
 
 function readBgColor(htmlPath: string, fallback: string): string {
   try {
-    const html = fs.readFileSync(htmlPath, "utf8")
-    const match = html.match(
-      /<meta\s+name=["']zenbu-bg["']\s+content=["']([^"']+)["']/i,
-    )
-    if (match?.[1]) return match[1]
+    const html = fs.readFileSync(htmlPath, "utf8");
+    const entries = parseZenbuBgEntries(html);
+    const picked = pickZenbuBgEntry(
+      entries,
+      nativeTheme.shouldUseDarkColors,
+    );
+    if (picked) return picked;
   } catch {}
-  return fallback
+  return fallback;
 }
 
-async function maybeOpenInstallingWindow(cfg: AppConfig): Promise<Installer | null> {
-  if (!cfg.installingHtml) return null
-  const htmlPath = path.join(RESOURCES_PATH, cfg.installingHtml)
+async function maybeOpenInstallingWindow(
+  cfg: AppConfig,
+): Promise<Installer | null> {
+  if (!cfg.installingHtml) return null;
+  const htmlPath = path.join(RESOURCES_PATH, cfg.installingHtml);
   if (!existsSync(htmlPath)) {
-    _logStream.write(`[installer] installing.html not found at ${htmlPath}; skipping window\n`)
-    return null
+    _logStream.write(
+      `[installer] installing.html not found at ${htmlPath}; skipping window\n`,
+    );
+    return null;
   }
   const preloadPath = cfg.installingPreload
     ? path.join(RESOURCES_PATH, cfg.installingPreload)
-    : null
+    : null;
   if (!preloadPath || !existsSync(preloadPath)) {
-    _logStream.write(`[installer] installing-preload.cjs not found at ${preloadPath}; skipping window\n`)
-    return null
+    _logStream.write(
+      `[installer] installing-preload.cjs not found at ${preloadPath}; skipping window\n`,
+    );
+    return null;
   }
 
-  const backgroundColor = readBgColor(htmlPath, "#F4F4F4")
+  const backgroundColor = readBgColor(htmlPath, "#F4F4F4");
   // Match the splash window dimensions / chrome so the handoff is seamless
   // (setup-gate's spawnSplashWindow adopts this BaseWindow as-is).
   const win = new BaseWindow({
@@ -231,7 +240,7 @@ async function maybeOpenInstallingWindow(cfg: AppConfig): Promise<Installer | nu
     titleBarStyle: "hidden",
     trafficLightPosition: { x: 14, y: 10 },
     backgroundColor,
-  })
+  });
   const view = new WebContentsView({
     webPreferences: {
       preload: preloadPath,
@@ -239,14 +248,28 @@ async function maybeOpenInstallingWindow(cfg: AppConfig): Promise<Installer | nu
       sandbox: true,
       nodeIntegration: false,
     },
-  })
-  win.contentView.addChildView(view)
+  });
+  win.contentView.addChildView(view);
   const layout = (): void => {
-    const { width, height } = win.getContentBounds()
-    view.setBounds({ x: 0, y: 0, width, height })
-  }
-  layout()
-  win.on("resize", layout)
+    const { width, height } = win.getContentBounds();
+    view.setBounds({ x: 0, y: 0, width, height });
+  };
+  layout();
+  win.on("resize", layout);
+
+  // Re-pick the BG color when the OS theme flips during install. The HTML's
+  // own CSS adapts via `prefers-color-scheme`; this keeps the BaseWindow's
+  // pre-paint color in sync so the window edges (visible during resize /
+  // around rounded corners) don't show the wrong-theme color.
+  const onThemeChange = (): void => {
+    try {
+      win.setBackgroundColor(readBgColor(htmlPath, "#F4F4F4"));
+    } catch {}
+  };
+  nativeTheme.on("updated", onThemeChange);
+  win.on("closed", () => {
+    nativeTheme.removeListener("updated", onThemeChange);
+  });
 
   // Buffer events emitted before the page has finished loading. `loadFile`
   // resolves on did-finish-load, but the first launcher events (step("clone"))
@@ -254,429 +277,95 @@ async function maybeOpenInstallingWindow(cfg: AppConfig): Promise<Installer | nu
   // before the renderer process has attached its preload + page listeners.
   // Without buffering, those early events are silently dropped and the UI
   // stays stuck on its initial state.
-  let ready = false
-  type Pending = { event: InstallEvent; payload: unknown }
-  const pending: Pending[] = []
+  let ready = false;
+  type Pending = { event: InstallEvent; payload: unknown };
+  const pending: Pending[] = [];
   view.webContents.once("did-finish-load", () => {
-    ready = true
+    ready = true;
     for (const p of pending) {
       try {
-        if (view.webContents.isDestroyed()) break
-        view.webContents.send(`zenbu:install:${p.event}`, p.payload)
+        if (view.webContents.isDestroyed()) break;
+        view.webContents.send(`zenbu:install:${p.event}`, p.payload);
       } catch {}
     }
-    pending.length = 0
-  })
+    pending.length = 0;
+  });
   view.webContents.once("did-fail-load", (_e, _code, desc) => {
-    _logStream.write(`[installer] did-fail-load: ${desc}\n`)
+    _logStream.write(`[installer] did-fail-load: ${desc}\n`);
     // Drain anyway so we don't leak the buffer; the events are lost but
     // the launcher continues to make progress.
-    pending.length = 0
-    ready = true
-  })
+    pending.length = 0;
+    ready = true;
+  });
 
   void view.webContents.loadFile(htmlPath).catch((err) => {
-    _logStream.write(`[installer] loadFile failed: ${(err as Error).message ?? err}\n`)
-  })
+    _logStream.write(
+      `[installer] loadFile failed: ${(err as Error).message ?? err}\n`,
+    );
+  });
 
   const emit = (event: InstallEvent, payload: unknown): void => {
     if (!ready) {
-      pending.push({ event, payload })
-      return
+      pending.push({ event, payload });
+      return;
     }
     try {
-      if (view.webContents.isDestroyed()) return
-      view.webContents.send(`zenbu:install:${event}`, payload)
+      if (view.webContents.isDestroyed()) return;
+      view.webContents.send(`zenbu:install:${event}`, payload);
     } catch {}
-  }
+  };
 
-  let currentStep: InstallStepId | null = null
+  let currentStep: InstallStepId | null = null;
   const installer: Installer = {
     emit,
-    get currentStep() { return currentStep },
-    step(id, label) {
-      currentStep = id
-      emit("step", { id, label })
+    get currentStep() {
+      return currentStep;
     },
-    done(id) { emit("done", { id }) },
-    message(text) { emit("message", { text }) },
-    progress(payload) { emit("progress", payload) },
+    step(id, label) {
+      currentStep = id;
+      emit("step", { id, label });
+    },
+    done(id) {
+      emit("done", { id });
+    },
+    message(text) {
+      emit("message", { text });
+    },
+    progress(payload) {
+      emit("progress", payload);
+    },
     fail(err, id) {
-      const message = err instanceof Error ? (err.stack ?? err.message) : String(err)
-      emit("error", { id: id ?? currentStep ?? undefined, message })
+      const message =
+        err instanceof Error ? err.stack ?? err.message : String(err);
+      emit("error", { id: id ?? currentStep ?? undefined, message });
     },
     handoff() {
       const slot = globalThis as unknown as {
-        __zenbu_boot_windows__?: Array<{ windowId: string; win: BaseWindow }>
-      }
+        __zenbu_boot_windows__?: Array<{ windowId: string; win: BaseWindow }>;
+      };
       slot.__zenbu_boot_windows__ = [
         ...(slot.__zenbu_boot_windows__ ?? []),
         { windowId: "main", win },
-      ]
+      ];
     },
-  }
-  return installer
+  };
+  return installer;
 }
 
 function readAppConfig(): AppConfig {
-  const configPath = path.join(APP_PATH, "app-config.json")
-  return JSON.parse(fs.readFileSync(configPath, "utf8")) as AppConfig
+  const configPath = path.join(APP_PATH, "app-config.json");
+  return JSON.parse(fs.readFileSync(configPath, "utf8")) as AppConfig;
 }
 
 function appsDirFor(name: string): string {
-  if (process.env.ZENBU_APPS_DIR) return path.resolve(process.env.ZENBU_APPS_DIR)
-  return path.join(os.homedir(), ".zenbu", "apps", name)
-}
-
-async function fileHash(hash: crypto.Hash, filePath: string): Promise<void> {
-  hash.update(filePath)
-  hash.update("\0")
-  try {
-    hash.update(await fsp.readFile(filePath))
-  } catch {}
-  hash.update("\0")
-}
-
-async function depsSignature(
-  appsDir: string,
-  pm: PackageManagerSpec,
-): Promise<string> {
-  const hash = crypto.createHash("sha256")
-  await fileHash(hash, path.join(appsDir, "package.json"))
-  await fileHash(hash, path.join(appsDir, lockfileFor(pm.type)))
-  hash.update(`${pm.type}@${pm.version}`)
-  hash.update("\0")
-  hash.update(process.versions.electron ?? "no-electron")
-  hash.update("\0")
-  hash.update(process.platform)
-  hash.update("\0")
-  hash.update(process.arch)
-  return hash.digest("hex")
-}
-
-function bundledToolPath(name: string): string | null {
-  const candidates = [
-    path.join(RESOURCES_PATH, "toolchain", "bin", name),
-    path.join(RESOURCES_PATH, "toolchain", name),
-  ]
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
-  }
-  return null
-}
-
-/**
- * Resolve the entrypoint we'll exec for a given PM, mirroring the layout
- * `provisionToolchain` writes into the bundle's `Resources/toolchain/`.
- */
-function bundledPmEntry(pm: PackageManagerSpec):
-  | { kind: "bin"; path: string }
-  | { kind: "js"; path: string }
-  | { kind: "bun" } {
-  switch (pm.type) {
-    case "pnpm": {
-      const p = path.join(
-        RESOURCES_PATH,
-        "toolchain",
-        "pnpm",
-        "bin",
-        "pnpm.cjs",
-      )
-      if (!existsSync(p)) {
-        throw new Error(
-          `bundled pnpm entry not found at ${p}. The .app's toolchain is incomplete.`,
-        )
-      }
-      return { kind: "js", path: p }
-    }
-    case "npm": {
-      const p = path.join(RESOURCES_PATH, "toolchain", "npm", "bin", "npm-cli.js")
-      if (!existsSync(p)) {
-        throw new Error(
-          `bundled npm entry not found at ${p}. The .app's toolchain is incomplete.`,
-        )
-      }
-      return { kind: "js", path: p }
-    }
-    case "yarn": {
-      if (isYarnBerry(pm.version)) {
-        const p = path.join(RESOURCES_PATH, "toolchain", "yarn.cjs")
-        if (!existsSync(p)) {
-          throw new Error(
-            `bundled yarn (berry) entry not found at ${p}. The .app's toolchain is incomplete.`,
-          )
-        }
-        return { kind: "js", path: p }
-      }
-      const p = path.join(RESOURCES_PATH, "toolchain", "yarn", "bin", "yarn.js")
-      if (!existsSync(p)) {
-        throw new Error(
-          `bundled yarn (classic) entry not found at ${p}. The .app's toolchain is incomplete.`,
-        )
-      }
-      return { kind: "js", path: p }
-    }
-    case "bun":
-      return { kind: "bun" }
-  }
-}
-
-function electronTargetVersion(appsDir: string): string {
-  if (process.versions.electron) return process.versions.electron
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(appsDir, "package.json"), "utf8")) as {
-      dependencies?: Record<string, string>
-      devDependencies?: Record<string, string>
-    }
-    const version =
-      pkg.devDependencies?.electron ??
-      pkg.dependencies?.electron ??
-      ""
-    return version.replace(/^[^\d]*/, "") || "42.0.0"
-  } catch {
-    return "42.0.0"
-  }
-}
-
-function buildInstallEnv(appsDir: string): NodeJS.ProcessEnv {
-  const target = electronTargetVersion(appsDir)
-  return {
-    ...process.env,
-    CI: "true",
-    HOME: path.join(appsDir, ".zenbu", ".node-gyp"),
-    npm_config_runtime: "electron",
-    npm_config_target: target,
-    npm_config_disturl: "https://electronjs.org/headers",
-    npm_config_arch: process.arch,
-  }
-}
-
-/**
- * Best-effort progress regex per package manager. We pass each stdout line
- * through these and emit a `progress` event when one matches; otherwise
- * the line is forwarded as a `message` only. Failing to match is fine —
- * the UI just won't show fine-grained progress for that PM.
- *
- * No generic `N/M` fallback: it false-positives on common log lines like
- * `package@1.2.3/4.5.6` or unrelated paths/version strings, which would
- * make the progress bar jump around for no reason.
- */
-const PNPM_RESOLVED_RE = /Progress:\s+resolved\s+(\d+),\s+reused\s+(\d+),\s+downloaded\s+(\d+)/i
-function parseInstallProgress(
-  pm: PackageManagerSpec["type"],
-  line: string,
-): ProgressPayload | null {
-  if (pm === "pnpm") {
-    const m = line.match(PNPM_RESOLVED_RE)
-    if (m) {
-      const resolved = parseInt(m[1]!, 10)
-      const reused = parseInt(m[2]!, 10)
-      const downloaded = parseInt(m[3]!, 10)
-      if (Number.isFinite(resolved) && Number.isFinite(reused) && Number.isFinite(downloaded)) {
-        return {
-          phase: "resolve",
-          loaded: reused + downloaded,
-          total: resolved,
-          ratio: resolved > 0 ? (reused + downloaded) / resolved : undefined,
-        }
-      }
-    }
-  }
-  return null
-}
-
-function spawnInstall(
-  bin: string,
-  args: string[],
-  appsDir: string,
-  env: NodeJS.ProcessEnv,
-  label: string,
-  installer: Installer | null,
-  pmType: PackageManagerSpec["type"],
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    // When there's no installer, keep the original stdio: "inherit" so
-    // logs flow through the launcher's stream-patching path. When there
-    // IS an installer, we pipe so we can split into lines, forward to the
-    // log, AND emit IPC events.
-    const useInstaller = installer != null
-    const child = spawn(bin, args, {
-      cwd: appsDir,
-      stdio: useInstaller ? ["inherit", "pipe", "pipe"] : "inherit",
-      env,
-    })
-    if (useInstaller) {
-      const wireStream = (
-        stream: NodeJS.ReadableStream | null,
-        prefix: string,
-      ): void => {
-        if (!stream) return
-        let buf = ""
-        stream.setEncoding("utf8")
-        stream.on("data", (chunk: string) => {
-          buf += chunk
-          let nl: number
-          while ((nl = buf.indexOf("\n")) >= 0) {
-            const rawLine = buf.slice(0, nl)
-            buf = buf.slice(nl + 1)
-            const line = rawLine.replace(/\r/g, "").trimEnd()
-            try { _logStream.write(prefix + rawLine + "\n") } catch {}
-            if (!line) continue
-            installer.message(line)
-            const progress = parseInstallProgress(pmType, line)
-            if (progress) installer.progress(progress)
-          }
-        })
-        stream.on("end", () => {
-          if (buf.length > 0) {
-            try { _logStream.write(prefix + buf) } catch {}
-            const line = buf.replace(/\r/g, "").trimEnd()
-            if (line) installer.message(line)
-          }
-        })
-      }
-      wireStream(child.stdout, "")
-      wireStream(child.stderr, "[ERR] ")
-    }
-    child.on("error", reject)
-    child.on("close", (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`${label} exited with code ${code}`))
-    })
-  })
-}
-
-async function runInstall(
-  appsDir: string,
-  pm: PackageManagerSpec,
-  installer: Installer | null,
-): Promise<void> {
-  const env = buildInstallEnv(appsDir)
-  const entry = bundledPmEntry(pm)
-
-  switch (pm.type) {
-    case "pnpm": {
-      // pnpm respects CI=true for non-interactive mode; --reporter=append-only
-      // keeps stdout sane when stdio is piped to a closed launchd handle.
-      // We run via bundled bun so that ALL pnpm versions work (the npm
-      // registry tarball is integrity-verified at build time, whereas the
-      // standalone GitHub binary only carries attestation digests for
-      // recent releases).
-      if (entry.kind !== "js") throw new Error("internal: pnpm entry shape")
-      const bun = bundledToolPath("bun")
-      if (!bun)
-        throw new Error(
-          `bundled bun not found in ${RESOURCES_PATH}/toolchain (required to host the pnpm.cjs entry)`,
-        )
-      await spawnInstall(
-        bun,
-        [entry.path, "install", "--reporter=append-only"],
-        appsDir,
-        env,
-        "pnpm install",
-        installer,
-        pm.type,
-      )
-      return
-    }
-    case "npm": {
-      if (entry.kind !== "js") throw new Error("internal: npm entry shape")
-      const bun = bundledToolPath("bun")
-      if (!bun)
-        throw new Error(
-          `bundled bun not found in ${RESOURCES_PATH}/toolchain (required to host the npm-cli.js entry)`,
-        )
-      await spawnInstall(
-        bun,
-        [entry.path, "install", "--no-audit", "--no-fund", "--no-progress"],
-        appsDir,
-        env,
-        "npm install",
-        installer,
-        pm.type,
-      )
-      return
-    }
-    case "yarn": {
-      if (entry.kind !== "js") throw new Error("internal: yarn entry shape")
-      const bun = bundledToolPath("bun")
-      if (!bun)
-        throw new Error(
-          `bundled bun not found in ${RESOURCES_PATH}/toolchain (required to host the yarn.js entry)`,
-        )
-      if (isYarnBerry(pm.version)) {
-        // Berry: `--immutable=false` is invalid syntax — toggle via env
-        // instead so we don't fail on lockfile drift at first launch.
-        await spawnInstall(
-          bun,
-          [entry.path, "install"],
-          appsDir,
-          { ...env, YARN_ENABLE_IMMUTABLE_INSTALLS: "false" },
-          `yarn install (${pm.version})`,
-          installer,
-          pm.type,
-        )
-      } else {
-        // Classic (yarn 1.x): bun's https response object doesn't expose
-        // `socket.authorized`, which yarn 1.x checks unconditionally when
-        // strictSSL is true; the check throws "does not support SSL" even
-        // though the actual TLS handshake succeeded. Workaround: hand
-        // yarn a tiny `.yarnrc` that turns strictSSL off — the underlying
-        // TLS connection is still encrypted. We point at an external file
-        // (NOT the source tree) so we don't pollute the user's repo.
-        const rcPath = path.join(
-          appsDir,
-          ".zenbu",
-          "yarn-classic-bun.yarnrc",
-        )
-        await fsp.mkdir(path.dirname(rcPath), { recursive: true })
-        await fsp.writeFile(rcPath, "strict-ssl false\n")
-        await spawnInstall(
-          bun,
-          [
-            entry.path,
-            "install",
-            "--non-interactive",
-            "--no-progress",
-            "--network-timeout",
-            "600000",
-            "--use-yarnrc",
-            rcPath,
-            "--registry",
-            "https://registry.npmjs.org/",
-          ],
-          appsDir,
-          env,
-          `yarn install (${pm.version})`,
-          installer,
-          pm.type,
-        )
-      }
-      return
-    }
-    case "bun": {
-      const bun = bundledToolPath("bun")
-      if (!bun)
-        throw new Error(
-          `bundled bun not found in ${RESOURCES_PATH}/toolchain. The .app is missing required toolchain binaries.`,
-        )
-      await spawnInstall(
-        bun,
-        ["install", "--no-progress"],
-        appsDir,
-        env,
-        "bun install",
-        installer,
-        pm.type,
-      )
-      return
-    }
-  }
+  if (process.env.ZENBU_APPS_DIR)
+    return path.resolve(process.env.ZENBU_APPS_DIR);
+  return path.join(os.homedir(), ".zenbu", "apps", name);
 }
 
 interface MirrorRef {
-  url: string
-  branch: string
+  url: string;
+  branch: string;
 }
 
 function resolveMirror(cfg: AppConfig): MirrorRef {
@@ -685,9 +374,9 @@ function resolveMirror(cfg: AppConfig): MirrorRef {
       "[launcher] no mirror configured. The .app's app-config.json must " +
         "contain `mirrorUrl` (the GitHub repo cloned on first launch). " +
         "Configure `mirror.target` in zenbu.build.ts and rebuild.",
-    )
+    );
   }
-  return { url: cfg.mirrorUrl, branch: cfg.branch ?? "main" }
+  return { url: cfg.mirrorUrl, branch: cfg.branch ?? "main" };
 }
 
 /**
@@ -695,7 +384,7 @@ function resolveMirror(cfg: AppConfig): MirrorRef {
  * partial copy left behind by an interrupted clone.)
  */
 function isExistingClone(dir: string): boolean {
-  return existsSync(path.join(dir, ".git", "HEAD"))
+  return existsSync(path.join(dir, ".git", "HEAD"));
 }
 
 /**
@@ -704,14 +393,14 @@ function isExistingClone(dir: string): boolean {
  */
 async function hasLocalModifications(dir: string): Promise<boolean> {
   try {
-    const matrix = await git.statusMatrix({ fs, dir })
+    const matrix = await git.statusMatrix({ fs, dir });
     // [filepath, head, workdir, stage] — when all three are 1, the file is
     // tracked AND clean. Anything else means modified/added/deleted.
     return matrix.some(
       ([, head, workdir, stage]) => head !== 1 || workdir !== 1 || stage !== 1,
-    )
+    );
   } catch {
-    return false
+    return false;
   }
 }
 
@@ -720,9 +409,9 @@ async function cloneMirror(
   mirror: MirrorRef,
   installer: Installer | null,
 ): Promise<void> {
-  console.log(`[launcher] cloning ${mirror.url}#${mirror.branch} -> ${dir}`)
-  installer?.step("clone", `Cloning ${mirror.url}#${mirror.branch}`)
-  await fsp.mkdir(dir, { recursive: true })
+  console.log(`[launcher] cloning ${mirror.url}#${mirror.branch} -> ${dir}`);
+  installer?.step("clone", `Cloning ${mirror.url}#${mirror.branch}`);
+  await fsp.mkdir(dir, { recursive: true });
   await git.clone({
     fs,
     http,
@@ -733,129 +422,154 @@ async function cloneMirror(
     depth: 1,
     onProgress: installer
       ? (e) => {
-          const ratio = e.total ? e.loaded / e.total : undefined
+          const ratio = e.total ? e.loaded / e.total : undefined;
           installer.progress({
             phase: e.phase,
             loaded: e.loaded,
             total: e.total,
             ratio,
-          })
+          });
         }
       : undefined,
     onMessage: installer
       ? (msg) => installer.message(msg.replace(/\n+$/g, ""))
       : undefined,
-  })
-  console.log(`[launcher] clone complete`)
-  installer?.done("clone")
+  });
+  console.log(`[launcher] clone complete`);
+  installer?.done("clone");
 }
 
 /**
- * Fast-forward `dir` to the remote tip when:
- *   1. We have a working tree (otherwise we'd be cloning, not pulling).
- *   2. The local HEAD differs from origin/<branch>.
- *   3. The working tree is clean — never silently overwrite user edits.
- *
- * On clean trees with new commits, we `checkout --force` the remote sha.
- * That's equivalent to `git reset --hard origin/<branch>` for a fast-forward
- * scenario and avoids isomorphic-git's lack of a built-in pull operation.
+ * Best-effort `git fetch --depth=1` against `origin/<branch>`. Failures
+ * are non-fatal — the resolver runs next and may still find a local
+ * compatible commit on a previously-deepened working tree. Skips the
+ * remote checkout entirely (the resolver decides which sha to land on).
  */
-async function fetchAndUpdate(
+async function fetchTip(
   dir: string,
   mirror: MirrorRef,
   installer: Installer | null,
 ): Promise<void> {
-  installer?.step("fetch", `Updating from ${mirror.url}#${mirror.branch}`)
-  // The fetch path has multiple early returns (fetch failure, refs
-  // unresolvable, already up-to-date, local modifications). All of them
-  // should mark the step as done so the UI doesn't sit on "Updating…"
-  // forever. We only fail-emit when the fast-forward checkout itself
-  // throws (post-fetch unrecoverable state).
+  installer?.step("fetch", `Updating from ${mirror.url}#${mirror.branch}`);
   try {
-    try {
-      await git.fetch({
-        fs,
-        http,
-        dir,
-        url: mirror.url,
-        ref: mirror.branch,
-        singleBranch: true,
-        depth: 1,
-        tags: false,
-        onProgress: installer
-          ? (e) => {
-              const ratio = e.total ? e.loaded / e.total : undefined
-              installer.progress({
-                phase: e.phase,
-                loaded: e.loaded,
-                total: e.total,
-                ratio,
-              })
-            }
-          : undefined,
-        onMessage: installer
-          ? (msg) => installer.message(msg.replace(/\n+$/g, ""))
-          : undefined,
-      })
-    } catch (err) {
-      console.warn(`[launcher] fetch failed (${(err as Error).message}); using local state`)
-      return
-    }
-
-    let localSha: string
-    let remoteSha: string
-    try {
-      localSha = await git.resolveRef({ fs, dir, ref: "HEAD" })
-      remoteSha = await git.resolveRef({
-        fs,
-        dir,
-        ref: `refs/remotes/origin/${mirror.branch}`,
-      })
-    } catch (err) {
-      console.warn(`[launcher] could not resolve refs (${(err as Error).message}); using local state`)
-      return
-    }
-    if (localSha === remoteSha) {
-      console.log(`[launcher] up to date (${localSha.slice(0, 7)})`)
-      return
-    }
-
-    if (await hasLocalModifications(dir)) {
-      console.warn(
-        `[launcher] working tree at ${dir} has uncommitted modifications; ` +
-          `skipping fast-forward to ${remoteSha.slice(0, 7)}.`,
-      )
-      return
-    }
-
-    console.log(
-      `[launcher] fast-forwarding ${localSha.slice(0, 7)} -> ${remoteSha.slice(0, 7)}`,
-    )
-    await git.checkout({ fs, dir, ref: remoteSha, force: true })
+    await git.fetch({
+      fs,
+      http,
+      dir,
+      url: mirror.url,
+      ref: mirror.branch,
+      singleBranch: true,
+      depth: 1,
+      tags: false,
+      onProgress: installer
+        ? (e) => {
+            const ratio = e.total ? e.loaded / e.total : undefined;
+            installer.progress({
+              phase: e.phase,
+              loaded: e.loaded,
+              total: e.total,
+              ratio,
+            });
+          }
+        : undefined,
+      onMessage: installer
+        ? (msg) => installer.message(msg.replace(/\n+$/g, ""))
+        : undefined,
+    });
+  } catch (err) {
+    console.warn(
+      `[launcher] fetch failed (${(err as Error).message}); using local state`,
+    );
   } finally {
-    installer?.done("fetch")
+    installer?.done("fetch");
   }
+}
+
+/**
+ * Resolve the latest commit on origin/<branch> whose
+ * `package.json#zenbu.host` satisfies the running .app's `hostVersion`,
+ * and check it out if HEAD isn't already there. Pure delegation to
+ * `resolveTargetSha` from `shared/range-resolver.ts` — same code path
+ * used by `UpdaterService.update()` at runtime.
+ */
+async function resolveAndCheckout(
+  dir: string,
+  mirror: MirrorRef,
+  hostVersion: string,
+  installer: Installer | null,
+): Promise<void> {
+  const result = await resolveTargetSha({
+    fs,
+    http,
+    dir,
+    mirror: { url: mirror.url, branch: mirror.branch },
+    hostVersion,
+    reporter: installer,
+  });
+  if (result.targetSha === null) {
+    throw new Error(
+      `[launcher] no commit on origin/${mirror.branch} declares a ` +
+        `package.json#zenbu.host range that satisfies host=${hostVersion}. ` +
+        `Update the .app to a newer build, or push a compatible source ` +
+        `commit to the mirror.`,
+    );
+  }
+  let localSha: string | null = null;
+  try {
+    localSha = await git.resolveRef({ fs, dir, ref: "HEAD" });
+  } catch {}
+  if (localSha === result.targetSha) {
+    console.log(`[launcher] up to date (${localSha.slice(0, 7)})`);
+    return;
+  }
+  console.log(
+    `[launcher] checking out ${result.targetSha.slice(0, 7)}` +
+      (localSha ? ` (was ${localSha.slice(0, 7)})` : "") +
+      (result.targetSha === result.tipSha
+        ? ""
+        : ` (tip=${result.tipSha.slice(0, 7)})`),
+  );
+  await git.checkout({ fs, dir, ref: result.targetSha, force: true });
 }
 
 async function ensureAppsDir(
   appsDir: string,
   mirror: MirrorRef,
+  hostVersion: string,
   installer: Installer | null,
 ): Promise<void> {
-  if (isExistingClone(appsDir)) {
-    await fetchAndUpdate(appsDir, mirror, installer)
-    return
-  }
-  if (existsSync(appsDir)) {
-    const entries = await fsp.readdir(appsDir).catch(() => [] as string[])
-    if (entries.length > 0) {
-      throw new Error(
-        `[launcher] ${appsDir} exists and isn't a git working tree (has ${entries.length} entries). ` +
-          `Move or delete it, then relaunch.`,
-      )
+  const existed = isExistingClone(appsDir);
+  if (existed) {
+    if (await hasLocalModifications(appsDir)) {
+      console.warn(
+        `[launcher] working tree at ${appsDir} has uncommitted ` +
+          `modifications; skipping fetch + resolve.`,
+      );
+      installer?.message(
+        `[launcher] uncommitted modifications detected; skipping update`,
+      );
+      return;
     }
+    await fetchTip(appsDir, mirror, installer);
+  } else {
+    if (existsSync(appsDir)) {
+      const entries = await fsp.readdir(appsDir).catch(() => [] as string[]);
+      if (entries.length > 0) {
+        throw new Error(
+          `[launcher] ${appsDir} exists and isn't a git working tree (has ${entries.length} entries). ` +
+            `Move or delete it, then relaunch.`,
+        );
+      }
+    }
+    await cloneMirror(appsDir, mirror, installer);
   }
-  await cloneMirror(appsDir, mirror, installer)
+
+  // Both first-launch (clone) and subsequent-launch (fetch) paths funnel
+  // here so the .app never boots into an incompatible commit. The
+  // resolver no-ops when HEAD is already compatible (hot path) and
+  // deepens history + binary-searches when the tip is too new (cold
+  // path); see `shared/range-resolver.ts`.
+  await resolveAndCheckout(appsDir, mirror, hostVersion, installer);
 }
 
 async function ensureDepsInstalled(
@@ -863,25 +577,29 @@ async function ensureDepsInstalled(
   pm: PackageManagerSpec,
   installer: Installer | null,
 ): Promise<void> {
-  const sigPath = path.join(appsDir, ".zenbu", "deps-sig")
-  const nodeModules = path.join(appsDir, "node_modules")
-  const nextSig = await depsSignature(appsDir, pm)
+  const nodeModules = path.join(appsDir, "node_modules");
+  const nextSig = await depsSignature(appsDir, pm);
 
   if (existsSync(nodeModules)) {
-    try {
-      const current = await fsp.readFile(sigPath, "utf8")
-      if (current === nextSig) return
-    } catch {}
+    const current = await readDepsSig(appsDir);
+    if (current === nextSig) return;
   }
 
   console.log(
     `[launcher] installing deps in ${appsDir} via ${pm.type}@${pm.version}`,
-  )
-  installer?.step("install", `Installing dependencies (${pm.type}@${pm.version})`)
-  await runInstall(appsDir, pm, installer)
-  await fsp.mkdir(path.dirname(sigPath), { recursive: true })
-  await fsp.writeFile(sigPath, nextSig)
-  installer?.done("install")
+  );
+  installer?.step(
+    "install",
+    `Installing dependencies (${pm.type}@${pm.version})`,
+  );
+  await runInstall({
+    appsDir,
+    resourcesPath: RESOURCES_PATH,
+    pm,
+    reporter: installer,
+  });
+  await writeDepsSig(appsDir, nextSig);
+  installer?.done("install");
 }
 
 async function handoff(appsDir: string): Promise<void> {
@@ -892,53 +610,57 @@ async function handoff(appsDir: string): Promise<void> {
     "core",
     "dist",
     "setup-gate.mjs",
-  )
+  );
   if (!existsSync(entry)) {
     throw new Error(
       `[launcher] expected entry not found: ${entry}. The cloned source may be missing @zenbujs/core in its dependencies.`,
-    )
+    );
   }
 
   if (!process.argv.some((arg) => arg.startsWith("--project="))) {
-    process.argv.push(`--project=${appsDir}`)
+    process.argv.push(`--project=${appsDir}`);
   }
-  process.env.ZENBU_LAUNCHED_FROM_BUNDLE = "1"
-  await import(entry)
+  process.env.ZENBU_LAUNCHED_FROM_BUNDLE = "1";
+  await import(entry);
 }
 
 async function main(): Promise<void> {
-  await app.whenReady()
+  await app.whenReady();
 
-  const cfg = readAppConfig()
+  const cfg = readAppConfig();
   // Pop the installing window before any clone/install work so the user
   // sees something the moment the app launches. No-op when the user
   // didn't ship `<uiEntrypoint>/installing.html`.
-  const installer = await maybeOpenInstallingWindow(cfg)
+  const installer = await maybeOpenInstallingWindow(cfg);
 
   try {
-    const mirror = resolveMirror(cfg)
-    const appsDir = appsDirFor(cfg.name)
-    const pm = cfg.packageManager ?? LEGACY_PACKAGE_MANAGER
+    const mirror = resolveMirror(cfg);
+    const appsDir = appsDirFor(cfg.name);
+    const pm = cfg.packageManager ?? LEGACY_PACKAGE_MANAGER;
+    // Concrete `host.json#version` baked at `zen build:electron` time.
+    // The resolver picks the latest mirror commit whose
+    // `package.json#zenbu.host` range satisfies this value.
+    const { version: hostVersion } = readHostVersion(APP_PATH);
 
-    await ensureAppsDir(appsDir, mirror, installer)
-    await ensureDepsInstalled(appsDir, pm, installer)
+    await ensureAppsDir(appsDir, mirror, hostVersion, installer);
+    await ensureDepsInstalled(appsDir, pm, installer);
 
-    installer?.step("handoff", "Starting app")
+    installer?.step("handoff", "Starting app");
     // Hand the BaseWindow off to setup-gate via __zenbu_boot_windows__;
     // setup-gate's spawnSplashWindow adopts it and swaps the WebContentsView
     // from installing.html to splash.html in place.
-    installer?.handoff()
-    await handoff(appsDir)
+    installer?.handoff();
+    await handoff(appsDir);
   } catch (err) {
     // installer.fail() reads installer.currentStep when no explicit id is
     // passed, so the page sees `{ id: "clone" | "fetch" | "install" | "handoff" }`
     // matching whichever phase was active when it threw.
-    installer?.fail(err)
-    throw err
+    installer?.fail(err);
+    throw err;
   }
 }
 
 main().catch((err) => {
-  console.error("[launcher] fatal:", err)
-  app.exit(1)
-})
+  console.error("[launcher] fatal:", err);
+  app.exit(1);
+});

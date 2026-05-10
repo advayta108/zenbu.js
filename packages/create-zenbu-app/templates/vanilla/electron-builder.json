@@ -1,0 +1,12 @@
+{
+  "appId": "dev.zenbu.{{projectName}}",
+  "productName": "{{projectName}}",
+  "asar": false,
+  "directories": {
+    "output": "dist"
+  },
+  "mac": {
+    "category": "public.app-category.developer-tools",
+    "target": ["zip"]
+  }
+}

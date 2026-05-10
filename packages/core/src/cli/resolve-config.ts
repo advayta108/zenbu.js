@@ -1,14 +1,9 @@
 #!/usr/bin/env node
-// Resolves a project's `zenbu.config.ts` to the loader payload (plugins +
-// appEntrypoint + pluginSourceFiles) and writes it to stdout as JSON.
-//
-// Spawned via `child_process.execFileSync` from `loaders/zenbu.ts` whenever
-// dynohot invalidates the plugins root URL — Node's loader hooks run in a
-// worker thread that can't `await import()` the user's TS config without
-// deadlocking, so we shell out to a fresh process where tsx + dynamic import
-// work normally.
-//
-// Argv: [node, this script, <projectDir>]
+/**
+ * gets ran syncronously in zenbu loader to run ts config to get back obj that can be transformed into js imports
+ * 
+ * takes ~100ms to run
+ */
 
 import { register } from "tsx/esm/api"
 import { loadConfig } from "./lib/load-config"

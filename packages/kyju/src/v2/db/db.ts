@@ -337,9 +337,7 @@ const initializeSectionedDbIfNeeded = (
       );
     }
 
-    yield* finalizeAndWriteRoot(fs, config, {
-      plugin: sectionsData,
-    } as Record<string, KyjuJSON>);
+    yield* finalizeAndWriteRoot(fs, config, sectionsData);
   });
 
 const createDbEffect = <TShape extends SchemaShape>(
@@ -380,6 +378,15 @@ const createDbEffect = <TShape extends SchemaShape>(
           if (dupes.length > 0) {
             throw new Error(
               `Duplicate section names: ${[...new Set(dupes)].join(", ")}`,
+            );
+          }
+          // Sections live at the top level of the root. `_plugins` is
+          // kyju's own bookkeeping namespace (migration versions, etc.) so
+          // a section can't be called that without clobbering it.
+          const conflicts = names.filter((n) => n === "_plugins");
+          if (conflicts.length > 0) {
+            throw new Error(
+              `Section names collide with reserved kyju keys: ${conflicts.join(", ")}`,
             );
           }
           yield* initializeSectionedDbIfNeeded(fs, config, userConfig.sections);

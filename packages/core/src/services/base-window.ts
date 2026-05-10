@@ -1,4 +1,4 @@
-import { BaseWindow } from "electron"
+import { BaseWindow, nativeTheme, type BaseWindowConstructorOptions } from "electron"
 import { nanoid } from "nanoid"
 import { Service, runtime } from "../runtime"
 import { createLogger } from "../shared/log"
@@ -8,7 +8,6 @@ import { DbService } from "./db"
 const log = createLogger("base-window")
 
 export const MAIN_WINDOW_ID = "main"
-type WindowBounds = { x: number; y: number; width: number; height: number }
 type BootWindow = { windowId: string; win: BaseWindow }
 
 export class BaseWindowService extends Service.create({
@@ -37,17 +36,15 @@ export class BaseWindowService extends Service.create({
     return undefined
   }
 
-  createWindow(opts?: Partial<WindowBounds> & { windowId?: string; show?: boolean }): { win: BaseWindow; windowId: string } {
+  createWindow(opts?: {
+    windowId?: string
+    baseWindow?: BaseWindowConstructorOptions
+  }): { win: BaseWindow; windowId: string } {
     const windowId = opts?.windowId ?? nanoid()
-    const zenWidth = this.getZenWidth()
-    const win = new BaseWindow({
-      width: opts?.width ?? zenWidth ?? 1100,
-      height: opts?.height ?? 750,
-      ...(opts?.x != null && opts?.y != null
-        ? { x: opts.x, y: opts.y }
-        : {}),
-        // 
-      show: opts?.show ?? true,
+    const defaults: BaseWindowConstructorOptions = {
+      width: this.getZenWidth() ?? 1100,
+      height: 750,
+      show: true,
       titleBarStyle: "hidden",
       // Traffic lights sit on top of our 36px orchestrator title bar.
       // macOS draws each light at 12×12 px, so centering vertically:
@@ -60,8 +57,8 @@ export class BaseWindowService extends Service.create({
       // the WebContentsView's first paint — visible as a white flash
       // on dark-themed apps.
       backgroundColor: entrypointBgColor(),
-      // 
-    })
+    }
+    const win = new BaseWindow({ ...defaults, ...opts?.baseWindow })
     this.windows.set(windowId, win)
     win.on("closed", () => this.windows.delete(windowId))
     return { win, windowId }
@@ -76,13 +73,34 @@ export class BaseWindowService extends Service.create({
         }
         this.bootWindows = []
       } else {
-        const prefs = this.ctx.db.client.readRoot().plugin.core.windowPrefs
+        const prefs = this.ctx.db.client.readRoot().core.windowPrefs
         this.createWindow({
           windowId: MAIN_WINDOW_ID,
-          ...prefs[MAIN_WINDOW_ID]?.lastKnownBounds,
+          baseWindow: { ...prefs[MAIN_WINDOW_ID]?.lastKnownBounds },
         })
       }
     }
+
+    // Re-paint every BaseWindow's pre-render `backgroundColor` when the OS
+    // theme flips. The renderer's CSS adapts on its own via
+    // `prefers-color-scheme`; this keeps the window edges (visible during
+    // resize / around rounded corners / for the few frames before a new
+    // WebContentsView paints) in lockstep with whatever theme the
+    // entrypoint's `<meta name="zenbu-bg">` declares for that mode.
+    this.setup("native-theme-sync", () => {
+      const onUpdated = (): void => {
+        const color = entrypointBgColor()
+        for (const win of this.windows.values()) {
+          try {
+            win.setBackgroundColor(color)
+          } catch {}
+        }
+      }
+      nativeTheme.on("updated", onUpdated)
+      return () => {
+        nativeTheme.removeListener("updated", onUpdated)
+      }
+    })
 
     this.setup("window-cleanup", () => {
       return () => {
@@ -91,11 +109,11 @@ export class BaseWindowService extends Service.create({
           bounds: win.getBounds(),
         }))
         void this.ctx.db.client.update((root) => {
-          const next = { ...root.plugin.core.windowPrefs }
+          const next = { ...root.core.windowPrefs }
           for (const { windowId, bounds } of snapshot) {
             next[windowId] = { ...next[windowId], lastKnownBounds: bounds }
           }
-          root.plugin.core.windowPrefs = next
+          root.core.windowPrefs = next
         })
         for (const win of this.windows.values()) {
           (win as any).__zenbu_on_close = null;

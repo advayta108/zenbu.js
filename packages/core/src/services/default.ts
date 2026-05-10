@@ -1,9 +1,5 @@
 /**
- * Loads and registers all built-in services. Kept separate from
- * `./index.ts` (which statically re-exports the service classes for
- * `Service.withDeps(...)` consumers) so that `setup-gate` can import it
- * without eagerly loading every service module before `setupGate()` has
- * had a chance to bootstrap env vars and `process.chdir(projectRoot)`.
+ * parallelize? i forgor is it serial no matter what?
  */
 export async function defaultServices(): Promise<void> {
   await import("./server");
@@ -16,4 +12,5 @@ export async function defaultServices(): Promise<void> {
   await import("./view-registry");
   await import("./window");
   await import("./advice-config");
+  await import("./updater");
 }

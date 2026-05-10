@@ -5,13 +5,13 @@
 
 export interface BuildContext {
   /** Absolute path to the source root (`build.source` resolved). */
-  sourceDir: string
+  sourceDir: string;
   /** Absolute path to the staging output dir (`build.out` resolved). */
-  outDir: string
+  outDir: string;
   /** Git HEAD of the source repo at build time, or `"uncommitted"`. */
-  sourceSha: string
+  sourceSha: string;
   /** Absolute path to the `zenbu.config.ts` driving this build. */
-  configPath: string
+  configPath: string;
 }
 
 export interface EmitContext extends BuildContext {
@@ -20,11 +20,11 @@ export interface EmitContext extends BuildContext {
    * absolute or escaping `outDir` (via `..`) throws. Emitted files
    * participate in the build's `.sha` content hash.
    */
-  emit(relPath: string, contents: string | Uint8Array): void
+  emit(relPath: string, contents: string | Uint8Array): void;
 }
 
 export interface BuildPlugin {
-  name: string
+  name: string;
   /**
    * Called once per text file after `include`/`ignore` filtering, before
    * the file is written to `outDir`. Plugins run in declaration order;
@@ -41,22 +41,22 @@ export interface BuildPlugin {
   transform?(
     file: { path: string; contents: string },
     ctx: BuildContext,
-  ): string | null | void | Promise<string | null | void>
+  ): string | null | void | Promise<string | null | void>;
   /**
    * Called once after every source file is written. Use `ctx.emit(...)` to
    * write additional files (build manifests, generated artifacts, etc.)
    * into `outDir`. Plugins run in declaration order.
    */
-  done?(ctx: EmitContext): void | Promise<void>
+  done?(ctx: EmitContext): void | Promise<void>;
 }
 
 export interface MirrorConfig {
-  target: string
-  branch?: string
+  target: string;
+  branch?: string;
 }
 
 export interface BundleConfig {
-  extraResources?: string[]
+  extraResources?: string[];
 }
 
 /**
@@ -75,7 +75,7 @@ export type PackageManagerSpec =
   | { type: "pnpm"; version: string }
   | { type: "npm"; version: string }
   | { type: "yarn"; version: string }
-  | { type: "bun"; version: string }
+  | { type: "bun"; version: string };
 
 /**
  * Soft default when the user omits `build.packageManager` entirely. Existing
@@ -85,51 +85,52 @@ export type PackageManagerSpec =
 export const DEFAULT_PACKAGE_MANAGER: PackageManagerSpec = {
   type: "pnpm",
   version: "10.33.0",
-}
+};
 
 export interface BuildConfig {
-  source?: string
-  out?: string
-  include: string[]
-  ignore?: string[]
-  plugins?: BuildPlugin[]
-  mirror?: MirrorConfig
-  bundle?: BundleConfig
-  packageManager?: PackageManagerSpec
+  source?: string;
+  out?: string;
+  include: string[];
+  ignore?: string[];
+  plugins?: BuildPlugin[];
+  mirror?: MirrorConfig;
+  bundle?: BundleConfig;
+  packageManager?: PackageManagerSpec;
 }
 
 export function defineBuildConfig(config: BuildConfig): BuildConfig {
-  return config
+  return config;
 }
 
 export type ResolvedBuildConfig = Required<
   Omit<BuildConfig, "mirror" | "bundle">
 > & {
-  mirror?: MirrorConfig
-  bundle?: BundleConfig
-  packageManager: PackageManagerSpec
-}
+  mirror?: MirrorConfig;
+  bundle?: BundleConfig;
+  packageManager: PackageManagerSpec;
+};
 
 function validatePackageManager(spec: PackageManagerSpec): PackageManagerSpec {
-  const allowed = ["pnpm", "npm", "yarn", "bun"] as const
+  const allowed = ["pnpm", "npm", "yarn", "bun"] as const;
   if (!allowed.includes(spec.type as (typeof allowed)[number])) {
     throw new Error(
-      `zenbu build.packageManager: unknown type "${(spec as { type: string }).type}". ` +
-        `Expected one of: ${allowed.join(", ")}.`,
-    )
+      `zenbu build.packageManager: unknown type "${
+        (spec as { type: string }).type
+      }". ` + `Expected one of: ${allowed.join(", ")}.`,
+    );
   }
   if (typeof spec.version !== "string" || spec.version.trim().length === 0) {
     throw new Error(
       `zenbu build.packageManager.${spec.type}: \`version\` is required and must be a non-empty string.`,
-    )
+    );
   }
-  return spec
+  return spec;
 }
 
 export function resolveBuildConfig(config: BuildConfig): ResolvedBuildConfig {
   const packageManager = validatePackageManager(
     config.packageManager ?? DEFAULT_PACKAGE_MANAGER,
-  )
+  );
   return {
     source: config.source ?? ".",
     out: config.out ?? ".zenbu/build/source",
@@ -139,7 +140,7 @@ export function resolveBuildConfig(config: BuildConfig): ResolvedBuildConfig {
     mirror: config.mirror,
     bundle: config.bundle,
     packageManager,
-  }
+  };
 }
 
 // =============================================================================
@@ -156,21 +157,51 @@ export function resolveBuildConfig(config: BuildConfig): ResolvedBuildConfig {
  * directory). `schema` / `preload` / `events` are optional file paths.
  */
 export interface Plugin {
-  name: string
-  services: string[]
-  schema?: string
-  migrations?: string
-  preload?: string
-  events?: string
+  name: string;
+  services: string[];
+  schema?: string;
+  migrations?: string;
+  preload?: string;
+  events?: string;
   /**
    * Plugin-author-defined SVG icons keyed by view type. Read by
    * `view-registry` to decorate registered views. Optional.
    */
-  icons?: Record<string, string>
+  icons?: Record<string, string>;
+  /**
+   * Other plugins whose **own type surface** this plugin needs at compile time.
+   *
+   * Each entry names an upstream plugin (`name`) and a relative path
+   * (`from`) to the file that defines it — either a `zenbu.plugin.ts`
+   * (whose default export is a `definePlugin(...)`) or a `zenbu.config.ts`
+   * (in which case `name` disambiguates which entry of `plugins:` to use).
+   *
+   * `zen link` materializes each declared dep as a vendored, committed copy
+   * inside `<plugin>/types/deps/<name>/`. The plugin's composite augmentation
+   * (`<plugin>/types/zenbu-register.ts`) then wires the vendored own surface
+   * into `ZenbuRegister`, so `useDb` / `useRpc` / `useEvents` selectors work
+   * even when the plugin is opened in isolation (no host context required).
+   *
+   * Composites never depend on other composites — only on **own** surfaces —
+   * so the dependency graph is a strict DAG and mutual deps are legal.
+   */
+  dependsOn?: PluginDependency[];
+}
+
+/**
+ * A type-time dependency on another plugin. `from` is the path to the
+ * upstream's manifest file; `name` selects which plugin if `from` is a
+ * `zenbu.config.ts` with multiple entries. Both fields are required so
+ * the resolver never has to guess between same-named plugins in different
+ * trees.
+ */
+export interface PluginDependency {
+  name: string;
+  from: string;
 }
 
 export function definePlugin(plugin: Plugin): Plugin {
-  return plugin
+  return plugin;
 }
 
 /**
@@ -183,21 +214,34 @@ export function definePlugin(plugin: Plugin): Plugin {
  * there instead of walking the filesystem looking for `zenbu.plugin.json`.
  */
 export interface ResolvedPlugin {
-  name: string
+  name: string;
   /** Absolute directory the plugin was loaded from. */
-  dir: string
+  dir: string;
   /** Glob patterns for service files. Anchored to `dir`. */
-  services: string[]
+  services: string[];
   /** Absolute path to `schema.ts` (or undefined). */
-  schemaPath?: string
+  schemaPath?: string;
   /** Absolute path to migrations dir/file (or undefined). */
-  migrationsPath?: string
+  migrationsPath?: string;
   /** Absolute path to `preload.ts` (or undefined). */
-  preloadPath?: string
+  preloadPath?: string;
   /** Absolute path to `events.ts` (or undefined). */
-  eventsPath?: string
+  eventsPath?: string;
   /** Plugin-author-defined SVG icons. */
-  icons?: Record<string, string>
+  icons?: Record<string, string>;
+  /**
+   * Type-time dependencies, with `from` already absolute. The upstream
+   * plugin itself is NOT loaded here — `zen link` does that lazily so the
+   * runtime path (`getConfig()`, plugin barrel emission) doesn't pay the
+   * cost of recursively walking other configs/manifests.
+   */
+  dependsOn?: ResolvedPluginDependency[];
+}
+
+export interface ResolvedPluginDependency {
+  name: string;
+  /** Absolute path to the upstream `zenbu.plugin.ts` or `zenbu.config.ts`. */
+  fromPath: string;
 }
 
 // =============================================================================
@@ -220,34 +264,34 @@ export interface ResolvedPlugin {
  *   and `zen build:electron`.
  */
 export interface Config {
-  db: string
-  uiEntrypoint: string
-  plugins: Array<Plugin | string>
-  build?: BuildConfig
+  db: string;
+  uiEntrypoint: string;
+  plugins: Array<Plugin | string>;
+  build?: BuildConfig;
 }
 
 export function defineConfig(config: Config): Config {
-  return config
+  return config;
 }
 
 export interface ResolvedConfig {
   /** Absolute path to the `zenbu.config.ts` this came from. */
-  configPath: string
+  configPath: string;
   /** Directory containing `zenbu.config.ts`. */
-  projectDir: string
+  projectDir: string;
   /** Absolute path to the database directory. */
-  dbPath: string
+  dbPath: string;
   /**
    * Absolute path to the renderer's entrypoint directory. Vite's `root`
    * resolves here; `index.html` inside it is served through Vite.
    */
-  uiEntrypointPath: string
+  uiEntrypointPath: string;
   /**
    * Absolute path to `splash.html` inside the entrypoint directory. Loaded
    * raw (no Vite) into a transient BrowserView during the brief window
    * between Electron `whenReady` and the renderer's first paint.
    */
-  splashPath: string
+  splashPath: string;
   /**
    * Absolute path to `installing.html` inside the entrypoint directory, if
    * the user provided one. Optional. Production launcher loads this raw
@@ -256,8 +300,8 @@ export interface ResolvedConfig {
    * built-in `installing-preload.cjs`. Not used in dev mode — `pnpm dev`
    * doesn't clone or install.
    */
-  installingPath?: string
-  plugins: ResolvedPlugin[]
+  installingPath?: string;
+  plugins: ResolvedPlugin[];
   /** Resolved build config; defaults filled in even when user omits. */
-  build: ResolvedBuildConfig
+  build: ResolvedBuildConfig;
 }

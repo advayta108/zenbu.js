@@ -7,6 +7,8 @@ export default defineConfig([
       index: "src/index.ts",
       "env-bootstrap": "src/env-bootstrap.ts",
       registry: "src/registry.ts",
+      "registry-generated": "src/registry-generated.ts",
+      events: "src/events.ts",
       runtime: "src/runtime.ts",
       schema: "src/schema.ts",
       "node-loader": "../advice/src/node-loader.ts",
@@ -47,12 +49,13 @@ export default defineConfig([
     platform: "node",
     target: "node20",
     deps: {
-      // Inline isomorphic-git (and its node-only http transport) into the
-      // launcher bundle. The .app ships a bundle package.json with NO
-      // declared deps, so anything not inlined here will fail to resolve
-      // at runtime. `electron` is the lone exception — Electron's main
+      // Inline isomorphic-git (and its node-only http transport) plus
+      // semver (used by shared/range-resolver.ts) into the launcher
+      // bundle. The .app ships a bundle package.json with NO declared
+      // deps, so anything not inlined here will fail to resolve at
+      // runtime. `electron` is the lone exception — Electron's main
       // process provides it natively.
-      alwaysBundle: ["isomorphic-git", "isomorphic-git/http/node"],
+      alwaysBundle: ["isomorphic-git", "isomorphic-git/http/node", "semver"],
       neverBundle: ["electron"],
     },
     clean: false,

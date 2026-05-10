@@ -1,76 +1,58 @@
 > [!WARNING]
-> Zenbu is under active construction. It may break and is not ready for general usage.
-
-<p align="center">
-  <img src="./assets/logo.png" alt="Zenbu" width="100" />
-</p>
-
-<h1 align="center">Zenbu</h1>
-
-<p align="center">
-  <img alt="status: under construction" src="https://img.shields.io/badge/status-under_construction-orange"><br>
-  The personal software app
-</p>
-<p align="center">
-  <img src="./assets/screenshot.webp" width="640" style="background: transparent;" />
-</p>
+> Zenbu is in alpha
 
 
-## What is Zenbu
-Zenbu is an app to build and share customizable desktop apps
-
-At its core is Zenbu.js, a JavaScript framework for building desktop apps. All apps written in Zenbu.js can be modified while they are running, made possible by a built in plugin system
-
-Zenbu is currently under heavy construction. If you are interested in the project, you should join the discord - [invite link](https://discord.gg/t3jzHHfc6z)
+Zenbu.js is a JavaScript framework for building hackable software
 
 
-## Quickstart
+### Get started in 5s
+```
+pnpx create-zenbu-app my-zenbu-app
+cd my-zenbu-app
+pnpm run dev
+```
 
-> [!IMPORTANT]
-> Zenbu currently requires **pnpm 10+**. The scaffolded app's lockfile is pnpm; using npm or yarn will produce a non-portable install (the bundled .app re-installs from the pnpm lockfile at first launch). A future config knob will let you bundle a different package manager.
 
-~~~bash
-pnpm create zenbu-app my-app
-cd my-app
-pnpm install
-pnpm dev
-~~~
+### Why should you use this
 
-## CLI
+1. Coding agents make it possible to generate software on demand for a specific use case. If apps was hackable, users could customization applications for a specific use case without starting from scratch. When you write an app in Zenbu your entire app is modifiable and extensible. 
 
-The `zen` CLI ships as a `bin` of `@zenbujs/core` — every scaffolded app gets it automatically through `pnpm install`.
+2. Giving users the ability to modify your app makes it possible to explore many more directions than you could yourself
 
-~~~bash
-zen dev                              # run the local app with HMR
-zen build:source                     # transform src/ into a portable seed
-zen build:electron                   # bundle .app via electron-builder
-zen build:electron -- --publish always
-                                     # forward args to electron-builder
-zen publish:source [init|push]       # sync the seed to a mirror github repo
-zen link                              # regenerate registry types
-~~~
+3. Zenbu enforces an architecture to make your code extensible through low coupling and high cohesion. This makes it possible to make more complex applications without noticable complexity added to your codebase
 
-## Distribution
 
-Two complementary channels:
+### How does it work
 
-- **GitHub release of the .app** — driven by your own `electron-builder.json`. `zen build:electron -- --publish always` hands the build off to electron-builder's native publish flow.
-- **Source mirror repo** — `zen publish:source` pushes the transformed seed to a github repo declared in `zenbu.build.ts#mirror.target`. Apps already in the field can `git pull` updates without a full re-download.
+Users can modify Zenbu apps in 2 ways:
 
-## Development Tips
+#### Modifying the raw source code
 
-### Resetting local state
+When a Zenbu app is built for production, there is no TypeScript compilation or bundling step. The same source code you wrote in development will be downloaded by the user and stored in  `~/.zenbu/<app-name>`. When the app launches, it discovers the app code, dynamically compiles it, and runs the JavaScript using Electrons node.js runtime.
 
-If an agent, plugin, or update breaks your local app, either revert changes in:
+All the source code in this directory is being watched for changes. When there is a change, the app will re-run affected code nearly instantly (also known as hot reloading). Hot reloading is implemented both in the main process and the renderer process.
 
-~~~txt
-~/.zenbu/plugins/zenbu
-~~~
+The codebase stored inside `~/.zenbu/<app-name>` is tracked by git. This makes it possible for a user to edit the source code without losing changes when the application code gets updated. The git repo is linked to a remote repository owned by the developer, so updates are represented as running `git pull` on the users device.
 
-or delete:
+#### Injecting plugins
 
-~~~txt
-~/.zenbu/
-~~~
+Editing the raw source code of the application can be risky. If a user and the developer have conflicting edits, the user needs to spend time merging changes. This motivates plugins - a way to inject code into the application that can modify behavior without editing the raw source code.
 
-Zenbu will reinstall itself on the next launch.
+Plugins run in the same process as the application code and get access to the same APIs. This means any feature written in the main app could be written as a plugin. 
+
+When you write an app in Zenbu you do not need to think about writing a plugin API. The framework APIs are designed so that your code is **default** extensible.
+
+Plugins hot reload the same way application code hot reloads. This is because application code gets implemented as a plugin.
+
+
+
+### Docs
+
+
+
+
+
+
+
+
+

@@ -63,7 +63,7 @@ afterEach(() => {
 });
 
 describe("sectioned DB initialization", () => {
-  it("creates root with plugin containing all sections", async () => {
+  it("creates root with all sections at top level", async () => {
     const dbPath = tmpDbPath();
     cleanupPath = dbPath;
 
@@ -71,12 +71,12 @@ describe("sectioned DB initialization", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin).toBeDefined();
-    expect(root.plugin.alpha).toBeDefined();
-    expect(root.plugin.beta).toBeDefined();
-    expect(root.plugin.alpha.items).toEqual([]);
-    expect(root.plugin.alpha.count).toBe(0);
-    expect(root.plugin.beta.config).toEqual({ theme: "dark" });
+    expect(root.plugin).toBeUndefined();
+    expect(root.alpha).toBeDefined();
+    expect(root.beta).toBeDefined();
+    expect(root.alpha.items).toEqual([]);
+    expect(root.alpha.count).toBe(0);
+    expect(root.beta.config).toEqual({ theme: "dark" });
   });
 
   it("initializes collections within sections", async () => {
@@ -93,10 +93,10 @@ describe("sectioned DB initialization", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.gamma.logs).toBeDefined();
-    expect(root.plugin.gamma.logs.collectionId).toBeTruthy();
+    expect(root.gamma.logs).toBeDefined();
+    expect(root.gamma.logs.collectionId).toBeTruthy();
 
-    const collDir = path.join(dbPath, "collections", root.plugin.gamma.logs.collectionId);
+    const collDir = path.join(dbPath, "collections", root.gamma.logs.collectionId);
     expect(fs.existsSync(collDir)).toBe(true);
   });
 
@@ -148,8 +148,8 @@ describe("section migrations", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.alpha.title).toBe("hello");
-    expect(root.plugin.alpha.count).toBe(42);
+    expect(root.alpha.title).toBe("hello");
+    expect(root.alpha.count).toBe(42);
     expect(root.count).toBeUndefined();
   });
 
@@ -186,7 +186,7 @@ describe("section migrations", () => {
     expect(receivedPrev).toEqual({ value: 5 });
     expect(receivedPrev.plugin).toBeUndefined();
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.alpha.value).toBe(50);
+    expect(root.alpha.value).toBe(50);
   });
 
   it("tracks versions independently per section", async () => {
@@ -212,8 +212,8 @@ describe("section migrations", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.alpha.x).toBe(20);
-    expect(root.plugin.beta.y).toBe("a!");
+    expect(root.alpha.x).toBe(20);
+    expect(root.beta.y).toBe("a!");
 
     expect(root._plugins.sectionMigrator.alpha.version).toBe(2);
     expect(root._plugins.sectionMigrator.beta.version).toBe(1);
@@ -238,7 +238,7 @@ describe("section migrations", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.alpha.x).toBe(101);
+    expect(root.alpha.x).toBe(101);
   });
 
   it("adds collection via migration within a section", async () => {
@@ -273,17 +273,17 @@ describe("section migrations", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.alpha.logs).toBeDefined();
-    expect(root.plugin.alpha.logs.collectionId).toBeTruthy();
+    expect(root.alpha.logs).toBeDefined();
+    expect(root.alpha.logs.collectionId).toBeTruthy();
 
-    const collDir = path.join(dbPath, "collections", root.plugin.alpha.logs.collectionId);
+    const collDir = path.join(dbPath, "collections", root.alpha.logs.collectionId);
     expect(fs.existsSync(collDir)).toBe(true);
   });
 
   it("deep client.update into a section replicates correctly", async () => {
     // Mirrors the tab-shortcuts plugin scenario: a main-process service
     // inside a sectioned DB mutates a nested array-of-objects via
-    // client.update(root => root.plugin.<name>.array.find(...).nested.find(...).field = ...).
+    // client.update(root => root.<name>.array.find(...).nested.find(...).field = ...).
     const dbPath = tmpDbPath();
     cleanupPath = dbPath;
 
@@ -316,7 +316,7 @@ describe("section migrations", () => {
 
     // Seed a windowState shaped like the real kernel root.
     await client.update((root: any) => {
-      root.plugin.kernel.windowStates = [
+      root.kernel.windowStates = [
         {
           id: "win-1",
           focusedPaneId: "pane-A",
@@ -338,7 +338,7 @@ describe("section migrations", () => {
 
     // Exactly the tab-shortcuts handler mutation pattern.
     await client.update((root: any) => {
-      const ws = root.plugin.kernel.windowStates.find(
+      const ws = root.kernel.windowStates.find(
         (w: any) => w.id === "win-1",
       );
       const pane = ws.panes.find((p: any) => p.id === "pane-A");
@@ -352,9 +352,9 @@ describe("section migrations", () => {
     });
 
     const root = client.readRoot() as any;
-    expect(root.plugin.kernel.windowStates[0].panes[0].activeTabId).toBe("s2");
-    expect(root.plugin.kernel.windowStates[0].sessions[0].lastViewedAt).not.toBeNull();
-    expect(root.plugin.kernel.windowStates[0].sessions[1].lastViewedAt).toBeNull();
+    expect(root.kernel.windowStates[0].panes[0].activeTabId).toBe("s2");
+    expect(root.kernel.windowStates[0].sessions[0].lastViewedAt).not.toBeNull();
+    expect(root.kernel.windowStates[0].sessions[1].lastViewedAt).toBeNull();
   });
 
   it("sections do not interfere with each other", async () => {
@@ -375,8 +375,8 @@ describe("section migrations", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.alpha.x).toBe(2);
-    expect(root.plugin.beta.x).toBe(100);
+    expect(root.alpha.x).toBe(2);
+    expect(root.beta.x).toBe(100);
   });
 
   it("reopening with a new section preserves existing ones", async () => {
@@ -398,8 +398,8 @@ describe("section migrations", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.alpha.x).toBe(1);
-    expect(root.plugin.beta).toBeUndefined();
+    expect(root.alpha.x).toBe(1);
+    expect(root.beta).toBeUndefined();
   });
 
   it("multi-step migration chain within a section", async () => {
@@ -437,7 +437,7 @@ describe("section migrations", () => {
     const client = createClient<SchemaShape>(replica);
 
     const root = client.readRoot() as Record<string, any>;
-    expect(root.plugin.alpha.x).toBe(100);
-    expect(root.plugin.alpha.y).toBe(20);
+    expect(root.alpha.x).toBe(100);
+    expect(root.alpha.y).toBe(20);
   });
 });

@@ -96,7 +96,7 @@ describe("section persistence across restarts", () => {
       const { db, replica } = await openSectionedDb(dbPath, [section]);
       const client = createClient<SchemaShape>(replica);
       await client.update((root: any) => {
-        root.plugin["notes-view"].notes = [
+        root["notes-view"].notes = [
           { id: "n1", text: "hello" },
           { id: "n2", text: "world" },
         ];
@@ -109,7 +109,7 @@ describe("section persistence across restarts", () => {
       const { replica } = await openSectionedDb(dbPath, [section]);
       const client = createClient<SchemaShape>(replica);
       const root = client.readRoot() as Record<string, any>;
-      expect(root.plugin["notes-view"].notes).toEqual([
+      expect(root["notes-view"].notes).toEqual([
         { id: "n1", text: "hello" },
         { id: "n2", text: "world" },
       ]);
@@ -129,7 +129,7 @@ describe("section persistence across restarts", () => {
       ]);
       const client = createClient<SchemaShape>(replica);
       await client.update((root: any) => {
-        root.plugin["notes-view"].notes = [{ id: "n1", text: "hello" }];
+        root["notes-view"].notes = [{ id: "n1", text: "hello" }];
       });
       await db.flush();
     }
@@ -159,7 +159,7 @@ describe("section persistence across restarts", () => {
       ]);
       const client = createClient<SchemaShape>(replica);
       const root = client.readRoot() as Record<string, any>;
-      expect(root.plugin["notes-view"].notes).toEqual([
+      expect(root["notes-view"].notes).toEqual([
         { id: "n1", text: "hello" },
       ]);
       expect(root._plugins.sectionMigrator["notes-view"].version).toBe(1);
@@ -244,10 +244,10 @@ describe("section persistence across restarts", () => {
       const { db, replica } = await openSectionedDb(dbPath, sections);
       const client = createClient<SchemaShape>(replica);
       await client.update((root: any) => {
-        root.plugin.app.count = 37;
-        root.plugin["clock-overlay"].color = "#d1da65";
-        root.plugin["clock-overlay"].pulses = 235;
-        root.plugin["notes-view"].notes = [{ id: "n1", text: "testing" }];
+        root.app.count = 37;
+        root["clock-overlay"].color = "#d1da65";
+        root["clock-overlay"].pulses = 235;
+        root["notes-view"].notes = [{ id: "n1", text: "testing" }];
       });
       await db.flush();
     }
@@ -257,10 +257,10 @@ describe("section persistence across restarts", () => {
       const { replica } = await openSectionedDb(dbPath, sections);
       const client = createClient<SchemaShape>(replica);
       const root = client.readRoot() as Record<string, any>;
-      expect(root.plugin.app.count).toBe(37);
-      expect(root.plugin["clock-overlay"].color).toBe("#d1da65");
-      expect(root.plugin["clock-overlay"].pulses).toBe(235);
-      expect(root.plugin["notes-view"].notes).toEqual([
+      expect(root.app.count).toBe(37);
+      expect(root["clock-overlay"].color).toBe("#d1da65");
+      expect(root["clock-overlay"].pulses).toBe(235);
+      expect(root["notes-view"].notes).toEqual([
         { id: "n1", text: "testing" },
       ]);
     }
@@ -295,7 +295,7 @@ describe("section persistence across restarts", () => {
       const { db, replica } = await openSectionedDb(dbPath, [section]);
       const client = createClient<SchemaShape>(replica);
       await client.update((root: any) => {
-        root.plugin["notes-view"].notes = [{ id: "n1", text: "persistent" }];
+        root["notes-view"].notes = [{ id: "n1", text: "persistent" }];
       });
       await db.flush();
     }
@@ -306,7 +306,7 @@ describe("section persistence across restarts", () => {
       const client = createClient<SchemaShape>(replica);
       const root = client.readRoot() as Record<string, any>;
       expect(
-        root.plugin["notes-view"].notes,
+        root["notes-view"].notes,
         `iteration ${i}: notes should still be present`,
       ).toEqual([{ id: "n1", text: "persistent" }]);
       // Don't mutate; just close (flush no-op since nothing changed).

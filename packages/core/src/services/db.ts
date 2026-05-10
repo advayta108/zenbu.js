@@ -79,11 +79,12 @@ type SectionProxy<S> = {
 };
 
 // `Root` is the resolved DB root: `ZenbuRegister["db"]` from the user's
-// generated `zenbu-register.ts`, falling back to `{ plugin: CoreDbSections }`
-// when no plugin has augmented the registry. Lets the same baked dts ship
-// with core while consumer types flow in via module augmentation.
+// generated `zenbu-register.ts`, falling back to `{}` when no plugin has
+// augmented the registry. Lets the same baked dts ship with core while
+// consumer types flow in via module augmentation. Each top-level key on
+// `Root` is a section (e.g. `core`, `app`); section names are the only
+// namespace.
 type Root = ResolvedDbRoot;
-type Plugin = Root extends { plugin: infer P } ? P : never;
 
 export type SectionedEffectClient = {
   readRoot(): Root;
@@ -91,9 +92,8 @@ export type SectionedEffectClient = {
   createBlob(data: Uint8Array, hot?: boolean): Effect.Effect<string, KyjuError>;
   deleteBlob(blobId: string): Effect.Effect<void, KyjuError>;
   getBlobData(blobId: string): Effect.Effect<Uint8Array | null, KyjuError>;
-  plugin: {
-    [K in keyof Plugin]: EffectSectionProxy<Plugin[K]>;
-  };
+} & {
+  [K in keyof Root]: EffectSectionProxy<Root[K]>;
 };
 
 export type SectionedClient = {
@@ -102,9 +102,8 @@ export type SectionedClient = {
   createBlob(data: Uint8Array, hot?: boolean): Promise<string>;
   deleteBlob(blobId: string): Promise<void>;
   getBlobData(blobId: string): Promise<Uint8Array | null>;
-  plugin: {
-    [K in keyof Plugin]: SectionProxy<Plugin[K]>;
-  };
+} & {
+  [K in keyof Root]: SectionProxy<Root[K]>;
 };
 
 export async function resolveManifestModulePath(

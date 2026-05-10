@@ -68,9 +68,16 @@ export class RendererHostService extends Service.create({
     );
     this.url = entry.url;
     this.port = entry.port;
-    this.ctx.viewRegistry.registerAlias("app", APP_RENDERER_RELOADER_ID, "", {
-      kind: "app",
-      label: "App",
+    // The framework-managed view type is `"entrypoint"`: it's a synthetic
+    // alias over the `uiEntrypoint` directory from zenbu.config.ts that
+    // no plugin ever registers explicitly. User-defined view types live
+    // alongside it; the name makes the framework-vs-user distinction
+    // legible at every call site.
+    this.ctx.viewRegistry.registerAlias({
+      type: "entrypoint",
+      reloaderId: APP_RENDERER_RELOADER_ID,
+      pathPrefix: "",
+      meta: { kind: "entrypoint", label: "App" },
     });
 
     log.verbose(`ready at ${this.url}`);

@@ -1,11 +1,15 @@
 import {
+  Menu,
   WebContentsView,
   app,
   clipboard,
   dialog,
   shell,
+  type BaseWindowConstructorOptions,
+  type MenuItemConstructorOptions,
   type OpenDialogOptions,
-  type WebPreferences,
+  type WebContents,
+  type WebContentsViewConstructorOptions,
 } from "electron";
 import electronContextMenu from "electron-context-menu";
 import { URLSearchParams } from "node:url";
@@ -26,7 +30,9 @@ type MountedView = {
   disposeContextMenu: () => void;
 };
 
-function queryString(query?: Record<string, string | number | boolean | null | undefined>): string {
+function queryString(
+  query?: Record<string, string | number | boolean | null | undefined>,
+): string {
   if (!query) return "";
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -72,14 +78,15 @@ export class WindowService extends Service.create({
     // already-running app would spawn a duplicate window every time the
     // user tabs back in.
     //
-    // The entrypoint view type is the framework-registered alias `"app"`
-    // (see RendererHostService), not anything the user plugin tracks —
-    // so this is purely "open the canonical entrypoint", no last-value
-    // bookkeeping.
+    // The entrypoint view type is the framework-registered alias
+    // `"entrypoint"` (see RendererHostService) — a synthetic view over
+    // the project's `uiEntrypoint` directory, not anything the user
+    // plugin tracks. This is purely "open the canonical entrypoint", no
+    // last-value bookkeeping.
     this.setup("activate-reopens-entrypoint", () => {
       const onActivate = () => {
         if (this.ctx.baseWindow.windows.size > 0) return;
-        this.openView({ type: "app" }).catch((err) => {
+        this.openView({ type: "entrypoint" }).catch((err) => {
           log.error("activate-reopens-entrypoint: openView failed:", err);
         });
       };
@@ -88,16 +95,93 @@ export class WindowService extends Service.create({
         app.removeListener("activate", onActivate);
       };
     });
+
+    // Electron's default application menu binds View > Reload / Force Reload /
+    // Toggle Developer Tools to roles that call
+    // `BrowserWindow.getFocusedWindow().webContents.<method>()`. The
+    // framework only ever creates `BaseWindow` + `WebContentsView`, so the
+    // BrowserWindow lookup returns undefined and the menu's accelerator
+    // (Cmd+Alt+I etc.) crashes the main process with
+    // `Cannot read properties of undefined (reading 'toggleDevTools')`.
+    // Replace the application menu with one whose View items target the
+    // focused mounted WebContentsView directly.
+    this.setup("app-menu", () => this.installAppMenu());
+  }
+
+  /**
+   * Walk every mounted WebContentsView and return the one currently
+   * focused, so application-menu actions (reload, devtools) hit the view
+   * the user is actually looking at instead of the wrong window.
+   */
+  private focusedMountedWebContents(): WebContents | null {
+    for (const mounted of this.mounted.values()) {
+      const wc = mounted.view.webContents;
+      if (!wc.isDestroyed() && wc.isFocused()) return wc;
+    }
+    return null;
+  }
+
+  private installAppMenu(): () => void {
+    const isMac = process.platform === "darwin";
+    const focusedWc = () => this.focusedMountedWebContents();
+
+    const viewSubmenu: MenuItemConstructorOptions[] = [
+      {
+        label: "Reload",
+        accelerator: "CmdOrCtrl+R",
+        click: () => focusedWc()?.reload(),
+      },
+      {
+        label: "Force Reload",
+        accelerator: "Shift+CmdOrCtrl+R",
+        click: () => focusedWc()?.reloadIgnoringCache(),
+      },
+      {
+        label: "Toggle Developer Tools",
+        accelerator: isMac ? "Alt+Cmd+I" : "Ctrl+Shift+I",
+        click: () => {
+          const wc = focusedWc();
+          if (!wc) return;
+          if (wc.isDevToolsOpened()) wc.closeDevTools();
+          else wc.openDevTools({ mode: "detach" });
+        },
+      },
+      { type: "separator" },
+      { role: "resetZoom" },
+      { role: "zoomIn" },
+      { role: "zoomOut" },
+      { type: "separator" },
+      { role: "togglefullscreen" },
+    ];
+
+    // Use Electron's role-built submenus for the parts that don't reach
+    // into webContents (so we don't reimplement Cmd+Q, Edit, Window, etc),
+    // and only override View where the defaults crash.
+    const template: MenuItemConstructorOptions[] = [
+      ...((isMac ? [{ role: "appMenu" as const }] : []) as MenuItemConstructorOptions[]),
+      { role: "fileMenu" },
+      { role: "editMenu" },
+      { label: "View", submenu: viewSubmenu },
+      { role: "windowMenu" },
+    ];
+
+    const previous = Menu.getApplicationMenu();
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+    return () => {
+      Menu.setApplicationMenu(previous);
+    };
   }
 
   async openView(args: {
     type: string;
     windowId?: string;
     query?: Record<string, string | number | boolean | null | undefined>;
-    view?: {
-      backgroundColor?: string;
-      webPreferences?: WebPreferences;
-    };
+
+    baseWindow?: BaseWindowConstructorOptions;
+    webContentsView?: WebContentsViewConstructorOptions;
+    backgroundColor?: string;
+    contextMenu?: false | Parameters<typeof electronContextMenu>[0];
+    devtoolsShortcut?: boolean;
   }): Promise<{ windowId: string }> {
     const entry = this.ctx.viewRegistry.get(args.type);
     if (!entry) throw new Error(`No registered view for type "${args.type}"`);
@@ -105,7 +189,10 @@ export class WindowService extends Service.create({
     const windowId = args.windowId ?? MAIN_WINDOW_ID;
     let win = this.ctx.baseWindow.windows.get(windowId);
     if (!win) {
-      win = this.ctx.baseWindow.createWindow({ windowId }).win;
+      win = this.ctx.baseWindow.createWindow({
+        windowId,
+        baseWindow: args.baseWindow,
+      }).win;
     }
 
     const existing = this.mounted.get(windowId);
@@ -121,45 +208,62 @@ export class WindowService extends Service.create({
     }
 
     const view = new WebContentsView({
+      ...args.webContentsView,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
-        ...args.view?.webPreferences,
+        ...args.webContentsView?.webPreferences,
       },
     });
-    view.setBackgroundColor(args.view?.backgroundColor ?? entrypointBgColor());
+    view.setBackgroundColor(args.backgroundColor ?? entrypointBgColor());
     win.contentView.addChildView(view);
 
     // Right-click → standard browser context menu with "Inspect Element" so
     // the framework's iframes are debuggable out of the box.
-    const disposeContextMenu = electronContextMenu({
-      window: view,
-      showInspectElement: true,
-      showSearchWithGoogle: false,
-      showSelectAll: true,
-    });
+    const disposeContextMenu =
+      args.contextMenu === false
+        ? () => {}
+        : electronContextMenu({
+            showInspectElement: true,
+            showSearchWithGoogle: false,
+            showSelectAll: true,
+            prepend: (_defaults, _params, _win) => [
+              {
+                label: "Reload window",
+                click: () => {
+                  try {
+                    view.webContents.reload();
+                  } catch (err) {
+                    log.error("context menu: reload window failed:", err);
+                  }
+                },
+              },
+              {
+                label: "Reload main process",
+                click: () => {
+                  void runtime.reloadAll().catch((err) => {
+                    log.error("context menu: reload main process failed:", err);
+                  });
+                },
+              },
+              { type: "separator" },
+            ],
+            ...args.contextMenu,
+            window: view,
+          });
 
-    // Keyboard shortcut to toggle devtools without right-clicking. Mirrors
-    // Chrome / Electron's defaults, which a `WebContentsView` doesn't get
-    // automatically (those defaults only fire on a top-level `BrowserWindow`).
-    const handleInput = (
-      _event: Electron.Event,
-      input: Electron.Input,
-    ) => {
-      const isToggle =
-        (input.key === "I" || input.key === "i") &&
-        ((process.platform === "darwin" && input.alt && input.meta) ||
-          (process.platform !== "darwin" && input.shift && input.control));
-      if (isToggle || input.key === "F12") {
+    if (args.devtoolsShortcut !== false) {
+      const handleInput = (_event: Electron.Event, input: Electron.Input) => {
+        if (input.key !== "F12") return;
         if (view.webContents.isDevToolsOpened()) {
           view.webContents.closeDevTools();
         } else {
           view.webContents.openDevTools({ mode: "detach" });
         }
-      }
-    };
-    view.webContents.on("before-input-event", handleInput);
+      };
+      view.webContents.on("before-input-event", handleInput);
+    }
 
     const layout = () => {
       const { width, height } = win.getContentBounds();

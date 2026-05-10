@@ -1,3 +1,6 @@
+/**
+ * back compat surface? delete me pls
+ */
 // Back-compat surface: `@zenbujs/core/build` was the import path for
 // `defineBuildConfig` before the unified `zenbu.config.ts`. The new
 // canonical path is `@zenbujs/core/config`, but we keep the build-only

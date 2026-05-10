@@ -4,7 +4,15 @@ import type { AnyRouter } from "@zenbu/zenrpc";
 import { Service, runtime } from "../runtime";
 import { HttpService } from "./http";
 import { createLogger } from "../shared/log";
-import type { CoreEvents, ResolvedEvents } from "../registry";
+import type { Events as CoreEventsRaw } from "../events";
+import type { ResolvedEvents } from "../registry";
+
+// Core's events are namespaced under `core` to mirror plugin-scoped
+// events (`{ <pluginName>: { … } }`). The runtime `createServer` is
+// parameterized by this shape so its `emit` proxy starts at the plugin
+// boundary, matching the consumer-side `ResolvedEvents` produced by
+// `zen link`.
+type CoreEvents = { core: CoreEventsRaw };
 
 const log = createLogger("rpc");
 

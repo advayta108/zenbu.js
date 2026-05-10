@@ -17,6 +17,21 @@
       "@zenbujs/core/registry": [
         "./src/registry.ts"
       ],
+      "@zenbujs/core/registry-generated": [
+        "./src/registry-generated.ts"
+      ],
+      "@zenbujs/core/services": [
+        "./src/services/index.ts"
+      ],
+      "@zenbujs/core/events": [
+        "./src/events.ts"
+      ],
+      "@zenbujs/core/schema": [
+        "./src/schema.ts"
+      ],
+      "@zenbujs/core/db": [
+        "./src/db.ts"
+      ],
       "#registry/*": [
         "./types/*"
       ]

@@ -8,6 +8,7 @@ import {
   type Plugin,
   type ResolvedConfig,
   type ResolvedPlugin,
+  type ResolvedPluginDependency,
 } from "./build-config"
 
 const localRequire = createRequire(import.meta.url)
@@ -73,6 +74,36 @@ function assertPluginShape(p: unknown, source: string): asserts p is Plugin {
   if (!Array.isArray(obj.services)) {
     throw new Error(`${source}: plugin \`services\` must be an array of glob strings.`)
   }
+  if (obj.dependsOn !== undefined) {
+    if (!Array.isArray(obj.dependsOn)) {
+      throw new Error(`${source}: plugin \`dependsOn\` must be an array.`)
+    }
+    for (const [i, dep] of (obj.dependsOn as unknown[]).entries()) {
+      if (!dep || typeof dep !== "object") {
+        throw new Error(
+          `${source}: dependsOn[${i}] must be an object with { name, from }.`,
+        )
+      }
+      const d = dep as Record<string, unknown>
+      if (typeof d.name !== "string" || d.name.length === 0) {
+        throw new Error(`${source}: dependsOn[${i}].name must be a non-empty string.`)
+      }
+      if (typeof d.from !== "string" || d.from.length === 0) {
+        throw new Error(`${source}: dependsOn[${i}].from must be a non-empty string.`)
+      }
+    }
+  }
+}
+
+function resolveDependsOn(
+  plugin: Plugin,
+  dir: string,
+): ResolvedPluginDependency[] | undefined {
+  if (!plugin.dependsOn || plugin.dependsOn.length === 0) return undefined
+  return plugin.dependsOn.map((d) => ({
+    name: d.name,
+    fromPath: path.isAbsolute(d.from) ? d.from : path.resolve(dir, d.from),
+  }))
 }
 
 function resolvePluginPaths(plugin: Plugin, dir: string): ResolvedPlugin {
@@ -87,6 +118,7 @@ function resolvePluginPaths(plugin: Plugin, dir: string): ResolvedPlugin {
     preloadPath: plugin.preload ? abs(plugin.preload) : undefined,
     eventsPath: plugin.events ? abs(plugin.events) : undefined,
     icons: plugin.icons,
+    dependsOn: resolveDependsOn(plugin, dir),
   }
 }
 
@@ -213,4 +245,59 @@ export async function loadConfig(projectDir: string): Promise<{
     },
     pluginSourceFiles,
   }
+}
+
+/**
+ * Resolve a `dependsOn[].fromPath` to a `ResolvedPlugin`.
+ *
+ * `fromPath` may be:
+ *   - a `zenbu.plugin.ts` (single plugin: load and return it; `name` must
+ *     match the plugin's `name`),
+ *   - a `zenbu.config.ts` (multi-plugin: load and pick `plugins[].name === name`).
+ *
+ * No recursion into the upstream's own `dependsOn` happens here — we only
+ * need the upstream's **own surface** for vendoring, never its composite.
+ */
+export async function loadPluginFromPath(args: {
+  fromPath: string
+  name: string
+}): Promise<ResolvedPlugin> {
+  const { fromPath, name } = args
+  if (!fs.existsSync(fromPath)) {
+    throw new Error(
+      `dependsOn: file ${fromPath} does not exist (looking for plugin "${name}").`,
+    )
+  }
+  if (!PLUGIN_FILE_RE.test(fromPath)) {
+    throw new Error(
+      `dependsOn: \`from\` must point at a .ts/.js file, got ${path.basename(fromPath)}.`,
+    )
+  }
+  const base = path.basename(fromPath)
+  const isConfig = base.startsWith("zenbu.config.")
+  if (isConfig) {
+    const config = await importFresh<Config>(fromPath)
+    if (!config || typeof config !== "object" || !Array.isArray(config.plugins)) {
+      throw new Error(
+        `dependsOn: ${fromPath} is not a valid zenbu config (no \`plugins\` array).`,
+      )
+    }
+    const configDir = path.dirname(fromPath)
+    for (const entry of config.plugins) {
+      const { resolved } = await resolvePluginEntry(entry, configDir)
+      if (resolved.name === name) return resolved
+    }
+    throw new Error(
+      `dependsOn: ${fromPath} does not declare a plugin named "${name}".`,
+    )
+  }
+  // Treat as a `zenbu.plugin.ts` (or any .ts file whose default export is a Plugin).
+  const plugin = await importFresh<Plugin>(fromPath)
+  assertPluginShape(plugin, fromPath)
+  if (plugin.name !== name) {
+    throw new Error(
+      `dependsOn: ${fromPath} exports plugin "${plugin.name}", expected "${name}".`,
+    )
+  }
+  return resolvePluginPaths(plugin, path.dirname(fromPath))
 }

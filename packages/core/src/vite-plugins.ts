@@ -2,7 +2,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 import { zenbuAdvicePlugin } from "@zenbu/advice/vite";
-import { getPlugins } from "./runtime";
 import {
   getAdvice,
   getAllTypes,
@@ -74,60 +73,6 @@ export function zenbuFrameworkResolve(): Plugin {
         },
       };
     },
-
-    /**
-     * Vite's built-in tsconfig watcher (`reloadOnTsconfigChange` in
-     * `plugins/esbuild.ts`) only triggers a cache-clear + full reload when
-     * the changed path ends in exactly `/tsconfig.json` — non-canonical
-     * names like `tsconfig.local.json` are silently ignored even though the
-     * underlying chokidar watcher does fire on them. We use that pattern
-     * (a committed `tsconfig.json` that extends a generated, gitignored
-     * `tsconfig.local.json`) so plugin sources can `#registry/*`-import
-     * the host's typed registry without a host-specific path leaking into
-     * a committed file.
-     *
-     * Without this hook, every `zen link` run would silently leave esbuild
-     * with a stale "extends target missing" cache and plugin sources would
-     * fail to load until the dev process is killed by hand. This watches
-     * the plugin directories declared in the host's `config.json` and
-     * proactively calls `server.restart()` on add/change/unlink of any
-     * `tsconfig.local.json`.
-     */
-    configureServer(server) {
-      // Plugin dirs come from the runtime registry, populated by the
-      // loader-emitted barrel before any service evaluates. Since reloader
-      // boots after `runtime.replacePlugins(...)` runs, the registry is
-      // fully populated when this hook fires.
-      const tsconfigPaths = getPlugins().map((p) =>
-        path.join(p.dir, "tsconfig.local.json"),
-      );
-      if (tsconfigPaths.length === 0) return;
-      server.watcher.add(tsconfigPaths);
-
-      let restarting = false;
-      const handle = (file: string) => {
-        if (!file.endsWith("tsconfig.local.json")) return;
-        if (restarting) return;
-        restarting = true;
-        server.config.logger.info(
-          `[zenbu] ${file} changed — restarting Vite to refresh tsconfig (vite's built-in watcher only fires on /tsconfig.json)`,
-          { timestamp: true, clear: false },
-        );
-        server
-          .restart()
-          .catch((err) => {
-            server.config.logger.error(
-              `[zenbu] vite restart failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          })
-          .finally(() => {
-            restarting = false;
-          });
-      };
-      server.watcher.on("add", handle);
-      server.watcher.on("change", handle);
-      server.watcher.on("unlink", handle);
-    },
   };
 }
 
@@ -171,15 +116,21 @@ function generateAdvicePreludeCode(entries: ViewAdviceEntry[]): string {
   entries.forEach((entry, i) => {
     const alias = `__r${i}`;
     imports.push(
-      `import { ${entry.exportName} as ${alias} } from ${JSON.stringify(entry.modulePath)}`,
+      `import { ${entry.exportName} as ${alias} } from ${JSON.stringify(
+        entry.modulePath,
+      )}`,
     );
     if (entry.type === "replace") {
       calls.push(
-        `replace(${JSON.stringify(entry.moduleId)}, ${JSON.stringify(entry.name)}, ${alias})`,
+        `replace(${JSON.stringify(entry.moduleId)}, ${JSON.stringify(
+          entry.name,
+        )}, ${alias})`,
       );
     } else {
       calls.push(
-        `advise(${JSON.stringify(entry.moduleId)}, ${JSON.stringify(entry.name)}, ${JSON.stringify(entry.type)}, ${alias})`,
+        `advise(${JSON.stringify(entry.moduleId)}, ${JSON.stringify(
+          entry.name,
+        )}, ${JSON.stringify(entry.type)}, ${alias})`,
       );
     }
   });
@@ -321,11 +272,6 @@ export function zenbuAdviceTransform(): Plugin {
 }
 
 /**
- * Returns the framework Vite plugins in the canonical order. Auto-injected
- * by `ReloaderService` for every renderer; exported for advanced users who
- * want to compose them into a custom Vite stack.
- *
- * Order matters:
  *   1. `zenbuFrameworkResolve` — `enforce: "pre"`, runs first so it gets
  *      `react` / `@zenbujs/core/*` *before* Vite's default resolver walks
  *      up and finds plugin-local copies.

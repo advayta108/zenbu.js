@@ -6,17 +6,53 @@ import { createLogger } from "../shared/log";
 
 const log = createLogger("view-registry");
 
+/**
+ * View metadata surfaced to the renderer (icon picker, sidebar slot,
+ * bottom-panel slot, human label). Optional everywhere; views without
+ * metadata simply don't appear in the corresponding chrome.
+ */
+export interface ViewMeta {
+  kind?: string;
+  sidebar?: boolean;
+  bottomPanel?: boolean;
+  label?: string;
+}
+
 interface ViewEntry {
   type: string;
   url: string;
   port: number;
   ownsServer: boolean;
-  meta?: {
-    kind?: string;
-    sidebar?: boolean;
-    bottomPanel?: boolean;
-    label?: string;
-  };
+  meta?: ViewMeta;
+}
+
+/**
+ * Spec for a fresh view registration. The registry spins up a Vite dev
+ * server rooted at `root` and exposes the resulting URL under `type`.
+ *
+ * - `type`: stable id used by `<View type="...">` in the renderer.
+ * - `root`: absolute path of the view's `index.html` directory.
+ * - `configFile`: explicit Vite config path, or `false` to skip auto-discovery.
+ * - `meta`: optional renderer-facing metadata.
+ */
+export interface RegisterViewSpec {
+  type: string;
+  root: string;
+  configFile?: string | false;
+  meta?: ViewMeta;
+}
+
+/**
+ * Spec for re-exposing an existing reloader under a different view type
+ * with a path prefix. Mostly used by core to alias the host renderer
+ * (`"app"`) and by plugins that bundle multiple sub-views inside one
+ * Vite server.
+ */
+export interface RegisterAliasSpec {
+  type: string;
+  reloaderId: string;
+  pathPrefix: string;
+  meta?: ViewMeta;
 }
 
 export class ViewRegistryService extends Service.create({
@@ -26,17 +62,8 @@ export class ViewRegistryService extends Service.create({
   private views = new Map<string, ViewEntry>();
   private manifestIcons = new Map<string, string>();
 
-  async register(
-    type: string,
-    root: string,
-    configFile?: string | false,
-    meta?: {
-      kind?: string;
-      sidebar?: boolean;
-      bottomPanel?: boolean;
-      label?: string;
-    },
-  ): Promise<ViewEntry> {
+  async register(spec: RegisterViewSpec): Promise<ViewEntry> {
+    const { type, root, configFile, meta } = spec;
     log.verbose(`register("${type}", root="${root}", config="${configFile}")`);
     const existing = this.views.get(type);
     if (existing) {
@@ -64,17 +91,8 @@ export class ViewRegistryService extends Service.create({
     return entry;
   }
 
-  registerAlias(
-    type: string,
-    reloaderId: string,
-    pathPrefix: string,
-    meta?: {
-      kind?: string;
-      sidebar?: boolean;
-      bottomPanel?: boolean;
-      label?: string;
-    },
-  ): ViewEntry {
+  registerAlias(spec: RegisterAliasSpec): ViewEntry {
+    const { type, reloaderId, pathPrefix, meta } = spec;
     const existing = this.views.get(type);
     if (existing) return existing;
 
@@ -150,7 +168,7 @@ export class ViewRegistryService extends Service.create({
     }));
     await Effect.runPromise(
       client.update((root) => {
-        root.plugin.core.lastKnownViewRegistry = snapshot;
+        root.core.lastKnownViewRegistry = snapshot;
       }),
     ).catch((err) => {
       // log removed
