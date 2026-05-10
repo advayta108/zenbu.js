@@ -177,9 +177,6 @@ importers:
       ws:
         specifier: ^8.18.0
         version: 8.19.0
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -214,6 +211,9 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.15)(happy-dom@18.0.1)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.32.0)(msw@2.12.14(@types/node@22.19.15)(typescript@5.9.3))(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.3)
+      zod:
+        specifier: ^4
+        version: 4.4.3
 
   packages/create-zenbu-app:
     dependencies:
@@ -312,9 +312,6 @@ importers:
       nanoid:
         specifier: ^5.1.6
         version: 5.1.6
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
     devDependencies:
       '@testing-library/react':
         specifier: ^16.3.0
@@ -349,6 +346,9 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@25.5.0)(happy-dom@18.0.1)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.32.0)(msw@2.12.14(@types/node@25.5.0)(typescript@5.9.3))(terser@5.46.1)(tsx@4.21.0)(yaml@2.8.3)
+      zod:
+        specifier: 4.3.6
+        version: 4.3.6
 
   packages/zenrpc:
     dependencies:
@@ -4895,6 +4895,9 @@ packages:
 
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
+
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
 snapshots:
 
@@ -10104,3 +10107,5 @@ snapshots:
       zod: 4.3.6
 
   zod@4.3.6: {}
+
+  zod@4.4.3: {}
