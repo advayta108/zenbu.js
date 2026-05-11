@@ -16,7 +16,7 @@
   <br/>
 
   <span>
-      <a href="https://zenbu.dev" style="text-decoration: none;">Zenbu.js</a> is a JavaScript framework for building hackable, extensible software.
+      <a href="https://zenbu.dev" style="text-decoration: none;">Zenbu.js</a> is a JavaScript framework for building hackable software.
   </span>
 
 
