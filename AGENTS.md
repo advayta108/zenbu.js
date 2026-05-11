@@ -1,0 +1,1 @@
+- use pnpm publish to publish packages, not npm
