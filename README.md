@@ -24,7 +24,6 @@
     Zenbu.js is a JavaScript framework for building hackable, extensible software.
   </span>
 
-  <br/><br/>
 
 </p>
 
