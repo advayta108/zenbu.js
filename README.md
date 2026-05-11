@@ -2,11 +2,13 @@
   <img src="./packages/website/app/icon.png" alt="Zenbu.js Logo" width="100" />
 </p>
 
-<p align="center">
+<div align="center">
+
   [![CI](https://img.shields.io/github/actions/workflow/status/zenbu-labs/zenbu/ci.yml?branch=main&label=CI)](https://github.com/zenbu-labs/zenbu/actions)
   [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/zenbu-labs/zenbu/blob/main/LICENSE)
   [![npm version](https://img.shields.io/npm/v/@zenbujs/core.svg?label=npm%20package)](https://www.npmjs.com/package/@zenbujs/core)
-</p>
+
+</div>
 
 <p align="center">
   <b>
@@ -33,7 +35,6 @@
 </p>
 
 <p align="center">
-  
 ```sh
 pnpx create-zenbu-app my-zenbu-app
 cd my-zenbu-app
