@@ -6,7 +6,7 @@ export const metadata = {
   description: "Download Zenbu for macOS, Windows, and Linux.",
 };
 
-const RELEASES_URL = "https://github.com/zenbu-labs/zenbu/releases";
+const RELEASES_URL = "https://github.com/zenbu-labs/zenbu-demo-release/releases";
 
 type Option = {
   label: string;
@@ -26,7 +26,7 @@ type Release = { tag_name: string; assets: ReleaseAsset[] };
 async function getLatestRelease(): Promise<Release | null> {
   try {
     const res = await fetch(
-      "https://api.github.com/repos/zenbu-labs/zenbu/releases/latest",
+      "https://api.github.com/repos/zenbu-labs/zenbu-demo-release/releases/latest",
       {
         next: { revalidate: 600 },
         headers: { Accept: "application/vnd.github+json" },

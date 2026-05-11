@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 
-const DOWNLOAD_URL = "https://github.com/zenbu-labs/zenbu/releases";
+const MACOS_DOWNLOAD_URL = "/api/download/macos";
 
 function AppleIcon() {
   return (
@@ -82,13 +82,12 @@ export function DownloadPopover() {
         <div className={`absolute left-0 top-full mt-2 w-44 rounded-lg border border-zinc-200 bg-white shadow-lg origin-top-left z-50 ${closing ? "animate-popover-out" : "animate-popover-in"}`}>
           <div className="p-1">
             <a
-              href={DOWNLOAD_URL}
-              target="_blank"
-              rel="noopener noreferrer"
+              href={MACOS_DOWNLOAD_URL}
               className="flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-100 transition-colors"
             >
               <AppleIcon />
               macOS
+              <span className="ml-auto text-[11px] text-zinc-400">arm64</span>
             </a>
             <button
               disabled
