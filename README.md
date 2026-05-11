@@ -24,22 +24,23 @@
 
 <p align="center">
   <a href="https://zenbulabs.mintlify.app" style="text-decoration: none;">Documentation</a>
-  &nbsp;&nbsp;•&nbsp;&nbsp;
-  <a href="https://www.zenbu.dev/demo" style="text-decoration: none;"><b>Try the demo →</b></a>
+  &nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="https://www.zenbu.dev/demo" style="text-decoration: none;"><b>Try the demo&nbsp;→</b></a>
 </p>
 
 <br />
 
 <p align="center">
-  <b>Get started in 5 seconds:</b>
+  <b>Get started in 5 seconds</b>
 </p>
 
 <p align="center">
-```sh
+
+<pre>
 pnpx create-zenbu-app my-zenbu-app
 cd my-zenbu-app
 pnpm run dev
-```
+</pre>
 
 </p>
 
