@@ -11,7 +11,7 @@ cd my-zenbu-app
 pnpm run dev
 ```
 
-> **Try the demo:** [https://www.zenbu.dev/demo](https://www.zenbu.dev/demo)
+### [**Try the demo →**][https://www.zenbu.dev/demo](https://www.zenbu.dev/demo)
 
 ### Why should you use this
 
