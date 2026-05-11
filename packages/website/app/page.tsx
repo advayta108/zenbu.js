@@ -7,7 +7,7 @@ import { InstallCommand } from "./install-command";
 export const metadata = {
   title: "Zenbu.js",
   description:
-    "A framework for building hackable software. Built on Electron, React, and Vite.",
+    "Zenbu.js is a JavaScript framework for building hackable software.",
 };
 
 function Logo() {
