@@ -20,9 +20,9 @@
 
   <br/>
 
-  <em>
+  <span>
     Zenbu.js is a JavaScript framework for building hackable, extensible software.
-  </em>
+  </span>
 
   <br/><br/>
 
