@@ -4,10 +4,10 @@ import { useState, useRef, useEffect, type SVGProps } from "react";
 import { track } from "@vercel/analytics";
 
 const COMMANDS = {
-  pnpm: "pnpm create zenbu-app",
-  bun: "bun create zenbu-app",
-  npm: "npx create-zenbu-app",
-  yarn: "yarn create zenbu-app",
+  pnpm: "pnpm create zenbu-app@latest",
+  bun: "bun create zenbu-app@latest",
+  npm: "npx create-zenbu-app@latest",
+  yarn: "yarn create zenbu-app@latest",
 } as const;
 
 type PM = keyof typeof COMMANDS;

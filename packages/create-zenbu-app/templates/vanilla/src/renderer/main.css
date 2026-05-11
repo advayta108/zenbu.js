@@ -2,10 +2,12 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  background: #111;
-  color: #e5e5e5;
+  height: 100%;
+  background: #fafafa;
+  color: #18181b;
   font-family:
     ui-sans-serif,
     system-ui,
@@ -13,6 +15,14 @@ body {
     "Segoe UI",
     Roboto,
     sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body {
+    background: #09090b;
+    color: #f4f4f5;
+  }
 }
 
 .app {
@@ -24,13 +34,18 @@ body {
 .titlebar {
   height: 40px;
   flex-shrink: 0;
-  border-bottom: 1px solid #222;
+  border-bottom: 1px solid #e4e4e7;
+}
+
+@media (prefers-color-scheme: dark) {
+  .titlebar {
+    border-bottom-color: #27272a;
+  }
 }
 
 .home {
   flex: 1;
   padding: 24px 32px 32px;
-  color: #e5e5e5;
 }
 
 .home h1 {
@@ -40,7 +55,7 @@ body {
 }
 
 .home .lede {
-  color: #888;
+  color: #71717a;
   margin: 0 0 24px;
 }
 
@@ -76,8 +91,8 @@ body {
   flex: 1;
   padding: 8px;
   border-radius: 4px;
-  background: #232328;
-  color: #b0b0b0;
+  background: #f4f4f5;
+  color: #3f3f46;
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow: hidden;
@@ -85,9 +100,16 @@ body {
   white-space: nowrap;
 }
 
+@media (prefers-color-scheme: dark) {
+  .cwd-value {
+    background: #18181b;
+    color: #d4d4d8;
+  }
+}
+
 .copy-button {
-  background: #27272a;
-  color: inherit;
+  background: #e4e4e7;
+  color: #18181b;
   border: 0;
   padding: 8px 12px;
   border-radius: 4px;
@@ -97,5 +119,15 @@ body {
 }
 
 .copy-button:hover {
-  background: #3f3f46;
+  background: #d4d4d8;
+}
+
+@media (prefers-color-scheme: dark) {
+  .copy-button {
+    background: #27272a;
+    color: #f4f4f5;
+  }
+  .copy-button:hover {
+    background: #3f3f46;
+  }
 }

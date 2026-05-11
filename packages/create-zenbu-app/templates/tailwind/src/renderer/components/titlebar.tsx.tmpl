@@ -1,0 +1,9 @@
+export function Titlebar() {
+  return (
+    <div
+      className="h-10 shrink-0 border-b border-zinc-200 dark:border-zinc-800"
+      // @ts-expect-error webkit property
+      style={{ WebkitAppRegion: "drag" }}
+    />
+  )
+}

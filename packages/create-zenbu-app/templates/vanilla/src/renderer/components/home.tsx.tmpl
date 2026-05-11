@@ -1,17 +1,7 @@
 import { useRpc } from "@zenbujs/core/react"
 import { useState } from "react"
 
-function Titlebar() {
-  return (
-    <div
-      className="titlebar"
-      // @ts-expect-error webkit property
-      style={{ WebkitAppRegion: "drag" }}
-    />
-  )
-}
-
-function Home() {
+export function Home() {
   const rpc = useRpc()
   const [cwd, setCwd] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -20,14 +10,14 @@ function Home() {
     <main className="home">
       <h1>Welcome to Zenbu.js</h1>
       <p className="lede">
-        Edit <code>src/renderer/App.tsx</code> to get started.
+        Edit <code>src/renderer/components/home.tsx</code> to get started.
       </p>
 
       <button
         className="primary-button"
         onClick={async () => {
           setCopied(false)
-          setCwd(await rpc.app.repo.getCwd())
+          setCwd(await rpc.app.cwd.get())
         }}
       >
         Get cwd
@@ -49,14 +39,5 @@ function Home() {
         </div>
       )}
     </main>
-  )
-}
-
-export function App() {
-  return (
-    <div className="app">
-      <Titlebar />
-      <Home />
-    </div>
   )
 }

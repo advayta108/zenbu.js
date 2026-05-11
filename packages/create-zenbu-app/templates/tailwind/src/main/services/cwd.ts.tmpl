@@ -1,0 +1,7 @@
+import { Service } from "@zenbujs/core/runtime"
+
+export class CwdService extends Service.create({ key: "cwd" }) {
+  async get() {
+    return process.cwd()
+  }
+}

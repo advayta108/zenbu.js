@@ -8,7 +8,8 @@
     "build:source": "zen build:source",
     "build:electron": "zen build:electron",
     "publish:source": "zen publish:source",
-    "link": "zen link"
+    "link": "zen link",
+    "db:generate": "zen db generate"
   },
   "dependencies": {
     "@zenbujs/core": "^0.0.20",
