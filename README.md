@@ -19,7 +19,6 @@
       <a href="https://zenbu.dev" style="text-decoration: none;">Zenbu.js</a> is a JavaScript framework for building hackable software.
   </span>
 
-
 </p>
 
 <p align="center">
@@ -115,6 +114,6 @@ For now, yes. But support for other runtimes like Tauri and pure Node.js is comi
 
 <br/>
 
-It's not yet ready, Zenbu.js is still in alpha.
+No - Zenbu.js is still in alpha, so it may still contain bugs and have large API changes
 
 </details>
