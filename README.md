@@ -47,11 +47,11 @@ pnpm run dev
 
 ### Why should you use this
 
-1. Coding agents make it possible to generate software on demand for a specific use case. If apps was hackable, users could customization applications for a specific use case without starting from scratch. When you write an app in Zenbu your entire app is modifiable and extensible.
+1. Coding agents can generate and customize software on demand for a specific use case. A hackable app gives them full access to do that.
 
-2. Giving users the ability to modify your app makes it possible to explore many more directions than you could yourself
+2. Letting people modify your app means more directions get explored than you could reach on your own.
 
-3. Zenbu enforces an architecture to make your code extensible through low coupling and high cohesion. This makes it possible to make more complex applications without noticable complexity added to your codebase
+3. Extensible code tends to be more maintainable, because it’s already written to be changed.
 
 ---
 
