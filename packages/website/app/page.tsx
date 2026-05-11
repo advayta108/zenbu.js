@@ -31,13 +31,13 @@ export default function Home() {
         <div className="max-w-lg w-full pt-16 sm:pt-24">
           <div className="flex items-end gap-3">
             <Logo />
-            <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight leading-none">
+            <h1 className="text-[2.5rem] sm:text-[2.75rem] font-semibold tracking-tight leading-[0.8]">
               Zenbu.js
             </h1>
           </div>
 
           <p className="mt-8 mb-6 text-[17px] text-zinc-500 leading-relaxed">
-            A framework for building hackable software.
+            The framework for building <span className="text-zinc-900">hackable</span> software.
           </p>
 
           {/* Install */}
