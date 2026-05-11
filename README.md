@@ -94,13 +94,9 @@ Users also have the option to make changes only via plugins, which can never hav
 
 Zenbu.js organizes your app so new code can be loaded into your application. The APIs are designed with the expectation that new unknown code will want to plug into your application to access and modify functionality you defined.
 
----
-
 #### Do I need to use Electron?
 
 For now, yes. But support for other runtimes like Tauri and pure Node.js is coming soon.
-
----
 
 #### Is it ready for production usage?
 
