@@ -18,7 +18,13 @@
 
 <p align="center">
 
+  <br/>
+
+  <em>
     Zenbu.js is a JavaScript framework for building hackable, extensible software.
+  </em>
+
+  <br/><br/>
 
 </p>
 
