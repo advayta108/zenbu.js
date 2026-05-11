@@ -43,9 +43,9 @@ pnpm run dev
 
 <br />
 
----
+## Why should you use this
 
-### Why should you use this
+---
 
 1. Coding agents can generate and customize software on demand for a specific use case. A hackable app gives them full access to do that.
 
@@ -53,13 +53,13 @@ pnpm run dev
 
 3. Extensible code tends to be more maintainable, because it’s already written to be changed.
 
----
+## How does it work
 
-### How does it work
+---
 
 Users can modify Zenbu apps in 2 ways:
 
-#### Modifying the raw source code
+### Modifying the raw source code
 
 When a Zenbu app is built for production, there is no TypeScript compilation or bundling step. The same source code you wrote in development will be downloaded by the user and stored in `~/.zenbu/<app-name>`. When the app launches, it discovers the app code, dynamically compiles it, and runs the JavaScript using Electrons node.js runtime.
 
@@ -67,7 +67,7 @@ All the source code in this directory is being watched for changes. When there i
 
 The codebase stored inside `~/.zenbu/<app-name>` is tracked by git. This makes it possible for a user to edit the source code without losing changes when the application code gets updated. The git repo is linked to a remote repository owned by the developer, so updates are represented as running `git pull` on the users device.
 
-#### Injecting plugins
+### Injecting plugins
 
 Editing the raw source code of the application can be risky. If a user and the developer have conflicting edits, the user needs to spend time merging changes. This motivates plugins - a way to inject code into the application that can modify behavior without editing the raw source code.
 
@@ -77,9 +77,9 @@ When you write an app in Zenbu you do not need to think about writing a plugin A
 
 Plugins hot reload the same way application code hot reloads. This is because application code gets implemented as a plugin.
 
----
+## FAQ
 
-### FAQ
+---
 
 <details>
 <summary><b>What happens if a user edits the app and it conflicts with a future update?</b></summary>
