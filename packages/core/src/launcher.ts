@@ -513,10 +513,7 @@ async function ensureDepsInstalled(
   console.log(
     `[launcher] installing deps in ${appsDir} via ${pm.type}@${pm.version}`,
   );
-  installer?.step(
-    "install",
-    `Installing dependencies (${pm.type}@${pm.version})`,
-  );
+  installer?.step("install", "Installing dependencies");
   await runInstall({
     appsDir,
     resourcesPath: RESOURCES_PATH,
