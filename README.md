@@ -1,24 +1,22 @@
-<p align="center">
-  <img src="./packages/website/app/icon.png" alt="Zenbu.js Logo" width="100" />
-</p>
+![Build hackable, extensible software](./packages/website/app/icon.png 'Zenbu.js Logo')
 
 <p align="center">
-  <a href="https://github.com/zenbu-labs/zenbu/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/zenbu-labs/zenbu/ci.yml?branch=main&label=CI" alt="CI Status" />
-  </a>
-  <a href="https://github.com/zenbu-labs/zenbu/blob/main/LICENSE">
-    <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License MIT" />
-  </a>
-  <a href="https://www.npmjs.com/package/@zenbujs/core">
-    <img src="https://img.shields.io/npm/v/@zenbujs/core.svg?label=npm%20package" alt="@zenbujs/core npm package" />
-  </a>
+
+  <br/>
+
+  <a href="https://zenbu.dev">Zenbu.js</a> is a framework for building hackable, extensible software.
+
+  <br/><br/>
+
 </p>
 
-<p align="center">
-  <b>
-    <a href="https://zenbu.dev" style="text-decoration: none;">Zenbu.js</a>
-  </b>
-</p>
+<div align="center">
+
+[![CI](https://img.shields.io/github/actions/workflow/status/zenbu-labs/zenbu/ci.yml?branch=main&label=CI)](https://github.com/zenbu-labs/zenbu/actions)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/zenbu-labs/zenbu/blob/main/LICENSE)
+[![npm version](https://img.shields.io/npm/v/@zenbujs/core.svg?label=npm%20package)](https://www.npmjs.com/package/@zenbujs/core)
+
+</div>
 
 <p align="center">
   <em>
