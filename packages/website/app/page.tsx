@@ -230,7 +230,7 @@ export default function Home() {
                 </svg>
               </summary>
               <div className="mt-3 text-[15px] text-zinc-500 leading-[1.75]">
-                <p>It's not yet ready, Zenbu is still in alpha.</p>
+                <p>It's not yet ready, Zenbu.js is still in alpha.</p>
               </div>
             </details>
           </div>

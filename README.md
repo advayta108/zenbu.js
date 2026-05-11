@@ -1,17 +1,56 @@
-> [!WARNING]
-> Zenbu is in alpha
+<p align="center">
+  <img src="./packages/website/app/icon.png" alt="Zenbu.js Logo" width="100" />
+</p>
 
-Zenbu.js is a JavaScript framework for building hackable software
+<p align="center">
+  <a href="https://github.com/zenbu-labs/zenbu/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/zenbu-labs/zenbu/ci.yml?branch=main&label=CI" alt="CI Status" />
+  </a>
+  <a href="https://github.com/zenbu-labs/zenbu/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License MIT" />
+  </a>
+  <a href="https://www.npmjs.com/package/@zenbujs/core">
+    <img src="https://img.shields.io/npm/v/@zenbujs/core.svg?label=npm%20package" alt="@zenbujs/core npm package" />
+  </a>
+</p>
 
-### Get started in 5s
+<p align="center">
+  <b>
+    <a href="https://zenbu.dev">Zenbu.js</a>
+  </b>
+</p>
 
-```
+<p align="center">
+  <em>
+    A JavaScript framework for building hackable, extensible software.
+  </em>
+</p>
+
+<p align="center">
+  <a href="https://zenbulabs.mintlify.app">Documentation</a>
+  &nbsp;&nbsp;•&nbsp;&nbsp;
+  <a href="https://www.zenbu.dev/demo"><b>Try the demo →</b></a>
+</p>
+
+<br />
+
+<p align="center">
+  <b>Get started in 5 seconds:</b>
+</p>
+
+<p align="center">
+  
+```sh
 pnpx create-zenbu-app my-zenbu-app
 cd my-zenbu-app
 pnpm run dev
 ```
 
-### [**Try the demo →**](https://www.zenbu.dev/demo)
+</p>
+
+<br />
+
+---
 
 ### Why should you use this
 
@@ -43,4 +82,30 @@ When you write an app in Zenbu you do not need to think about writing a plugin A
 
 Plugins hot reload the same way application code hot reloads. This is because application code gets implemented as a plugin.
 
-### Docs
+
+### FAQ
+
+#### What happens if a user edits the app and it conflicts with a future update?
+
+The source code on the user's device is tracked by git, so you can alert them when there's a conflict. In practice this is rarely an issue since they can have their coding agent resolve it.
+
+Users also have the option to make changes only via plugins, which can never have merge conflicts.
+
+---
+
+#### How does my app become extensible?
+
+Zenbu.js organizes your app so new code can be loaded into your application. The APIs are designed with the expectation that new unknown code will want to plug into your application to access and modify functionality you defined.
+
+---
+
+#### Do I need to use Electron?
+
+For now, yes. But support for other runtimes like Tauri and pure Node.js is coming soon.
+
+---
+
+#### Is it ready for production usage?
+
+It's not yet ready, Zenbu. js is still in alpha.
+
