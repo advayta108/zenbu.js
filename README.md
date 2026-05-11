@@ -45,7 +45,6 @@ pnpm run dev
 
 ## Why Zenbu.js
 
-
 1. Coding agents can generate and customize software on demand for a specific use case. A hackable app gives them full access to do that.
 
 2. Letting people modify your app means more directions get explored than you could reach on your own.
@@ -53,7 +52,6 @@ pnpm run dev
 3. Extensible code tends to be more maintainable, because it’s already written to be changed.
 
 ## How does it work
-
 
 Users can modify Zenbu apps in 2 ways:
 
@@ -77,15 +75,14 @@ Plugins hot reload just like application code, because application code is itsel
 
 ## Compatibility
 
-| Runtime         | Status |
-| --------------- | ------ |
-| Electron        | ✅ Supported |
-| Node.js         | 🚧 WIP |
-| Tauri           | 🚧 WIP |
-| Browser-native  | 🚧 WIP |
+| Runtime        | Status       |
+| -------------- | ------------ |
+| Electron       | ✅ Supported |
+| Node.js        | 🚧 WIP       |
+| Tauri          | 🚧 WIP       |
+| Browser-native | 🚧 WIP       |
 
 ## FAQ
-
 
 <details>
 <summary><b>What happens if a user edits the app and it conflicts with a future update?</b></summary>
