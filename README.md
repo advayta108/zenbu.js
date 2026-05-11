@@ -36,8 +36,6 @@
 
 ```bash
 npx create-zenbu-app
-cd my-zenbu-app
-pnpm run dev
 ```
 
 <br />
