@@ -25,7 +25,7 @@
 <p align="center">
   <a href="https://zenbulabs.mintlify.app" style="text-decoration: none;">Documentation</a>
   &nbsp;&nbsp;·&nbsp;&nbsp;
-  <a href="https://www.zenbu.dev/demo" style="text-decoration: none;"><b>Try the demo&nbsp;→</b></a>
+  <a href="https://www.zenbu.dev/demo" style="text-decoration: none;">Try the demo&nbsp;→</a>
 </p>
 
 <br />
