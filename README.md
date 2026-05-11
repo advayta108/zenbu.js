@@ -88,7 +88,7 @@ Plugins hot reload just like application code, because application code is itsel
 
 <br/>
 
-The source code on the user's device is tracked by git, so you can alert them when there's a conflict. In practice this is rarely an issue since they can have their coding agent resolve it.
+The source code on the user's device is tracked by git, so you can alert them when there's a conflict. In practice the user can use their coding agent to resolve the conflict
 
 Users also have the option to make changes only via plugins, which can never have merge conflicts.
 
