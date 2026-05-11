@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, type SVGProps } from "react";
+import { track } from "@vercel/analytics";
 
 const COMMANDS = {
   pnpm: "pnpm create zenbu-app",
@@ -131,7 +132,7 @@ export function InstallCommand() {
             <button
               key={pm}
               type="button"
-              onClick={() => { setActive(pm); setCopied(false); }}
+              onClick={() => { setActive(pm); setCopied(false); track(`pm_${pm}`); }}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
                 isActive
                   ? "bg-zinc-100 text-zinc-900"

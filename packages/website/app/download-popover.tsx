@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { track } from "@vercel/analytics";
 
 const MACOS_DOWNLOAD_URL = "/api/download/macos";
 
@@ -83,6 +84,7 @@ export function DownloadPopover() {
           <div className="p-1">
             <a
               href={MACOS_DOWNLOAD_URL}
+              onClick={() => track("demo_download", { os: "macos" })}
               className="flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-100 transition-colors"
             >
               <AppleIcon />

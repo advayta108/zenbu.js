@@ -1,6 +1,7 @@
 import Image from "next/image";
 import { ApiPopover } from "./api-popover";
 import { ContactLink } from "./contact-link";
+import { DocsLink } from "./docs-link";
 import { DownloadPopover } from "./download-popover";
 import { InstallCommand } from "./install-command";
 
@@ -44,14 +45,7 @@ export default function Home() {
 
           {/* Links */}
           <div className="mt-6 flex items-center gap-4 text-sm">
-            <a
-              href="https://zenbulabs.mintlify.app"
-              target="_blank"
-              rel="noreferrer"
-              className="font-medium text-zinc-900 hover:text-zinc-600 transition-colors"
-            >
-              Read the docs ↗
-            </a>
+            <DocsLink />
             <DownloadPopover />
           </div>
         </div>
