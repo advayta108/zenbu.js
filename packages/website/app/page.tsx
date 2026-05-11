@@ -64,8 +64,8 @@ export default function Home() {
           <div className="mt-4 space-y-4 text-[15px] text-zinc-500 leading-[1.75]">
             <p>
               When you ship a Zenbu.js app to production, the raw source code
-              comes with it. Users can modify the app just like you do in
-              development.
+              comes with it. Users can use their coding agent to edit and
+              customize the app to fit their needs.
             </p>
           </div>
         </div>
