@@ -35,7 +35,7 @@
 </p>
 
 ```bash
-pnpx create-zenbu-app
+npx create-zenbu-app
 cd my-zenbu-app
 pnpm run dev
 ```
