@@ -1,7 +1,7 @@
 import type { Expect, Equal } from "type-testing";
 import zod from "zod";
 import type { ClientCollection } from "../src/v2/shared";
-import { createSchema, f, type InferRoot, type InferSchema } from "../src/v2/db/schema";
+import { createSchema, f, type InferRoot, type InferSchema, type CollectionRefValue } from "../src/v2/db/schema";
 import type { CollectionResult } from "../src/v2/react/index";
 
 const testSchema = createSchema({
@@ -11,8 +11,8 @@ const testSchema = createSchema({
     theme: zod.enum(["light", "dark"]),
     fontSize: zod.number(),
   }).default({ theme: "light", fontSize: 14 }),
-  messages: f.collection<{ text: string; author: string }>(),
-  logs: f.collection<{ level: string; message: string }>(),
+  messages: f.collection(zod.object({ text: zod.string(), author: zod.string() })),
+  logs: f.collection(zod.object({ level: zod.string(), message: zod.string() })),
   data: f.blob(),
 });
 
@@ -24,7 +24,7 @@ type Root = InferRoot<TestShape>;
   type _test_title = Expect<Equal<Root["title"], string>>;
   type _test_count = Expect<Equal<Root["count"], number>>;
   type _test_messages = Expect<
-    Equal<Root["messages"], { collectionId: string; debugName: string }>
+    Equal<Root["messages"], CollectionRefValue<{ text: string; author: string }>>
   >;
   type _test_data = Expect<
     Equal<Root["data"], { blobId: string; debugName: string }>
@@ -39,7 +39,7 @@ type Root = InferRoot<TestShape>;
   type _test_title = Expect<Equal<SelectorParam["title"], string>>;
   type _test_count = Expect<Equal<SelectorParam["count"], number>>;
   type _test_messages = Expect<
-    Equal<SelectorParam["messages"], { collectionId: string; debugName: string }>
+    Equal<SelectorParam["messages"], CollectionRefValue<{ text: string; author: string }>>
   >;
 }
 
@@ -49,7 +49,7 @@ type Root = InferRoot<TestShape>;
   type _test_items = Expect<Equal<MessagesResult["items"], { text: string; author: string }[]>>;
   type _test_collection = Expect<Equal<MessagesResult["collection"], ClientCollection | null>>;
   type _test_concat = Expect<
-    Equal<MessagesResult["concat"], (items: { text: string; author: string }[]) => Promise<void>>
+    Equal<MessagesResult["concat"], (items: { text: string; author: string }[]) => void>
   >;
 }
 

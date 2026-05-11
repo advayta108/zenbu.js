@@ -43,6 +43,6 @@
     "type-testing": "^0.2.0",
     "typescript": "^5.4.5",
     "vitest": "^3.2.4",
-    "zod": "4.3.6"
+    "zod": "^4"
   }
 }

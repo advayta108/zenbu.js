@@ -16,7 +16,7 @@ const testSchema = createSchema({
     zod.object({ id: zod.string(), name: zod.string() }),
   ).default([]),
   lookup: f.record(zod.string(), zod.string()).default({}),
-  messages: f.collection<{ text: string; author: string }>(),
+  messages: f.collection(zod.object({ text: zod.string(), author: zod.string() })),
   data: f.blob(),
 });
 

@@ -1,5 +1,5 @@
 import type { Expect, Equal } from "type-testing";
-import { createSchema, f, type InferRoot } from "../src/v2/db/schema";
+import { createSchema, f, type InferRoot, type CollectionRefValue } from "../src/v2/db/schema";
 import zod from "zod";
 
 const baseSchema = createSchema({
@@ -28,11 +28,11 @@ const baseSchema = createSchema({
 // collections always infer to their type
 {
   const schema = createSchema({
-    messages: f.collection<{ text: string }>(),
+    messages: f.collection(zod.object({ text: zod.string() })),
   });
   type Root = InferRoot<typeof schema.shape>;
   type _msg = Expect<
-    Equal<Root["messages"], { collectionId: string; debugName: string }>
+    Equal<Root["messages"], CollectionRefValue<{ text: string }>>
   >;
 }
 
@@ -52,14 +52,14 @@ const baseSchema = createSchema({
   const schema = createSchema({
     title: f.string().default(""),
     nickname: f.string(),
-    messages: f.collection<{ text: string }>(),
+    messages: f.collection(zod.object({ text: zod.string() })),
     avatar: f.blob(),
   });
   type Root = InferRoot<typeof schema.shape>;
   type _title = Expect<Equal<Root["title"], string>>;
   type _nickname = Expect<Equal<Root["nickname"], string | undefined>>;
   type _msg = Expect<
-    Equal<Root["messages"], { collectionId: string; debugName: string }>
+    Equal<Root["messages"], CollectionRefValue<{ text: string }>>
   >;
   type _avatar = Expect<
     Equal<Root["avatar"], { blobId: string; debugName: string }>
@@ -87,14 +87,14 @@ const baseSchema = createSchema({
   const schema = createSchema({
     title: f.string().default(""),
     count: f.number().default(0),
-    messages: f.collection<{ text: string }>(),
+    messages: f.collection(zod.object({ text: zod.string() })),
     avatar: f.blob(),
   });
 
   type _msg = Expect<
     Equal<
       InferRoot<typeof schema.shape>["messages"],
-      { collectionId: string; debugName: string }
+      CollectionRefValue<{ text: string }>
     >
   >;
 }
