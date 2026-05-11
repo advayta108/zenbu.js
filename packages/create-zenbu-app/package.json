@@ -1,6 +1,6 @@
 {
   "name": "create-zenbu-app",
-  "version": "0.0.11",
+  "version": "0.0.19",
   "description": "Scaffold a new Zenbu app",
   "type": "module",
   "publishConfig": {
@@ -14,7 +14,9 @@
     "templates/"
   ],
   "scripts": {
-    "build": "tsdown",
+    "build": "pnpm run build:agents && tsdown",
+    "build:agents": "sh -c 'for d in vanilla tailwind plugin; do { printf \"# Zenbu.js docs\\n\\n\"; curl -fsSL https://zenbulabs.mintlify.app/llms-full.txt; printf \"\\n\\n# General rules\\n\\n- never use any, every api in the app is fully type safe\\n- use zen link after making changes to sync types if it did not happen automatically\\n- always use <pm> run db:generate after making a schema change otherwise it will not take affect\\n- always prefer to make db updates via the replica so that updates are instant. if you used rpc to update a replica it would serve 0 purpose and just add an extra round trip\\n- prefer one component per file\\n\"; } > templates/$d/AGENTS.md; done'",
+    "prepublishOnly": "pnpm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "keywords": [

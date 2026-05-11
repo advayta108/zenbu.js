@@ -264,7 +264,8 @@ export interface ResolvedPluginDependency {
  *   and `zen build:electron`.
  */
 export interface Config {
-  db: string;
+  /** Defaults to `./.zenbu/db` relative to the config file. */
+  db?: string;
   uiEntrypoint: string;
   plugins: Array<Plugin | string>;
   build?: BuildConfig;

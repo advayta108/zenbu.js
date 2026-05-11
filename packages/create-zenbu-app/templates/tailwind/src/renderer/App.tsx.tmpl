@@ -1,10 +1,10 @@
-import { useDb, useDbClient, useRpc } from "@zenbujs/core/react"
+import { useRpc } from "@zenbujs/core/react"
 import { useState } from "react"
 
 function Titlebar() {
   return (
     <div
-      className="h-10 flex items-center justify-end px-3 pl-[72px] shrink-0"
+      className="h-10 shrink-0 border-b border-[#222]"
       // @ts-expect-error webkit property
       style={{ WebkitAppRegion: "drag" }}
     />
@@ -12,78 +12,42 @@ function Titlebar() {
 }
 
 function Home() {
-  const db = useDb()
-  const client = useDbClient()
   const rpc = useRpc()
   const [cwd, setCwd] = useState<string | null>(null)
-
-  const issues = db.app.issues
+  const [copied, setCopied] = useState(false)
 
   return (
-    <main className="flex-1 px-8 pb-8 font-sans text-[#e5e5e5]">
-      <h1 className="text-2xl font-bold mb-2">Welcome to Zenbu</h1>
+    <main className="flex-1 px-8 pt-6 pb-8 font-sans text-[#e5e5e5]">
+      <h1 className="text-2xl font-bold mb-2">Welcome to Zenbu.js</h1>
       <p className="text-[#888] mb-6">
         Edit <code>src/renderer/App.tsx</code> to get started.
       </p>
 
-      <form
-        className="flex flex-col gap-3 bg-[#18181b] rounded-xl p-4 max-w-md mb-6"
-        onSubmit={(e) => {
-          e.preventDefault()
-          const form = e.currentTarget
-          const title = (form.elements.namedItem("title") as HTMLInputElement).value
-          if (!title.trim()) return
-          client.update((db) => {
-            db.app.issues.push({
-              id: crypto.randomUUID(),
-              title,
-              createdAt: Date.now(),
-            })
-          })
-          form.reset()
+      <button
+        className="bg-indigo-600 hover:bg-indigo-700 transition text-white font-semibold px-4 py-2 rounded text-sm"
+        onClick={async () => {
+          setCopied(false)
+          setCwd(await rpc.app.repo.getCwd())
         }}
       >
-        <input
-          name="title"
-          placeholder="New issue title"
-          autoComplete="off"
-          className="px-3 py-2 rounded bg-[#222] border border-[#333] outline-none focus:border-indigo-500"
-        />
-        <button
-          type="submit"
-          className="bg-indigo-600 hover:bg-indigo-700 transition text-white font-semibold px-4 py-2 rounded"
-        >
-          + add
-        </button>
-      </form>
-
-      <div className="max-w-md mb-6">
-        {issues.length === 0 ? (
-          <div className="text-[#888] italic">No issues yet — try adding one.</div>
-        ) : (
-          issues.map((issue) => (
-            <div
-              key={issue.id}
-              className="mb-2 p-3 rounded-lg bg-[#222] border border-[#2a2a2a] flex items-center justify-between"
-            >
-              <span>{issue.title}</span>
-              <span className="text-xs text-[#666]">
-                {new Date(issue.createdAt).toLocaleTimeString()}
-              </span>
-            </div>
-          ))
-        )}
-      </div>
-
-      <button
-        className="bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded text-sm"
-        onClick={async () => setCwd(await rpc.repo.getCwd())}
-      >
-        rpc → main process cwd
+        Get cwd
       </button>
+
       {cwd && (
-        <div className="mt-2 p-2 rounded bg-[#232328] text-[#b0b0b0] w-fit text-xs">
-          {cwd}
+        <div className="mt-3 flex items-center gap-2 max-w-md">
+          <code className="flex-1 p-2 rounded bg-[#232328] text-[#b0b0b0] text-xs truncate">
+            {cwd}
+          </code>
+          <button
+            className="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded text-xs"
+            onClick={async () => {
+              await navigator.clipboard.writeText(cwd)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            }}
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
         </div>
       )}
     </main>

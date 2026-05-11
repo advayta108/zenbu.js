@@ -173,11 +173,13 @@ export async function loadConfig(projectDir: string): Promise<{
   if (!config || typeof config !== "object") {
     throw new Error(`${configPath} default export is not a Config object.`)
   }
-  if (typeof config.db !== "string" || config.db.length === 0) {
-    throw new Error(
-      `${configPath}: missing required \`db\` field (path to the database directory).`,
-    )
-  }
+  // `db` is optional; defaults to `./.zenbu/db` relative to the config so
+  // apps that don't (yet) ship a schema don't need to declare anything.
+  // The directory is created lazily on first write by DbService.
+  const dbField =
+    typeof config.db === "string" && config.db.length > 0
+      ? config.db
+      : "./.zenbu/db"
   if (typeof config.uiEntrypoint !== "string" || config.uiEntrypoint.length === 0) {
     throw new Error(
       `${configPath}: missing required \`uiEntrypoint\` field (directory holding index.html + splash.html).`,
@@ -188,9 +190,9 @@ export async function loadConfig(projectDir: string): Promise<{
   }
 
   const configDir = path.dirname(configPath)
-  const dbPath = path.isAbsolute(config.db)
-    ? config.db
-    : path.resolve(configDir, config.db)
+  const dbPath = path.isAbsolute(dbField)
+    ? dbField
+    : path.resolve(configDir, dbField)
   const uiEntrypointPath = path.isAbsolute(config.uiEntrypoint)
     ? config.uiEntrypoint
     : path.resolve(configDir, config.uiEntrypoint)

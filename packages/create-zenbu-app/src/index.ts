@@ -589,13 +589,6 @@ async function main(): Promise<void> {
   p.log.step(
     `Scaffolding Zenbu ${pluginMode ? "plugin" : "app"} in "${displayName}" (template: ${slug})`,
   )
-  if (pm.fallback) {
-    p.log.info(
-      `couldn't detect invoking package manager; defaulting to ${pm.type}@${pm.version}.`,
-    )
-  } else {
-    p.log.info(`detected ${pm.type}@${pm.version} as the invoking package manager`)
-  }
 
   const ctx: TemplateCtx = pluginMode
     ? {

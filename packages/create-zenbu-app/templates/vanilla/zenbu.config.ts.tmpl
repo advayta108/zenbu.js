@@ -5,9 +5,6 @@ import {
 } from "@zenbujs/core/config"
 
 export default defineConfig({
-  // Where the kyju database lives (relative to this file).
-  db: "./.zenbu/db",
-
   // Boot-window HTML. The single ui entrypoint for the whole app.
   uiEntrypoint: "./src/renderer",
 
@@ -17,7 +14,6 @@ export default defineConfig({
     definePlugin({
       name: "app",
       services: ["./src/main/services/*.ts"],
-      schema: "./src/main/schema.ts",
     }),
   ],
 

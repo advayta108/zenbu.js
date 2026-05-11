@@ -75,6 +75,15 @@ When you write an app in Zenbu you do not need to think about writing a plugin A
 
 Plugins hot reload just like application code, because application code is itself implemented as a plugin.
 
+## Compatibility
+
+| Runtime         | Status |
+| --------------- | ------ |
+| Electron        | ✅ Supported |
+| Node.js         | 🚧 WIP |
+| Tauri           | 🚧 WIP |
+| Browser-native  | 🚧 WIP |
+
 ## FAQ
 
 

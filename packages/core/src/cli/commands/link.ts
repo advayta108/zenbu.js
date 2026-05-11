@@ -901,8 +901,8 @@ export async function runLink(argv: string[]) {
   if (args.pluginMode) {
     const pluginDir = path.resolve(args.pluginDirArg ?? process.cwd());
     try {
-      await linkSinglePlugin(pluginDir);
-      console.log("Done.");
+      await linkSinglePlugin(pluginDir, { quiet: true });
+      console.log("zen link: linked");
     } catch (err) {
       console.error(err instanceof Error ? err.message : err);
       process.exit(1);
@@ -926,8 +926,9 @@ export async function runLink(argv: string[]) {
 
   try {
     findConfigPath(projectDir);
-    await linkProject(projectDir);
-    console.log("Done.");
+    const result = await linkProject(projectDir, { quiet: true });
+    const n = result.resolved.plugins.length;
+    console.log(`zen link: linked ${n} plugin${n === 1 ? "" : "s"}`);
   } catch (err) {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
