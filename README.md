@@ -2,13 +2,35 @@
   <img src="./packages/website/app/icon.png" alt="Zenbu.js Logo" width="100" />
 </p>
 
-<div align="center">
+<p align="center">
+  [![CI](https://img.shields.io/github/actions/workflow/status/zenbu-labs/zenbu/ci.yml?branch=main&label=CI)](https://github.com/zenbu-labs/zenbu/actions)
+  [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/zenbu-labs/zenbu/blob/main/LICENSE)
+  [![npm version](https://img.shields.io/npm/v/@zenbujs/core.svg?label=npm%20package)](https://www.npmjs.com/package/@zenbujs/core)
+</p>
 
-[![CI](https://img.shields.io/github/actions/workflow/status/zenbu-labs/zenbu/ci.yml?branch=main&label=CI)](https://github.com/zenbu-labs/zenbu/actions)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/zenbu-labs/zenbu/blob/main/LICENSE)
-[![npm version](https://img.shields.io/npm/v/@zenbujs/core.svg?label=npm%20package)](https://www.npmjs.com/package/@zenbujs/core)
+<p align="center">
+  <b>
+    <a href="https://zenbu.dev" style="text-decoration: none;">Zenbu.js</a>
+  </b>
+</p>
 
-</div>
+<p align="center">
+  <em>
+    A JavaScript framework for building hackable, extensible software.
+  </em>
+</p>
+
+<p align="center">
+  <a href="https://zenbulabs.mintlify.app" style="text-decoration: none;">Documentation</a>
+  &nbsp;&nbsp;•&nbsp;&nbsp;
+  <a href="https://www.zenbu.dev/demo" style="text-decoration: none;"><b>Try the demo →</b></a>
+</p>
+
+<br />
+
+<p align="center">
+  <b>Get started in 5 seconds:</b>
+</p>
 
 <p align="center">
   
