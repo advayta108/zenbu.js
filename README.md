@@ -84,20 +84,40 @@ Plugins hot reload the same way application code hot reloads. This is because ap
 
 ### FAQ
 
-#### What happens if a user edits the app and it conflicts with a future update?
+<details>
+<summary><b>What happens if a user edits the app and it conflicts with a future update?</b></summary>
+
+<br/>
 
 The source code on the user's device is tracked by git, so you can alert them when there's a conflict. In practice this is rarely an issue since they can have their coding agent resolve it.
 
 Users also have the option to make changes only via plugins, which can never have merge conflicts.
 
-#### How does my app become extensible?
+</details>
+
+<details>
+<summary><b>How does my app become extensible?</b></summary>
+
+<br/>
 
 Zenbu.js organizes your app so new code can be loaded into your application. The APIs are designed with the expectation that new unknown code will want to plug into your application to access and modify functionality you defined.
 
-#### Do I need to use Electron?
+</details>
+
+<details>
+<summary><b>Do I need to use Electron?</b></summary>
+
+<br/>
 
 For now, yes. But support for other runtimes like Tauri and pure Node.js is coming soon.
 
-#### Is it ready for production usage?
+</details>
 
-It's not yet ready, Zenbu. js is still in alpha.
+<details>
+<summary><b>Is it ready for production usage?</b></summary>
+
+<br/>
+
+It's not yet ready, Zenbu.js is still in alpha.
+
+</details>
