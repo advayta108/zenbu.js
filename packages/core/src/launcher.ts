@@ -387,23 +387,6 @@ function isExistingClone(dir: string): boolean {
   return existsSync(path.join(dir, ".git", "HEAD"));
 }
 
-/**
- * True if the working tree has uncommitted modifications. We use this as a
- * "respect the user's edits" guard before fast-forwarding from origin.
- */
-async function hasLocalModifications(dir: string): Promise<boolean> {
-  try {
-    const matrix = await git.statusMatrix({ fs, dir });
-    // [filepath, head, workdir, stage] — when all three are 1, the file is
-    // tracked AND clean. Anything else means modified/added/deleted.
-    return matrix.some(
-      ([, head, workdir, stage]) => head !== 1 || workdir !== 1 || stage !== 1,
-    );
-  } catch {
-    return false;
-  }
-}
-
 async function cloneMirror(
   dir: string,
   mirror: MirrorRef,
@@ -437,52 +420,6 @@ async function cloneMirror(
   });
   console.log(`[launcher] clone complete`);
   installer?.done("clone");
-}
-
-/**
- * Best-effort `git fetch --depth=1` against `origin/<branch>`. Failures
- * are non-fatal — the resolver runs next and may still find a local
- * compatible commit on a previously-deepened working tree. Skips the
- * remote checkout entirely (the resolver decides which sha to land on).
- */
-async function fetchTip(
-  dir: string,
-  mirror: MirrorRef,
-  installer: Installer | null,
-): Promise<void> {
-  installer?.step("fetch", `Updating from ${mirror.url}#${mirror.branch}`);
-  try {
-    await git.fetch({
-      fs,
-      http,
-      dir,
-      url: mirror.url,
-      ref: mirror.branch,
-      singleBranch: true,
-      depth: 1,
-      tags: false,
-      onProgress: installer
-        ? (e) => {
-            const ratio = e.total ? e.loaded / e.total : undefined;
-            installer.progress({
-              phase: e.phase,
-              loaded: e.loaded,
-              total: e.total,
-              ratio,
-            });
-          }
-        : undefined,
-      onMessage: installer
-        ? (msg) => installer.message(msg.replace(/\n+$/g, ""))
-        : undefined,
-    });
-  } catch (err) {
-    console.warn(
-      `[launcher] fetch failed (${(err as Error).message}); using local state`,
-    );
-  } finally {
-    installer?.done("fetch");
-  }
 }
 
 /**
@@ -538,37 +475,25 @@ async function ensureAppsDir(
   hostVersion: string,
   installer: Installer | null,
 ): Promise<void> {
-  const existed = isExistingClone(appsDir);
-  if (existed) {
-    if (await hasLocalModifications(appsDir)) {
-      console.warn(
-        `[launcher] working tree at ${appsDir} has uncommitted ` +
-          `modifications; skipping fetch + resolve.`,
-      );
-      installer?.message(
-        `[launcher] uncommitted modifications detected; skipping update`,
-      );
-      return;
-    }
-    await fetchTip(appsDir, mirror, installer);
-  } else {
-    if (existsSync(appsDir)) {
-      const entries = await fsp.readdir(appsDir).catch(() => [] as string[]);
-      if (entries.length > 0) {
-        throw new Error(
-          `[launcher] ${appsDir} exists and isn't a git working tree (has ${entries.length} entries). ` +
-            `Move or delete it, then relaunch.`,
-        );
-      }
-    }
-    await cloneMirror(appsDir, mirror, installer);
-  }
+  // First-launch path only. If the apps-dir already exists as a git
+  // working tree, we trust it as-is and never touch git on relaunch.
+  // Updates after first install go exclusively through
+  // `UpdaterService.update()` invoked from user code at runtime — the
+  // launcher must never auto-update on quit-and-reopen.
+  if (isExistingClone(appsDir)) return;
 
-  // Both first-launch (clone) and subsequent-launch (fetch) paths funnel
-  // here so the .app never boots into an incompatible commit. The
-  // resolver no-ops when HEAD is already compatible (hot path) and
-  // deepens history + binary-searches when the tip is too new (cold
-  // path); see `shared/range-resolver.ts`.
+  if (existsSync(appsDir)) {
+    const entries = await fsp.readdir(appsDir).catch(() => [] as string[]);
+    if (entries.length > 0) {
+      throw new Error(
+        `[launcher] ${appsDir} exists and isn't a git working tree (has ${entries.length} entries). ` +
+          `Move or delete it, then relaunch.`,
+      );
+    }
+  }
+  await cloneMirror(appsDir, mirror, installer);
+  // Only on first install do we run the host-range resolver to land on
+  // a compatible commit. After this, the tree stays put.
   await resolveAndCheckout(appsDir, mirror, hostVersion, installer);
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@zenbujs/core",
-  "version": "0.0.11",
+  "version": "0.0.15",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -112,7 +112,6 @@
     "@parcel/watcher": "^2.5.0",
     "@vitejs/plugin-react": "^5.0.0",
     "@zenbujs/hmr": "workspace:*",
-    "dugite": "^3.2.1",
     "effect": "^3.21.1",
     "electron-context-menu": "^4.1.2",
     "isomorphic-git": "^1.37.6",

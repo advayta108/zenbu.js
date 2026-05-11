@@ -148,10 +148,37 @@ export function electronTargetVersion(appsDir: string): string {
   }
 }
 
-export function buildInstallEnv(appsDir: string): NodeJS.ProcessEnv {
+
+export function buildInstallEnv(
+  appsDir: string,
+  resourcesPath?: string,
+): NodeJS.ProcessEnv {
   const target = electronTargetVersion(appsDir)
+  const sep = process.platform === "win32" ? ";" : ":"
+  const baselinePath = process.env.PATH ?? process.env.Path ?? ""
+  const toolchainDir = resourcesPath
+    ? path.join(resourcesPath, "toolchain")
+    : null
+  const systemDirs =
+    process.platform === "win32"
+      ? []
+      // not needed stupid remove
+      : ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+  const segments: string[] = []
+  if (toolchainDir) segments.push(toolchainDir)
+  if (baselinePath) segments.push(...baselinePath.split(sep))
+  segments.push(...systemDirs)
+  const seen = new Set<string>()
+  const PATH = segments
+    .filter((s) => s && !seen.has(s) && seen.add(s))
+    .join(sep)
   return {
     ...process.env,
+    PATH,
+    // Windows env lookup is case-insensitive but Node preserves the
+    // original casing; setting both keeps behavior consistent across
+    // platforms.
+    Path: PATH,
     CI: "true",
     HOME: path.join(appsDir, ".zenbu", ".node-gyp"),
     npm_config_runtime: "electron",
@@ -281,7 +308,7 @@ export interface RunInstallOptions {
 
 export async function runInstall(opts: RunInstallOptions): Promise<void> {
   const { appsDir, resourcesPath, pm, reporter = null, signal } = opts
-  const env = buildInstallEnv(appsDir)
+  const env = buildInstallEnv(appsDir, resourcesPath)
   const entry = bundledPmEntry(pm, resourcesPath)
 
   switch (pm.type) {

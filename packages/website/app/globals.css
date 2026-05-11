@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fafafa;
+  --foreground: #111111;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+@theme {
+  --font-sans: "GeistSans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "GeistMono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes popover-out {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95) translateY(-2px);
+  }
+}
+
+.animate-popover-in {
+  animation: popover-in 0.15s ease-out;
+}
+
+.animate-popover-out {
+  animation: popover-out 0.12s ease-in forwards;
+}
