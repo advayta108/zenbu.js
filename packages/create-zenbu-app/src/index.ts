@@ -218,6 +218,45 @@ function probeVersion(pm: PmType): string | null {
   return match ? match[0] : null
 }
 
+/**
+ * `npx`, `npm create`, and `npm exec` all set the same `npm/<version>`
+ * user agent, so when `detectPackageManager` reports `npm` the user may
+ * actually prefer a different installed pm. Probe all four candidates,
+ * present only the ones present on the machine, and let the user pick
+ * (or pick automatically when only one is installed / `--yes`).
+ */
+async function resolveNpmAmbiguity(
+  detected: DetectedPm,
+  opts: { yes: boolean },
+): Promise<DetectedPm> {
+  const candidates: PmType[] = ["pnpm", "npm", "yarn", "bun"]
+  const installed: DetectedPm[] = []
+  for (const c of candidates) {
+    if (c === "npm") {
+      installed.push({ type: "npm", version: detected.version, fallback: false })
+      continue
+    }
+    const v = probeVersion(c)
+    if (v) installed.push({ type: c, version: v, fallback: false })
+  }
+
+  if (installed.length === 1) return installed[0]!
+
+  const preferPnpm = installed.find((p) => p.type === "pnpm")
+  if (opts.yes) return preferPnpm ?? installed.find((p) => p.type === "npm")!
+
+  const pick = await p.select<PmType>({
+    message: "Which package manager should this app use?",
+    initialValue: (preferPnpm?.type ?? "npm") as PmType,
+    options: installed.map((p) => ({
+      value: p.type,
+      label: p.type === "pnpm" ? "pnpm (recommended)" : p.type,
+    })),
+  })
+  if (p.isCancel(pick)) bail("Scaffolding cancelled.")
+  return installed.find((p) => p.type === pick)!
+}
+
 // =============================================================================
 //                          template rendering helpers
 // =============================================================================
@@ -584,7 +623,10 @@ async function main(): Promise<void> {
     bail(`No template found for configuration "${slug}".`)
   }
 
-  const pm = detectPackageManager()
+  let pm = detectPackageManager()
+  if (pm.type === "npm") {
+    pm = await resolveNpmAmbiguity(pm, { yes })
+  }
 
   p.log.step(
     `Scaffolding Zenbu ${pluginMode ? "plugin" : "app"} in "${displayName}" (template: ${slug})`,
