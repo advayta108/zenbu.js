@@ -129,52 +129,108 @@ export default function Home() {
           <div className="mt-6 divide-y divide-zinc-200">
             <details className="group py-4 first:pt-0">
               <summary className="flex cursor-pointer items-center justify-between text-[15px] font-medium text-zinc-900 [&::-webkit-details-marker]:hidden list-none">
-                What happens if a user edits the app and it conflicts with a future update?
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 ml-4 text-zinc-400 transition-transform group-open:rotate-45">
+                What happens if a user edits the app and it conflicts with a
+                future update?
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="shrink-0 ml-4 text-zinc-400 transition-transform group-open:rotate-45"
+                >
                   <line x1="12" y1="5" x2="12" y2="19" />
                   <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </summary>
               <div className="mt-3 space-y-3 text-[15px] text-zinc-500 leading-[1.75]">
                 <p>
-                  The source code on the user's device is tracked by git, so you can
-                  alert them when there's a conflict. In practice this is rarely an
-                  issue since they can have their coding agent resolve it.
+                  The source code on the user's device is tracked by git, so you
+                  can alert them when there's a conflict. In practice this is
+                  rarely an issue since they can have their coding agent resolve
+                  it.
                 </p>
                 <p>
-                  Users also have the option to make changes only via plugins, which
-                  can never have merge conflicts.
+                  Users also have the option to make changes only via plugins,
+                  which can never have merge conflicts.
                 </p>
               </div>
             </details>
             <details className="group py-4">
               <summary className="flex cursor-pointer items-center justify-between text-[15px] font-medium text-zinc-900 [&::-webkit-details-marker]:hidden list-none">
                 How does my app become extensible?
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 ml-4 text-zinc-400 transition-transform group-open:rotate-45">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="shrink-0 ml-4 text-zinc-400 transition-transform group-open:rotate-45"
+                >
                   <line x1="12" y1="5" x2="12" y2="19" />
                   <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </summary>
               <div className="mt-3 text-[15px] text-zinc-500 leading-[1.75]">
                 <p>
-                  Zenbu.js guides your app into an architecture that promotes
-                  extensibility through low coupling and high cohesion.
+                  Zenbu.js organizes your app so new code can be loaded into
+                  your application. The APIs are designed with the expectation
+                  that new unknown code will want to plug into your application
+                  to access and modify functionality you defined.
                 </p>
               </div>
             </details>
             <details className="group py-4">
               <summary className="flex cursor-pointer items-center justify-between text-[15px] font-medium text-zinc-900 [&::-webkit-details-marker]:hidden list-none">
                 Do I need to use Electron?
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 ml-4 text-zinc-400 transition-transform group-open:rotate-45">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="shrink-0 ml-4 text-zinc-400 transition-transform group-open:rotate-45"
+                >
                   <line x1="12" y1="5" x2="12" y2="19" />
                   <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </summary>
               <div className="mt-3 text-[15px] text-zinc-500 leading-[1.75]">
                 <p>
-                  For now, yes. But support for other runtimes like Tauri and pure
-                  Node.js is coming soon.
+                  For now, yes. But support for other runtimes like Tauri and
+                  pure Node.js is coming soon.
                 </p>
+              </div>
+            </details>
+            <details className="group py-4">
+              <summary className="flex cursor-pointer items-center justify-between text-[15px] font-medium text-zinc-900 [&::-webkit-details-marker]:hidden list-none">
+                Is it ready for production usage?
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="shrink-0 ml-4 text-zinc-400 transition-transform group-open:rotate-45"
+                >
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </summary>
+              <div className="mt-3 text-[15px] text-zinc-500 leading-[1.75]">
+                <p>It's not yet ready, Zenbu is still in alpha.</p>
               </div>
             </details>
           </div>
