@@ -56,6 +56,8 @@ pnpm run dev
 
 3. Zenbu enforces an architecture to make your code extensible through low coupling and high cohesion. This makes it possible to make more complex applications without noticable complexity added to your codebase
 
+---
+
 ### How does it work
 
 Users can modify Zenbu apps in 2 ways:
@@ -77,6 +79,8 @@ Plugins run in the same process as the application code and get access to the sa
 When you write an app in Zenbu you do not need to think about writing a plugin API. The framework APIs are designed so that your code is **default** extensible.
 
 Plugins hot reload the same way application code hot reloads. This is because application code gets implemented as a plugin.
+
+---
 
 ### FAQ
 
