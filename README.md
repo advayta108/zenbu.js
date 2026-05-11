@@ -4,27 +4,21 @@
 
 <div align="center">
 
-  [![CI](https://img.shields.io/github/actions/workflow/status/zenbu-labs/zenbu/ci.yml?branch=main&label=CI)](https://github.com/zenbu-labs/zenbu/actions)
-  [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/zenbu-labs/zenbu/blob/main/LICENSE)
-  [![npm version](https://img.shields.io/npm/v/@zenbujs/core.svg?label=npm%20package)](https://www.npmjs.com/package/@zenbujs/core)
+[![CI](https://img.shields.io/github/actions/workflow/status/zenbu-labs/zenbu/ci.yml?branch=main&label=CI)](https://github.com/zenbu-labs/zenbu/actions)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/zenbu-labs/zenbu/blob/main/LICENSE)
+[![npm version](https://img.shields.io/npm/v/@zenbujs/core.svg?label=npm%20package)](https://www.npmjs.com/package/@zenbujs/core)
 
 </div>
-
-<p align="center">
-  <b>
-    <a href="https://zenbu.dev" style="text-decoration: none;">Zenbu.js</a>
-  </b>
-</p>
 
 <p align="center">
 
   <br/>
 
   <span>
-    Zenbu.js is a JavaScript framework for building hackable, extensible software.
+      <a href="https://zenbu.dev" style="text-decoration: none;">Zenbu.js</a> is a JavaScript framework for building hackable, extensible software.
   </span>
 
-  <br/><br/>
+<br/><br/>
 
 </p>
 
@@ -84,7 +78,6 @@ When you write an app in Zenbu you do not need to think about writing a plugin A
 
 Plugins hot reload the same way application code hot reloads. This is because application code gets implemented as a plugin.
 
-
 ### FAQ
 
 #### What happens if a user edits the app and it conflicts with a future update?
@@ -110,4 +103,3 @@ For now, yes. But support for other runtimes like Tauri and pure Node.js is comi
 #### Is it ready for production usage?
 
 It's not yet ready, Zenbu. js is still in alpha.
-
