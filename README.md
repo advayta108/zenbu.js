@@ -19,7 +19,6 @@
       <a href="https://zenbu.dev" style="text-decoration: none;">Zenbu.js</a> is a JavaScript framework for building hackable, extensible software.
   </span>
 
-<br/><br/>
 
 </p>
 
