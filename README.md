@@ -35,15 +35,11 @@
   <b>Get started in 5 seconds</b>
 </p>
 
-<p align="center">
-
-<pre>
+```bash
 pnpx create-zenbu-app my-zenbu-app
 cd my-zenbu-app
 pnpm run dev
-</pre>
-
-</p>
+```
 
 <br />
 
