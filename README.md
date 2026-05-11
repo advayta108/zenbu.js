@@ -43,9 +43,8 @@ pnpm run dev
 
 <br />
 
-## Why should you use this
+## Why Zenbu.js
 
----
 
 1. Coding agents can generate and customize software on demand for a specific use case. A hackable app gives them full access to do that.
 
@@ -55,7 +54,6 @@ pnpm run dev
 
 ## How does it work
 
----
 
 Users can modify Zenbu apps in 2 ways:
 
@@ -79,7 +77,6 @@ Plugins hot reload the same way application code hot reloads. This is because ap
 
 ## FAQ
 
----
 
 <details>
 <summary><b>What happens if a user edits the app and it conflicts with a future update?</b></summary>
