@@ -143,9 +143,8 @@ export default function Home() {
               <div className="mt-3 space-y-3 text-[15px] text-zinc-500 leading-[1.75]">
                 <p>
                   The source code on the user's device is tracked by git, so you
-                  can alert them when there's a conflict. In practice this is
-                  rarely an issue since they can have their coding agent resolve
-                  it.
+                  can alert them when there's a conflict. In practice users can have their coding agent resolve
+                  conflicts.
                 </p>
                 <p>
                   Users also have the option to make changes only via plugins,
