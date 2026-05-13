@@ -146,6 +146,13 @@ interface AppConfig {
    * is set.
    */
   installingPreload?: string;
+  /**
+   * When true, skip the mirror clone / fetch / checkout entirely. Used by
+   * `create-zenbu-app --desktop`, which pre-seeds `~/.zenbu/apps/<name>` as
+   * a local working tree (with `.git/HEAD`) and ships the `.app` already
+   * pointing at it. The `mirrorUrl` field becomes optional in this mode.
+   */
+  local?: boolean;
 }
 
 const LEGACY_PACKAGE_MANAGER: PackageManagerSpec = {
@@ -556,15 +563,26 @@ async function main(): Promise<void> {
   const installer = await maybeOpenInstallingWindow(cfg);
 
   try {
-    const mirror = resolveMirror(cfg);
     const appsDir = appsDirFor(cfg.name);
     const pm = cfg.packageManager ?? LEGACY_PACKAGE_MANAGER;
-    // Concrete `host.json#version` baked at `zen build:electron` time.
-    // The resolver picks the latest mirror commit whose
-    // `package.json#zenbu.host` range satisfies this value.
-    const { version: hostVersion } = readHostVersion(APP_PATH);
 
-    await ensureAppsDir(appsDir, mirror, hostVersion, installer);
+    if (cfg.local) {
+      if (!isExistingClone(appsDir)) {
+        throw new Error(
+          `[launcher] app-config.local is true but ${appsDir} is not a git ` +
+            `working tree. The bundle was built with create-zenbu-app --desktop ` +
+            `but the apps-dir was deleted or never seeded.`,
+        );
+      }
+    } else {
+      const mirror = resolveMirror(cfg);
+      // Concrete `host.json#version` baked at `zen build:electron` time.
+      // The resolver picks the latest mirror commit whose
+      // `package.json#zenbu.host` range satisfies this value.
+      const { version: hostVersion } = readHostVersion(APP_PATH);
+      await ensureAppsDir(appsDir, mirror, hostVersion, installer);
+    }
+
     await ensureDepsInstalled(appsDir, pm, installer);
 
     installer?.step("handoff", "Starting app");

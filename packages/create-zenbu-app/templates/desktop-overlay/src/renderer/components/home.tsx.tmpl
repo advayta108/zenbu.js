@@ -1,0 +1,46 @@
+import { useRpc } from "@zenbujs/core/react"
+import { useEffect, useState } from "react"
+
+export function Home() {
+  const rpc = useRpc()
+  const [cwd, setCwd] = useState<string | null>(null)
+
+  useEffect(() => {
+    rpc.app.cwd.get().then(setCwd)
+  }, [rpc])
+
+  return (
+    <main className="flex-1 flex flex-col px-8 pt-6 pb-4 font-sans text-zinc-900 dark:text-zinc-100">
+      <div className="flex-1 max-w-prose">
+        <h1 className="text-2xl font-semibold mb-2">{{displayName}}</h1>
+        <p className="text-zinc-500 dark:text-zinc-400 text-sm leading-relaxed mb-6">
+          This app is yours to edit. The source code lives on your machine
+          and any change you save reloads instantly.
+        </p>
+
+        <div className="text-xs uppercase tracking-wide text-zinc-400 dark:text-zinc-500 mb-1.5">
+          Source
+        </div>
+        <code className="block p-2 rounded bg-zinc-100 dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 text-xs truncate">
+          {cwd ?? "\u00a0"}
+        </code>
+      </div>
+
+      <footer className="mt-6 text-xs text-zinc-400 dark:text-zinc-600">
+        Built with{" "}
+        <a
+          href="https://github.com/zenbu-labs/zenbu.js"
+          onClick={(e) => {
+            e.preventDefault()
+            rpc.core.window.openExternal(
+              "https://github.com/zenbu-labs/zenbu.js",
+            )
+          }}
+          className="underline underline-offset-2 hover:text-zinc-600 dark:hover:text-zinc-400 transition-colors"
+        >
+          zenbu.js
+        </a>
+      </footer>
+    </main>
+  )
+}

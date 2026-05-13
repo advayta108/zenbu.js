@@ -56,7 +56,7 @@ import {
 
 ```bash theme={null}
 # Create a new app
-pnpx create-zenbu-app my-app
+npx create-zenbu-app
 
 # Dev server with hot reload
 pnpm run dev
@@ -1287,15 +1287,15 @@ Source: https://zenbulabs.mintlify.app/quickstart
 <Steps>
   <Step title="Scaffold the project">
     <Tabs>
-      <Tab title="pnpm">
-        ```bash theme={null}
-        pnpx create-zenbu-app my-app
-        ```
-      </Tab>
-
       <Tab title="npm">
         ```bash theme={null}
         npx create-zenbu-app my-app
+        ```
+      </Tab>
+
+      <Tab title="pnpm">
+        ```bash theme={null}
+        pnpx create-zenbu-app my-app
         ```
       </Tab>
 

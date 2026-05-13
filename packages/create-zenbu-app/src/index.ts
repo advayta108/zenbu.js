@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import path from "node:path";
+import os from "node:os";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import * as p from "@clack/prompts";
+import { buildDesktopApp, createLogger } from "./desktop/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = path.resolve(__dirname, "..", "templates");
@@ -16,12 +18,21 @@ interface DependsOn {
 
 const rawArgv = process.argv.slice(2);
 const flagsSet = new Set<string>();
+const flagValues = new Map<string, string>();
 const positional: string[] = [];
 const dependsOn: DependsOn[] = [];
 
+const VALUE_FLAGS = new Set([
+  "--icon",
+  "--electron-version",
+  "--bundle-id",
+]);
+
 /**
  * Parse flags. `--depends-on NAME=PATH` is consumed positionally because it
- * carries a value; everything else is a boolean flag or a positional arg.
+ * carries a value; `--icon <path>` / `--electron-version <range>` /
+ * `--bundle-id <id>` likewise consume the next argv entry; everything else
+ * is a boolean flag or a positional arg.
  */
 for (let i = 0; i < rawArgv.length; i++) {
   const arg = rawArgv[i]!;
@@ -37,6 +48,21 @@ for (let i = 0; i < rawArgv.length; i++) {
     arg.startsWith("--dependsOn=")
   ) {
     dependsOn.push(parseDependsOn(arg.slice(arg.indexOf("=") + 1)));
+  } else if (VALUE_FLAGS.has(arg)) {
+    const value = rawArgv[++i];
+    if (!value) {
+      console.error(`create-zenbu-app: ${arg} requires a value`);
+      process.exit(1);
+    }
+    flagValues.set(arg, value);
+  } else if (arg.startsWith("--") && arg.includes("=")) {
+    const eq = arg.indexOf("=");
+    const name = arg.slice(0, eq);
+    if (VALUE_FLAGS.has(name)) {
+      flagValues.set(name, arg.slice(eq + 1));
+    } else {
+      flagsSet.add(arg);
+    }
   } else if (arg.startsWith("-")) {
     flagsSet.add(arg);
   } else {
@@ -49,6 +75,18 @@ const noInstall = flagsSet.has("--no-install");
 const noGit = flagsSet.has("--no-git");
 const pluginMode = flagsSet.has("--plugin");
 const noAddToHost = flagsSet.has("--no-add-to-host");
+const desktopMode = flagsSet.has("--desktop");
+const desktopForce = flagsSet.has("--force");
+const desktopDryRun = flagsSet.has("--dry-run");
+const desktopVerbose = flagsSet.has("--verbose");
+const desktopIcon = flagValues.get("--icon");
+const desktopElectronVersion = flagValues.get("--electron-version");
+const desktopBundleId = flagValues.get("--bundle-id");
+
+if (desktopMode && pluginMode) {
+  console.error("create-zenbu-app: --desktop is not compatible with --plugin");
+  process.exit(1);
+}
 
 if (dependsOn.length > 0 && !pluginMode) {
   console.error("create-zenbu-app: --depends-on is only valid with --plugin");
@@ -85,6 +123,21 @@ function parseDependsOn(raw: string): DependsOn {
 // checkout, the scaffold rewrites `@zenbujs/core` to `link:<path>` before the
 // initial git commit. Not advertised to end users.
 const ZENBU_LOCAL_CORE = process.env.ZENBU_LOCAL_CORE;
+
+// Internal/dev-only: when truthy, truncate the scaffolded `AGENTS.md` so the
+// total file fits under ~40k characters. Some downstream tools cap the size
+// of agent context files; this lets us scaffold without hitting that limit.
+const TRIM_AGENTS_MD = process.env.TRIM_AGENTS_MD === "1";
+const AGENTS_MD_MAX_CHARS = 40_000;
+
+function trimAgentsMdIfRequested(projectDir: string): void {
+  if (!TRIM_AGENTS_MD) return;
+  const target = path.join(projectDir, "AGENTS.md");
+  if (!fs.existsSync(target)) return;
+  const original = fs.readFileSync(target, "utf8");
+  if (original.length <= AGENTS_MD_MAX_CHARS) return;
+  fs.writeFileSync(target, original.slice(0, AGENTS_MD_MAX_CHARS));
+}
 
 // =============================================================================
 //                              config options
@@ -571,7 +624,226 @@ function defaultAnswers(): ResolvedAnswers {
 //                                    main
 // =============================================================================
 
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+}
+
+async function promptIconPath(): Promise<string | undefined> {
+  const result = await p.text({
+    message: "Path to app icon",
+    placeholder: "(leave blank to use Electron's default icon)",
+    validate: (value) => {
+      if (!value || !value.trim()) return undefined;
+      const abs = path.isAbsolute(value)
+        ? value
+        : path.resolve(process.cwd(), value);
+      if (!fs.existsSync(abs)) return `File does not exist: ${abs}`;
+      const ext = path.extname(abs).toLowerCase();
+      if (ext !== ".png" && ext !== ".icns") {
+        return "Icon must be a .png (square, ideally 1024x1024) or .icns file";
+      }
+      return undefined;
+    },
+  });
+  if (p.isCancel(result)) bail("Scaffolding cancelled.");
+  const trimmed = (result as string).trim();
+  if (!trimmed) return undefined;
+  return path.isAbsolute(trimmed) ? trimmed : path.resolve(process.cwd(), trimmed);
+}
+
+const DESKTOP_PM_PRECEDENCE: PmType[] = ["pnpm", "bun", "yarn", "npm"];
+
+function pickDesktopPm(detected: DetectedPm): DetectedPm {
+  for (const candidate of DESKTOP_PM_PRECEDENCE) {
+    if (candidate === "npm") {
+      return { type: "npm", version: detected.version, fallback: false };
+    }
+    const v = probeVersion(candidate);
+    if (v) return { type: candidate, version: v, fallback: false };
+  }
+  return detected;
+}
+
+async function runDesktopMode(): Promise<void> {
+  p.intro("create-zenbu-app (desktop)");
+
+  let displayName: string;
+  if (positional[0]) {
+    displayName = positional[0];
+  } else if (yes) {
+    bail("--yes requires a positional project name in --desktop mode.");
+  } else {
+    displayName = await promptProjectName();
+  }
+  const slug = slugify(displayName);
+  if (!slug) {
+    bail(`"${displayName}" produces an empty slug; use letters/digits.`);
+  }
+
+  const appsDir = path.join(os.homedir(), ".zenbu", "apps", slug);
+
+  if (fs.existsSync(appsDir)) {
+    const entries = fs.readdirSync(appsDir);
+    if (entries.length > 0) {
+      if (!desktopForce) {
+        bail(
+          `${appsDir} already exists. Re-run with --force to overwrite (this will rm -rf both ${appsDir} and the bundle).`,
+        );
+      }
+      if (desktopDryRun) {
+        p.log.info(`[dry-run] would rm -rf ${appsDir}`);
+      } else {
+        fs.rmSync(appsDir, { recursive: true, force: true });
+      }
+    }
+  }
+
+  let iconPath = desktopIcon
+    ? path.isAbsolute(desktopIcon)
+      ? desktopIcon
+      : path.resolve(process.cwd(), desktopIcon)
+    : undefined;
+  if (!iconPath && !yes) {
+    iconPath = await promptIconPath();
+  }
+  if (iconPath && !fs.existsSync(iconPath)) {
+    bail(`--icon path does not exist: ${iconPath}`);
+  }
+
+  // Desktop mode bakes opinionated defaults: tailwind on. Users can swap
+  // afterwards by editing their scaffold; no need to ask up front.
+  const slugTemplate = "tailwind";
+  const templateDir = path.join(TEMPLATES_DIR, slugTemplate);
+  if (!fs.existsSync(templateDir)) {
+    bail(`No template found for configuration "${slugTemplate}".`);
+  }
+
+  // Desktop mode never prompts for the package manager. Pick the first
+  // installed PM in precedence pnpm > bun > yarn > npm. The detected PM
+  // is only used as a versioned npm fallback.
+  const detectedPm = detectPackageManager();
+  const pm = pickDesktopPm(detectedPm);
+
+  const log = createLogger({ slug, verbose: desktopVerbose });
+  log.info(`displayName=${displayName} slug=${slug}`);
+  log.info(`template=${slugTemplate} pm=${pm.type}@${pm.version}`);
+  log.info(`appsDir=${appsDir}`);
+  log.info(`logFile=${log.file}`);
+
+  try {
+    if (desktopDryRun) {
+      log.info(`[dry-run] would scaffold template into ${appsDir}`);
+    } else {
+      fs.mkdirSync(appsDir, { recursive: true });
+      const ctx: TemplateCtx = { projectName: slug, displayName };
+      copyDirSync(templateDir, appsDir, ctx);
+      const overlayDir = path.join(TEMPLATES_DIR, "desktop-overlay");
+      if (fs.existsSync(overlayDir)) {
+        copyDirSync(overlayDir, appsDir, ctx);
+      }
+      const gi = path.join(appsDir, "_gitignore");
+      if (fs.existsSync(gi)) {
+        fs.renameSync(gi, path.join(appsDir, ".gitignore"));
+      }
+      seedPackageManager(appsDir, pm);
+      trimAgentsMdIfRequested(appsDir);
+
+      if (ZENBU_LOCAL_CORE) {
+        const corePath = path.resolve(ZENBU_LOCAL_CORE);
+        rewireToLocalCore(appsDir, corePath, false);
+        log.info(`linked @zenbujs/core -> ${corePath}`);
+      }
+    }
+
+    let installed = false;
+    if (!noInstall && !desktopDryRun) {
+      p.log.step(`Installing dependencies`);
+      log.info(`running ${pm.type} install in ${appsDir}`);
+      installed = runInstallSilent(appsDir, pm, log);
+      if (!installed) {
+        p.log.error(`Failed during ${pm.type} install. See ${log.file}`);
+        process.stderr.write(log.tail(40) + "\n");
+        process.exit(1);
+      }
+    }
+
+    if (!desktopDryRun) {
+      gitInitWithInitialCommit(appsDir);
+    }
+
+    const projectVersion = readProjectVersion(appsDir) ?? "0.0.1";
+
+    p.log.step(`Building desktop app`);
+    const result = await buildDesktopApp({
+      displayName,
+      slug,
+      version: projectVersion,
+      electronVersionRange: desktopElectronVersion,
+      iconSource: iconPath,
+      appsDir,
+      packageManager: pm,
+      resolveFrom: appsDir,
+      log,
+      force: desktopForce,
+      dryRun: desktopDryRun,
+      skipDepsSig: noInstall,
+    });
+
+    p.log.success(`Created ${displayName}`);
+    log.close();
+
+    p.note(
+      [
+        `App:       ${result.destApp}`,
+        `Source:    ${result.appsDir}`,
+        `Logs:      ~/Library/Logs/${displayName}/main.log`,
+      ].join("\n"),
+      "Details",
+    );
+    p.outro(`Launch with:  ${result.launchCommand}`);
+  } catch (err) {
+    p.log.error(`Failed: see ${log.file}`);
+    log.error((err as Error).stack ?? (err as Error).message ?? String(err));
+    process.stderr.write("\n--- last log lines ---\n" + log.tail(40) + "\n");
+    log.close();
+    process.exit(1);
+  }
+}
+
+function readProjectVersion(dir: string): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(dir, "package.json"), "utf8");
+    const pkg = JSON.parse(raw) as { version?: string };
+    return typeof pkg.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+function runInstallSilent(
+  projectDir: string,
+  pm: DetectedPm,
+  log: { info(line: string): void; error(line: string): void },
+): boolean {
+  const r = spawnSync(pm.type, ["install"], {
+    cwd: projectDir,
+    stdio: "pipe",
+    encoding: "utf8",
+  });
+  if (r.stdout) log.info(r.stdout);
+  if (r.stderr) log.info(r.stderr);
+  return r.status === 0;
+}
+
 async function main(): Promise<void> {
+  if (desktopMode) {
+    await runDesktopMode();
+    return;
+  }
   p.intro(pluginMode ? "create-zenbu-app (plugin)" : "create-zenbu-app");
 
   let projectName: string;
@@ -642,6 +914,7 @@ async function main(): Promise<void> {
   if (!pluginMode) {
     seedPackageManager(projectDir, pm);
   }
+  trimAgentsMdIfRequested(projectDir);
 
   if (ZENBU_LOCAL_CORE) {
     const corePath = path.resolve(ZENBU_LOCAL_CORE);
