@@ -53,7 +53,7 @@ let resolvedPluginSourceFiles: string[] = [];
  */
 let serviceFileSet: Set<string> = new Set();
 /**
- * Number of times we've materialized the plugin root since boot. 
+ * Number of times we've materialized the plugin root since boot.
  */
 let pluginsRootInvocations = 0;
 
@@ -120,8 +120,7 @@ function buildSource(imports: string[]): string {
  * keeps the `export` requirement in `discoverServices` to avoid matching
  * non-exported helper classes.
  */
-const SERVICE_CLASS_RE =
-  /\bclass\s+(\w+)\s+extends\s+Service\.create\s*\(/g;
+const SERVICE_CLASS_RE = /\bclass\s+(\w+)\s+extends\s+Service\.create\s*\(/g;
 
 /**
  * Decode the loader's `source` payload (which Node permits as string,
@@ -167,10 +166,8 @@ function appendAutoRegister(downstream: unknown, filePath: string): unknown {
   SERVICE_CLASS_RE.lastIndex = 0;
   const matches = [...source.matchAll(SERVICE_CLASS_RE)];
   if (matches.length === 0) {
-    throw new Error(
-      `[zenbu-loader] auto-register: no \`class <Name> extends Service.create({ ... })\` found in ${filePath}.\n` +
-        `         Either rewrite the class to use Service.create or add an explicit \`runtime.register(<Class>, import.meta)\`.`,
-    );
+    // Files are allowed to be in an invalid state, throwing would crash dynohots loader chain
+    return { ...result, source };
   }
   if (matches.length > 1) {
     const names = matches.map((m) => m[1]).join(", ");
@@ -345,7 +342,9 @@ function buildRegistryModule(payload: RegistryPayload): string {
   const lines = [
     'import { replacePlugins, registerAppEntrypoint } from "@zenbujs/core/runtime"',
     `replacePlugins(${JSON.stringify(payload.plugins)})`,
-    `registerAppEntrypoint(${JSON.stringify(payload.appEntrypoint)}, ${JSON.stringify(payload.splashPath)})`,
+    `registerAppEntrypoint(${JSON.stringify(
+      payload.appEntrypoint,
+    )}, ${JSON.stringify(payload.splashPath)})`,
     "import.meta.hot?.accept()",
   ];
   return lines.join("\n") + "\n";
@@ -373,9 +372,11 @@ function buildPluginBarrel(plugin: ResolvedPluginRecord): {
       watchPaths.add(dir);
       for (const file of expandGlob(resolved)) {
         imports.push(pathToFileURL(file).href);
+        serviceFileSet.add(file);
       }
     } else {
       imports.push(pathToFileURL(resolved).href);
+      serviceFileSet.add(resolved);
     }
   }
 
@@ -567,8 +568,20 @@ function loadImpl(
       filePath = "";
     }
     if (filePath && serviceFileSet.has(filePath)) {
+      // Deleted service file: dynohot may try to reload its previous URL before the barrel re-eval drops it. Short-circuit with an empty module so the read doesn't ENOENT.
+      if (!fs.existsSync(filePath)) {
+        serviceFileSet.delete(filePath);
+        return {
+          format: "module",
+          source: "export {}\n",
+          shortCircuit: true,
+        } satisfies LoaderResult;
+      }
       const downstream = nextLoad(url, context);
-      if (downstream && typeof (downstream as PromiseLike<unknown>).then === "function") {
+      if (
+        downstream &&
+        typeof (downstream as PromiseLike<unknown>).then === "function"
+      ) {
         return Promise.resolve(downstream).then((r) =>
           appendAutoRegister(r, filePath),
         );
