@@ -162,6 +162,8 @@ importers:
         specifier: ^4
         version: 4.4.3
 
+  packages/create-desktop-app: {}
+
   packages/create-zenbu-app:
     dependencies:
       '@clack/prompts':
