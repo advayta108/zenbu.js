@@ -208,6 +208,44 @@ export async function synthesizeBundle(
     log.info(`appsDir baked into name = ${slug} (resolves to ${appsDir})`);
   });
 
+  await adhocCodesign({ destApp, log, dryRun });
+  await stripQuarantine({ destApp, log, dryRun });
+
+  await log.withStep(`verify (codesign + plutil)`, async () => {
+    if (dryRun) return;
+    const cs = spawnSync(
+      "codesign",
+      ["--verify", "--deep", "--strict", destApp],
+      { stdio: "pipe", encoding: "utf8" },
+    );
+    if (cs.status !== 0) {
+      throw new Error(
+        `codesign verify failed (${cs.status}): ${cs.stderr?.slice(0, 1000) ?? ""}`,
+      );
+    }
+    const pl = spawnSync("plutil", ["-lint", infoPlist], {
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+    if (pl.status !== 0) {
+      throw new Error(
+        `plutil -lint failed (${pl.status}): ${pl.stderr?.slice(0, 500) ?? ""} ${pl.stdout?.slice(0, 500) ?? ""}`,
+      );
+    }
+  });
+}
+
+/**
+ * Ad-hoc deep-sign a bundle with the same entitlements used at synthesize
+ * time. Reusable so post-synthesize mutations (e.g. icon swap) can re-sign
+ * without rebuilding the whole bundle.
+ */
+export async function adhocCodesign(opts: {
+  destApp: string;
+  log: DesktopLogger;
+  dryRun?: boolean;
+}): Promise<void> {
+  const { destApp, log, dryRun = false } = opts;
   const entitlementsPath = path.join(
     os.tmpdir(),
     `czda-entitlements-${process.pid}-${Date.now()}.plist`,
@@ -239,35 +277,19 @@ export async function synthesizeBundle(
       await fsp.unlink(entitlementsPath).catch(() => {});
     }
   });
+}
 
+export async function stripQuarantine(opts: {
+  destApp: string;
+  log: DesktopLogger;
+  dryRun?: boolean;
+}): Promise<void> {
+  const { destApp, log, dryRun = false } = opts;
   await log.withStep(`xattr -dr com.apple.quarantine`, async () => {
     if (dryRun) return;
     spawnSync("xattr", ["-dr", "com.apple.quarantine", destApp], {
       stdio: "ignore",
     });
-  });
-
-  await log.withStep(`verify (codesign + plutil)`, async () => {
-    if (dryRun) return;
-    const cs = spawnSync(
-      "codesign",
-      ["--verify", "--deep", "--strict", destApp],
-      { stdio: "pipe", encoding: "utf8" },
-    );
-    if (cs.status !== 0) {
-      throw new Error(
-        `codesign verify failed (${cs.status}): ${cs.stderr?.slice(0, 1000) ?? ""}`,
-      );
-    }
-    const pl = spawnSync("plutil", ["-lint", infoPlist], {
-      stdio: "pipe",
-      encoding: "utf8",
-    });
-    if (pl.status !== 0) {
-      throw new Error(
-        `plutil -lint failed (${pl.status}): ${pl.stderr?.slice(0, 500) ?? ""} ${pl.stdout?.slice(0, 500) ?? ""}`,
-      );
-    }
   });
 }
 

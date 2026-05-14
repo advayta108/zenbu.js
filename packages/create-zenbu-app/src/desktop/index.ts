@@ -151,7 +151,13 @@ async function readElectronRangeFromAppsDir(
 }
 
 export { ensureElectronApp } from "./electron-cache.js";
-export { synthesizeBundle, resolveLauncherSource } from "./bundle.js";
+export {
+  synthesizeBundle,
+  resolveLauncherSource,
+  adhocCodesign,
+  stripQuarantine,
+} from "./bundle.js";
 export { depsSignature, writeDepsSig } from "./deps-sig.js";
 export { prepareIcon } from "./icon.js";
 export { createLogger, type DesktopLogger } from "./log.js";
+export { updateBundleIcon, type UpdateBundleIconOpts } from "./update-icon.js";
